@@ -1,0 +1,49 @@
+{
+  "name": "ya-risc-v",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "imports": {
+    "#*": {
+      "@ya-risc-v/source": "./src/*",
+      "default": "./dist/*"
+    }
+  },
+  "bin": {
+    "ya-risc-v": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "dev": "tsx --conditions @ya-risc-v/source src/index.ts",
+    "test": "tsx --conditions @ya-risc-v/source --test \"src/**/*.test.ts\"",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.{ts,json,md}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,json,md}\"",
+    "type-check": "tsc --noEmit",
+    "check": "npm run format:check && npm run lint && npm run type-check && npm test",
+    "fix": "npm run format && npm run lint:fix"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "eslint-import-resolver-typescript": "^4.4.5",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-security": "^3.0.1",
+    "eslint-plugin-sonarjs": "^1.0.4",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "commander": "^15.0.0"
+  }
+}
