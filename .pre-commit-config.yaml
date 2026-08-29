@@ -1,0 +1,36 @@
+repos:
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier
+        entry: bash
+        args:
+          - -c
+          - |
+            cd "$(git rev-parse --show-toplevel)" || exit 1
+            [ "$#" -eq 0 ] && exit 0
+            npx prettier --write "$@"
+          - bash
+        language: system
+        files: ^src/.*\.(ts|json|md)$
+        stages: [pre-commit]
+      - id: eslint
+        name: eslint
+        entry: bash
+        args:
+          - -c
+          - |
+            cd "$(git rev-parse --show-toplevel)" || exit 1
+            [ "$#" -eq 0 ] && exit 0
+            npx eslint --fix "$@"
+          - bash
+        language: system
+        files: ^src/.*\.ts$
+        stages: [pre-commit]
+      - id: tsc
+        name: tsc
+        entry: npm run type-check
+        language: system
+        files: ^src/
+        pass_filenames: false
+        stages: [pre-commit]
