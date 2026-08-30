@@ -63,4 +63,18 @@ describe('load', () => {
     });
     assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x12345678, 32));
   });
+
+  it('lb does not wrap a 2^32+offset address into low memory', () => {
+    const guest = createMemory(256);
+    guest[16] = 0x42;
+    const registers = createRegisters();
+    writeGeneralPurposeRegister(registers, 2, new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0]));
+
+    lb(registers, guest, {
+      destinationRegister: 1,
+      sourceRegister1: 2,
+      immediate: signedNumberToBytes(0, 32),
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0, 32));
+  });
 });

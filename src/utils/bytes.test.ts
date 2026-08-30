@@ -20,6 +20,7 @@ import {
   addBytes,
   andBytes,
   byte0ToNumber,
+  bytesToBigInt,
   bytesToNumber,
   compareSignedBytes,
   compareUnsignedBytes,
@@ -111,6 +112,12 @@ describe('utils/bytes', () => {
     assert.equal(bytesToNumber(bytes), 0x12345678);
     assert.equal(byte0ToNumber(bytes, 0xff), 0x78);
     assert.equal(byte0ToNumber(bytes, 0x3f), 0x38);
+  });
+
+  it('bytesToBigInt reads a full little-endian u64', () => {
+    assert.equal(bytesToBigInt(signedNumberToBytes(16, 32)), 16n);
+    // 2^32 + 16
+    assert.equal(bytesToBigInt(new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0])), 0x1_0000_0010n);
   });
 
   it('low32Bytes clears the high half', () => {

@@ -36,9 +36,9 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   registers as ordinary 64-bit slots; the fields do not yet mean anything.
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
-- **A real address space.** Addresses are currently truncated to their low 32 bits, and guest memory
-  is sized to exactly the image length, so there is no room for a stack or heap beyond the program
-  image.
+- **A real address space.** Guest memory is sized to exactly the image length, so there is no room
+  for a stack or heap beyond the program image. Architectural addresses are full 64-bit values;
+  accesses outside the image read as zero / are ignored rather than wrapping into low memory.
 - **Program loading.** Images are flat binaries copied to address 0; there is no ELF loader.
 - **Devices and console I/O.** Nothing is memory-mapped, so a guest has no way to talk to the host.
 
