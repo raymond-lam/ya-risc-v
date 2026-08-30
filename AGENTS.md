@@ -34,8 +34,10 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - **Every architectural value is an 8-byte little-endian `Uint8Array`.** Registers, the PC, CSRs,
   and immediates never become `number` or `bigint`. Do arithmetic with the helpers in
   `#utils/bytes.js` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
-  …), not by converting to JS numbers. `bytesToNumber` exists for addresses and instruction words
-  only, and reads just the low 32 bits.
+  …), not by converting to JS numbers. Guest addresses stay as byte arrays through
+  `loadBytes`/`storeBytes`, which convert via `bytesToBigInt` and compare against the memory
+  length before taking `Number` for the TypedArray index. `bytesToNumber` is for 32-bit
+  instruction encodings only (low 4 bytes).
 - **Instruction functions are `(registers, memory, args) => void`** and own the PC: call
   `advanceProgramCounter` on the fall-through path, or `setProgramCounter` when jumping/branching.
   Unused parameters are prefixed with `_`. Args go in a named type (`OpArgs`, `LoadArgs`) exported

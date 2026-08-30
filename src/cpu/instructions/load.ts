@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { addBytes, bytesToNumber, signExtendBytes, zeroExtendBytes } from '#utils/bytes.js';
+import { addBytes, signExtendBytes, zeroExtendBytes } from '#utils/bytes.js';
 import {
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
@@ -29,10 +29,10 @@ type LoadArgs = {
   immediate: Uint8Array;
 };
 
-const loadEffectiveAddress = (registers: Registers, args: LoadArgs): number => {
+const loadEffectiveAddress = (registers: Registers, args: LoadArgs): Uint8Array => {
   const address = new Uint8Array(8);
   addBytes(address, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
-  return bytesToNumber(address);
+  return address;
 };
 
 /** lb: rd = sext(mem[rs1+imm], 8). */

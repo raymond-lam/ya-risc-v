@@ -18,11 +18,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import decode from '#cpu/decode.js';
 import { loadBytes } from '#memory.js';
 import { createRegisters, readProgramCounter, setProgramCounter } from '#cpu/registers.js';
-import type { CpuWorkerData, Registers } from '#cpu/types.js';
-import { bytesToNumber } from '#utils/bytes.js';
-
-const programCounterAsNumber = (currentRegisters: Registers): number =>
-  bytesToNumber(readProgramCounter(currentRegisters));
+import type { CpuWorkerData } from '#cpu/types.js';
 
 const main = (): void => {
   const { memory, resetPc } = workerData as CpuWorkerData;
@@ -32,11 +28,10 @@ const main = (): void => {
 
   // No exit condition: the hart runs until an instruction throws or the host terminates us.
   for (;;) {
-    const programCounter = programCounterAsNumber(registers);
     loadBytes({
       destination: instructionWord,
       memory,
-      address: programCounter,
+      address: readProgramCounter(registers),
       byteLength: 4,
     });
     decode(instructionWord)(registers, memory);

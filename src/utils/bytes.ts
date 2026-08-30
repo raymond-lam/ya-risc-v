@@ -166,10 +166,22 @@ const low32Bytes = (source: Uint8Array): Uint8Array => {
   return bytes;
 };
 
-/** Read the first 4 little-endian bytes as an unsigned 32-bit number (bytes[4..7] ignored). */
+/**
+ * Read the first 4 little-endian bytes as an unsigned 32-bit number (bytes[4..7] ignored).
+ * For 32-bit instruction encodings only — not for guest addresses.
+ */
 const bytesToNumber = (bytes: Uint8Array): number =>
   ((bytes[0] ?? 0) | ((bytes[1] ?? 0) << 8) | ((bytes[2] ?? 0) << 16) | ((bytes[3] ?? 0) << 24)) >>>
   0;
+
+/** Read 8 little-endian bytes as an exact unsigned 64-bit `bigint` (guest addresses). */
+const bytesToBigInt = (bytes: Uint8Array): bigint => {
+  let value = 0n;
+  for (let index = 7; index >= 0; index -= 1) {
+    value = (value << 8n) | BigInt(bytes[index] ?? 0);
+  }
+  return value;
+};
 
 /** `bytes[0] & mask` as a number. */
 const byte0ToNumber = (bytes: Uint8Array, mask: number): number => (bytes[0] ?? 0) & mask;
@@ -232,6 +244,7 @@ export {
   shiftRightArithmeticBytes,
   low32Bytes,
   bytesToNumber,
+  bytesToBigInt,
   byte0ToNumber,
   signedNumberToBytes,
   signExtendBytes,

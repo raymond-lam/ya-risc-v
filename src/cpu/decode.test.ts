@@ -86,7 +86,12 @@ describe('decode + execute', () => {
     // sw x1, 0(x2)
     decode(instructionBytes(0x00112023))(registers, memory);
     const stored = new Uint8Array(4);
-    loadBytes({ destination: stored, memory, address: 16, byteLength: 4 });
+    loadBytes({
+      destination: stored,
+      memory,
+      address: signedNumberToBytes(16, 32),
+      byteLength: 4,
+    });
     assert.deepEqual(stored, new Uint8Array([0xdd, 0xcc, 0xbb, 0xaa]));
 
     // lw x3, 0(x2)
@@ -99,7 +104,7 @@ describe('decode + execute', () => {
     const memory = createMemory(64);
     storeBytes({
       memory,
-      address: 0,
+      address: signedNumberToBytes(0, 32),
       source: Uint8Array.of(
         0x93,
         0x00,
@@ -126,7 +131,7 @@ describe('decode + execute', () => {
       loadBytes({
         destination: word,
         memory,
-        address: bytesToNumber(readProgramCounter(registers)),
+        address: readProgramCounter(registers),
         byteLength: 4,
       });
       decode(word)(registers, memory);

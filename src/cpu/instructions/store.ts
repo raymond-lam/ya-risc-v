@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { addBytes, bytesToNumber } from '#utils/bytes.js';
+import { addBytes } from '#utils/bytes.js';
 import { readGeneralPurposeRegister, advanceProgramCounter } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
 import { storeBytes } from '#memory.js';
@@ -25,10 +25,10 @@ type StoreArgs = {
   immediate: Uint8Array;
 };
 
-const storeEffectiveAddress = (registers: Registers, args: StoreArgs): number => {
+const storeEffectiveAddress = (registers: Registers, args: StoreArgs): Uint8Array => {
   const address = new Uint8Array(8);
   addBytes(address, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
-  return bytesToNumber(address);
+  return address;
 };
 
 /** sb: mem[rs1+imm] = rs2[7:0]. */

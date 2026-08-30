@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { bytesToBigInt } from '#utils/bytes.js';
+
 /**
  * Guest memory as a `Uint8Array` over a `SharedArrayBuffer`, shared with the CPU worker.
  * Access is plain byte reads and writes rather than `Atomics`, so host and guest race like
@@ -31,12 +33,17 @@ const loadBytes = ({
 }: {
   destination: Uint8Array;
   memory: Uint8Array;
-  address: number;
+  address: Uint8Array;
   byteLength: number;
 }): void => {
   destination.fill(0);
+  const guestAddress = bytesToBigInt(address);
+  if (guestAddress >= BigInt(memory.byteLength)) {
+    return;
+  }
+  const start = Number(guestAddress);
   for (let index = 0; index < byteLength; index += 1) {
-    destination[index] = memory[address + index] ?? 0;
+    destination[index] = memory[start + index] ?? 0;
   }
 };
 
@@ -48,12 +55,17 @@ const storeBytes = ({
   byteLength,
 }: {
   memory: Uint8Array;
-  address: number;
+  address: Uint8Array;
   source: Uint8Array;
   byteLength: number;
 }): void => {
+  const guestAddress = bytesToBigInt(address);
+  if (guestAddress >= BigInt(memory.byteLength)) {
+    return;
+  }
+  const start = Number(guestAddress);
   for (let index = 0; index < byteLength; index += 1) {
-    memory[address + index] = source[index] ?? 0;
+    memory[start + index] = source[index] ?? 0;
   }
 };
 
