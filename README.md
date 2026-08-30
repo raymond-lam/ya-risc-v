@@ -3,12 +3,11 @@
 Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 > [!WARNING]
-> **This is a work in progress and nowhere near finished.** The RV64I base integer instruction set
-> executes and is covered by tests, but there is no trap handling, no CSR instructions, no
-> extensions beyond the base set, and no operating-system or device support. It cannot boot anything
-> real yet. Anything listed under [Not yet implemented](#not-yet-implemented) is unfinished work
-> rather than a deliberate limit on scope — the goal is a much more complete machine than what is
-> here today.
+> **This is a work in progress and nowhere near finished.** RV64I and Zicsr execute and are covered
+> by tests, but there is no trap handling, no privilege or CSR *semantics*, no further extensions,
+> and no operating-system or device support. It cannot boot anything real yet. Anything listed under
+> [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate limit on
+> scope — the goal is a much more complete machine than what is here today.
 
 ## Status
 
@@ -17,22 +16,24 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - The full **RV64I** base integer instruction set: `lui`, `auipc`, `jal`, `jalr`, the six branches,
   all seven loads, all four stores, the register–immediate and register–register integer ops, and
   the RV64-specific 32-bit forms (`addiw`, `sllw`, `sraw`, …).
+- **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`. These
+  are raw read–modify–write of the CSR file (`csrrs`/`csrrc` skip the write when the source is zero).
+  There is no privilege check and no WARL/side-effect behavior yet.
 - `fence`, decoded and executed as a no-op, which is architecturally legal for this emulator.
 - Integer registers x0–x31, the program counter, and a dense 4096-entry CSR file, with x0 and the
   identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`) hardwired read-only.
 - A fetch/decode/execute loop running on a worker thread against shared guest memory, with decoded
   instructions memoized by their 32-bit encoding.
-- 51 unit tests over the decoder, the instructions, the register file, memory, and the byte helpers.
+- 62 unit tests over the decoder, the instructions, the register file, memory, and the byte helpers.
 
 ### Not yet implemented
 
 - **Traps and exceptions.** `ecall`, `ebreak`, and illegal instructions currently throw a JavaScript
   error, which terminates the worker instead of trapping into a handler.
-- **CSR instructions.** The CSR file exists, but `csrrw`/`csrrs`/`csrrc` and their immediate forms
-  are not decoded yet (Zicsr).
 - **Extensions.** No M (multiply/divide), A (atomics), F/D (floating point), or C (compressed).
 - **Privilege levels, interrupts, timers, and virtual memory.** No machine/supervisor/user modes,
-  no `mstatus`/`mtvec` semantics, no paging.
+  no `mstatus`/`mtvec` semantics, no paging. CSR instructions can already read and write those
+  registers as ordinary 64-bit slots; the fields do not yet mean anything.
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
 - **A real address space.** Addresses are currently truncated to their low 32 bits, and guest memory

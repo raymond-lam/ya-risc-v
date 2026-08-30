@@ -24,6 +24,7 @@ import {
   compareSignedBytes,
   compareUnsignedBytes,
   copyBytes,
+  isZeroBytes,
   low32Bytes,
   orBytes,
   shiftLeftBytes,
@@ -68,6 +69,11 @@ describe('utils/bytes', () => {
     assert.deepEqual(andResult, signedNumberToBytes(0x000f000f, 32));
     assert.deepEqual(orResult, signedNumberToBytes(0x0fff0fff, 32));
     assert.deepEqual(xorResult, signedNumberToBytes(0x0ff00ff0, 32));
+  });
+
+  it('isZeroBytes is true only for all-zero bytes', () => {
+    assert.equal(isZeroBytes(signedNumberToBytes(0, 32)), true);
+    assert.equal(isZeroBytes(signedNumberToBytes(1, 32)), false);
   });
 
   it('compareUnsignedBytes and compareSignedBytes disagree on high bit', () => {

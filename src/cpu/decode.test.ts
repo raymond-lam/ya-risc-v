@@ -20,8 +20,10 @@ import decode from '#cpu/decode.js';
 import { createMemory, loadBytes, storeBytes } from '#memory.js';
 import {
   createRegisters,
+  readControlAndStatusRegister,
   readGeneralPurposeRegister,
   readProgramCounter,
+  writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#cpu/registers.js';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
@@ -44,6 +46,27 @@ describe('decode + execute', () => {
     decode(instructionBytes(0x02a00093))(registers, memory);
     assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(42, 32));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('executes csrrw x1, 0x300, x2 and advances pc', () => {
+    const registers = createRegisters();
+    const memory = createMemory(64);
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(0x22, 32));
+    writeControlAndStatusRegister(registers, 0x300, signedNumberToBytes(0x11, 32));
+    // csrrw x1, 0x300, x2
+    decode(instructionBytes(0x300110f3))(registers, memory);
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x11, 32));
+    assert.deepEqual(readControlAndStatusRegister(registers, 0x300), signedNumberToBytes(0x22, 32));
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('executes csrrwi x1, 0x300, 31 as a zero-extended immediate', () => {
+    const registers = createRegisters();
+    const memory = createMemory(64);
+    // csrrwi x1, 0x300, 31
+    decode(instructionBytes(0x300fd0f3))(registers, memory);
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0, 32));
+    assert.deepEqual(readControlAndStatusRegister(registers, 0x300), signedNumberToBytes(31, 32));
   });
 
   it('executes lui x1, 0x12345', () => {
