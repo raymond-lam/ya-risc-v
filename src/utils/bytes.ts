@@ -66,6 +66,16 @@ const xorBytes = (destination: Uint8Array, source: Uint8Array, mask: Uint8Array)
   }
 };
 
+/** True if all 8 bytes are zero. */
+const isZeroBytes = (bytes: Uint8Array): boolean => {
+  for (let index = 0; index < 8; index += 1) {
+    if ((bytes[index] ?? 0) !== 0) {
+      return false;
+    }
+  }
+  return true;
+};
+
 /** Compare as unsigned 64-bit; returns -1, 0, or 1. */
 const compareUnsignedBytes = (left: Uint8Array, right: Uint8Array): number => {
   for (let index = 7; index >= 0; index -= 1) {
@@ -214,6 +224,7 @@ export {
   andBytes,
   orBytes,
   xorBytes,
+  isZeroBytes,
   compareUnsignedBytes,
   compareSignedBytes,
   shiftLeftBytes,

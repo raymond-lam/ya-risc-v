@@ -16,9 +16,29 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ebreak, ecall } from '#cpu/instructions/system.js';
+import {
+  csrrc,
+  csrrci,
+  csrrs,
+  csrrsi,
+  csrrw,
+  csrrwi,
+  ebreak,
+  ecall,
+} from '#cpu/instructions/system.js';
 import { createMemory } from '#memory.js';
-import { createRegisters } from '#cpu/registers.js';
+import {
+  createRegisters,
+  readControlAndStatusRegister,
+  readGeneralPurposeRegister,
+  readProgramCounter,
+  writeControlAndStatusRegister,
+  writeGeneralPurposeRegister,
+} from '#cpu/registers.js';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+
+const MSTATUS = 0x300;
+const MHARTID = 0xf14;
 
 describe('system', () => {
   it('ecall and ebreak throw', () => {
@@ -26,5 +46,197 @@ describe('system', () => {
     const guest = createMemory(256);
     assert.throws(() => ecall(registers, guest), /Environment call/);
     assert.throws(() => ebreak(registers, guest), /Breakpoint/);
+  });
+
+  it('csrrw swaps the CSR into rd and advances pc', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(registers, MSTATUS, signedNumberToBytes(0x11, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(0x22, 32));
+    csrrw(registers, createMemory(256), {
+      destinationRegister: 1,
+      sourceRegister1: 2,
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x11, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0x22, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('csrrw with rd = rs1 uses the old rs1 as the CSR write', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(registers, MSTATUS, signedNumberToBytes(0x11, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(0x22, 32));
+    csrrw(registers, createMemory(256), {
+      destinationRegister: 1,
+      sourceRegister1: 1,
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x11, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0x22, 32)
+    );
+  });
+
+  it('csrrw with rd = x0 still updates the CSR', () => {
+    const registers = createRegisters();
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(0x22, 32));
+    csrrw(registers, createMemory(256), {
+      destinationRegister: 0,
+      sourceRegister1: 1,
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(
+      [...readGeneralPurposeRegister(registers, 0)],
+      [...signedNumberToBytes(0, 32)]
+    );
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0x22, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('csrrs sets bits and csrrc clears bits', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(registers, MSTATUS, signedNumberToBytes(0b1100, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(0b1010, 32));
+
+    csrrs(registers, createMemory(256), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), signedNumberToBytes(0b1100, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0b1110, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+
+    csrrc(registers, createMemory(256), {
+      destinationRegister: 3,
+      sourceRegister1: 1,
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 3), signedNumberToBytes(0b1110, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0b0100, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
+  });
+
+  it('csrrs and csrrc with rs1 = x0 do not write the CSR', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(registers, MSTATUS, signedNumberToBytes(0x5, 32));
+
+    csrrs(registers, createMemory(256), {
+      destinationRegister: 1,
+      sourceRegister1: 0,
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x5, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0x5, 32)
+    );
+
+    csrrc(registers, createMemory(256), {
+      destinationRegister: 2,
+      sourceRegister1: 0,
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), signedNumberToBytes(0x5, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0x5, 32)
+    );
+  });
+
+  it('csrrwi, csrrsi, and csrrci use a zero-extended immediate', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(registers, MSTATUS, signedNumberToBytes(0b1100, 32));
+
+    csrrwi(registers, createMemory(256), {
+      destinationRegister: 1,
+      immediate: signedNumberToBytes(0b1010, 32),
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0b1100, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0b1010, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+
+    csrrsi(registers, createMemory(256), {
+      destinationRegister: 2,
+      immediate: signedNumberToBytes(0b0101, 32),
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), signedNumberToBytes(0b1010, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0b1111, 32)
+    );
+
+    csrrci(registers, createMemory(256), {
+      destinationRegister: 3,
+      immediate: signedNumberToBytes(0b0011, 32),
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 3), signedNumberToBytes(0b1111, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0b1100, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 12);
+  });
+
+  it('csrrsi and csrrci with a zero immediate do not write the CSR', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(registers, MSTATUS, signedNumberToBytes(0x5, 32));
+
+    csrrsi(registers, createMemory(256), {
+      destinationRegister: 1,
+      immediate: signedNumberToBytes(0, 32),
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x5, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0x5, 32)
+    );
+
+    csrrci(registers, createMemory(256), {
+      destinationRegister: 2,
+      immediate: signedNumberToBytes(0, 32),
+      controlAndStatusRegister: MSTATUS,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), signedNumberToBytes(0x5, 32));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(0x5, 32)
+    );
+  });
+
+  it('csrrw to an identity CSR ignores the write', () => {
+    const registers = createRegisters();
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(99, 32));
+    csrrw(registers, createMemory(256), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: MHARTID,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), signedNumberToBytes(0, 32));
+    assert.deepEqual(
+      [...readControlAndStatusRegister(registers, MHARTID)],
+      [...signedNumberToBytes(0, 32)]
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 });

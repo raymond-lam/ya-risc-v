@@ -31,7 +31,16 @@ import { add, sub, sll, slt, sltu, xor, srl, sra, or, and } from '#cpu/instructi
 import { addiw, slliw, srliw, sraiw } from '#cpu/instructions/op-imm-32.js';
 import { addw, subw, sllw, srlw, sraw } from '#cpu/instructions/op-32.js';
 import fence from '#cpu/instructions/misc-mem.js';
-import { ecall, ebreak } from '#cpu/instructions/system.js';
+import {
+  ecall,
+  ebreak,
+  csrrw,
+  csrrs,
+  csrrc,
+  csrrwi,
+  csrrsi,
+  csrrci,
+} from '#cpu/instructions/system.js';
 
 const OPCODE_LOAD = 0x03; // loads: lb/lh/lw/ld/lbu/lhu/lwu
 const OPCODE_MISC_MEM = 0x0f; // fence (memory ordering)
@@ -45,7 +54,7 @@ const OPCODE_OP_32 = 0x3b; // 32-bit register–register ops (RV64): addw/subw/s
 const OPCODE_BRANCH = 0x63; // conditional branches: beq/bne/blt/bge/bltu/bgeu
 const OPCODE_JALR = 0x67; // jump and link register
 const OPCODE_JAL = 0x6f; // jump and link
-const OPCODE_SYSTEM = 0x73; // system: ecall/ebreak
+const OPCODE_SYSTEM = 0x73; // system: ecall/ebreak/csrrw/csrrs/csrrc/csrrwi/csrrsi/csrrci
 
 const FUNCT3_ADD_SUB = 0x0; // addition (OP also uses funct7 for subtraction)
 const FUNCT3_SLL = 0x1; // shift left logical
@@ -78,6 +87,12 @@ const FUNCT3_SD = 0x3; // store doubleword
 
 const FUNCT3_FENCE = 0x0; // fence under MISC-MEM
 const FUNCT3_SYSTEM = 0x0; // ecall/ebreak under SYSTEM (distinguished by imm)
+const FUNCT3_CSRRW = 0x1; // atomic CSR read/write
+const FUNCT3_CSRRS = 0x2; // atomic CSR read and set
+const FUNCT3_CSRRC = 0x3; // atomic CSR read and clear
+const FUNCT3_CSRRWI = 0x5; // atomic CSR read/write immediate
+const FUNCT3_CSRRSI = 0x6; // atomic CSR read and set immediate
+const FUNCT3_CSRRCI = 0x7; // atomic CSR read and clear immediate
 
 const FUNCT7_NORMAL = 0x00; // default funct7: add/sll/srl/…
 const FUNCT7_SUB_SRA = 0x20; // alternate funct7: sub/sra (and sraw/sraiw)
@@ -503,16 +518,63 @@ const decode = (
     }
 
     case OPCODE_SYSTEM: {
-      if (function3Of(encodedInstructionWord) !== FUNCT3_SYSTEM) {
-        return () => illegalInstruction(encodedInstructionWord);
+      const destinationRegister = destinationRegisterOf(encodedInstructionWord);
+      const sourceRegister1 = sourceRegister1Of(encodedInstructionWord);
+      const controlAndStatusRegister = encodedInstructionWord >>> 20;
+      switch (function3Of(encodedInstructionWord)) {
+        case FUNCT3_SYSTEM:
+          if (controlAndStatusRegister === 0) {
+            return (registers, memory) => ecall(registers, memory);
+          }
+          if (controlAndStatusRegister === 1) {
+            return (registers, memory) => ebreak(registers, memory);
+          }
+          return () => illegalInstruction(encodedInstructionWord);
+        case FUNCT3_CSRRW:
+          return (registers, memory) =>
+            csrrw(registers, memory, {
+              destinationRegister,
+              sourceRegister1,
+              controlAndStatusRegister,
+            });
+        case FUNCT3_CSRRS:
+          return (registers, memory) =>
+            csrrs(registers, memory, {
+              destinationRegister,
+              sourceRegister1,
+              controlAndStatusRegister,
+            });
+        case FUNCT3_CSRRC:
+          return (registers, memory) =>
+            csrrc(registers, memory, {
+              destinationRegister,
+              sourceRegister1,
+              controlAndStatusRegister,
+            });
+        case FUNCT3_CSRRWI:
+          return (registers, memory) =>
+            csrrwi(registers, memory, {
+              destinationRegister,
+              immediate: signedNumberToBytes(sourceRegister1, 32),
+              controlAndStatusRegister,
+            });
+        case FUNCT3_CSRRSI:
+          return (registers, memory) =>
+            csrrsi(registers, memory, {
+              destinationRegister,
+              immediate: signedNumberToBytes(sourceRegister1, 32),
+              controlAndStatusRegister,
+            });
+        case FUNCT3_CSRRCI:
+          return (registers, memory) =>
+            csrrci(registers, memory, {
+              destinationRegister,
+              immediate: signedNumberToBytes(sourceRegister1, 32),
+              controlAndStatusRegister,
+            });
+        default:
+          return () => illegalInstruction(encodedInstructionWord);
       }
-      if (encodedInstructionWord >>> 20 === 0) {
-        return (registers, memory) => ecall(registers, memory);
-      }
-      if (encodedInstructionWord >>> 20 === 1) {
-        return (registers, memory) => ebreak(registers, memory);
-      }
-      return () => illegalInstruction(encodedInstructionWord);
     }
 
     default:

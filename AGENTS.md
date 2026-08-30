@@ -3,10 +3,10 @@
 A RISC-V emulator written in TypeScript for Node (>= 24, ESM only). The CLI (`src/index.ts`)
 reads a raw program image, maps it into shared guest memory, and runs the CPU in a worker thread.
 
-**Work in progress.** RV64I is implemented; further extensions and privileged/trap support are
-still to come. Missing instructions and features are unfinished work, not deliberate scope — don't
-treat the current opcode coverage in `decode.ts` as the intended ceiling, and don't add code that
-assumes RV64I is all there will ever be.
+**Work in progress.** RV64I and Zicsr are implemented; further extensions and privileged/trap
+support are still to come. Missing instructions and features are unfinished work, not deliberate
+scope — don't treat the current opcode coverage in `decode.ts` as the intended ceiling, and don't
+add code that assumes today's ISA is all there will ever be.
 
 ## Commands
 
@@ -33,9 +33,9 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 - **Every architectural value is an 8-byte little-endian `Uint8Array`.** Registers, the PC, CSRs,
   and immediates never become `number` or `bigint`. Do arithmetic with the helpers in
-  `#utils/bytes.js` (`addBytes`, `compareSignedBytes`, `shiftRightArithmeticBytes`, …), not by
-  converting to JS numbers. `bytesToNumber` exists for addresses and instruction words only, and
-  reads just the low 32 bits.
+  `#utils/bytes.js` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
+  …), not by converting to JS numbers. `bytesToNumber` exists for addresses and instruction words
+  only, and reads just the low 32 bits.
 - **Instruction functions are `(registers, memory, args) => void`** and own the PC: call
   `advanceProgramCounter` on the fall-through path, or `setProgramCounter` when jumping/branching.
   Unused parameters are prefixed with `_`. Args go in a named type (`OpArgs`, `LoadArgs`) exported
@@ -47,6 +47,11 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   memory.
 - Traps aren't implemented yet. For now `ecall`/`ebreak` and illegal instructions throw, which kills
   the worker and rejects the run handle. Treat that as a placeholder for real trap handling.
+- **Zicsr is raw CSR access.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live in
+  `system.ts` (SYSTEM opcode group). They snapshot the CSR slot before writing `rd` (the file is
+  live). `csrrs`/`csrrc` omit the write when `rs1` is `x0`; `csrrsi`/`csrrci` omit it when the
+  immediate is zero. Do not add privilege checks or WARL masks until trap/mode support exists;
+  identity CSRs stay read-only via `ReadonlyUint8Array`.
 
 ## Adding instructions
 
