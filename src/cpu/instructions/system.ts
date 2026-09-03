@@ -14,14 +14,20 @@
  * limitations under the License.
  */
 
-import { andBytes, copyBytes, isZeroBytes, orBytes, xorBytes } from '#utils/bytes.js';
+import { andBytes, isZeroBytes, orBytes, xorBytes } from '#utils/bytes.js';
 import {
   advanceProgramCounter,
-  readControlAndStatusRegister,
   readGeneralPurposeRegister,
+  snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#cpu/registers.js';
+import {
+  CAUSE_BREAKPOINT,
+  CAUSE_ECALL_FROM_M,
+  enterTrap,
+  returnFromMachineTrap,
+} from '#cpu/trap.js';
 import type { Registers } from '#cpu/types.js';
 
 type CsrRegisterArgs = {
@@ -38,24 +44,19 @@ type CsrImmediateArgs = {
 
 const ALL_ONES_BYTES = new Uint8Array(8).fill(0xff);
 
-/** Snapshot a CSR; the file slot is live and must not be used as the old value. */
-const snapshotControlAndStatusRegister = (
-  registers: Registers,
-  controlAndStatusRegister: number
-): Uint8Array => {
-  const previous = new Uint8Array(8);
-  copyBytes(previous, readControlAndStatusRegister(registers, controlAndStatusRegister));
-  return previous;
+/** ecall: environment call from M-mode (synchronous trap, cause 11). */
+const ecall = (registers: Registers, _memory: Uint8Array): void => {
+  enterTrap(registers, CAUSE_ECALL_FROM_M);
 };
 
-/** ecall: environment call. */
-const ecall = (_registers: Registers, _memory: Uint8Array): void => {
-  throw new Error('Environment call from the ECALL instruction.');
+/** ebreak: breakpoint (synchronous trap, cause 3). */
+const ebreak = (registers: Registers, _memory: Uint8Array): void => {
+  enterTrap(registers, CAUSE_BREAKPOINT);
 };
 
-/** ebreak: breakpoint. */
-const ebreak = (_registers: Registers, _memory: Uint8Array): void => {
-  throw new Error('Breakpoint from the EBREAK instruction.');
+/** mret: return from M-mode trap handler. */
+const mret = (registers: Registers, _memory: Uint8Array): void => {
+  returnFromMachineTrap(registers);
 };
 
 /** csrrw: rd = csr; csr = rs1. */
@@ -74,9 +75,15 @@ const csrrw = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs)
 const csrrs = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs): void => {
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
   if (args.sourceRegister1 !== 0) {
-    const result = new Uint8Array(8);
-    orBytes(result, previous, readGeneralPurposeRegister(registers, args.sourceRegister1));
-    writeControlAndStatusRegister(registers, args.controlAndStatusRegister, result);
+    writeControlAndStatusRegister(
+      registers,
+      args.controlAndStatusRegister,
+      orBytes(
+        new Uint8Array(8),
+        previous,
+        readGeneralPurposeRegister(registers, args.sourceRegister1)
+      )
+    );
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
   advanceProgramCounter(registers);
@@ -86,11 +93,19 @@ const csrrs = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs)
 const csrrc = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs): void => {
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
   if (args.sourceRegister1 !== 0) {
-    const inverted = new Uint8Array(8);
-    xorBytes(inverted, readGeneralPurposeRegister(registers, args.sourceRegister1), ALL_ONES_BYTES);
-    const result = new Uint8Array(8);
-    andBytes(result, previous, inverted);
-    writeControlAndStatusRegister(registers, args.controlAndStatusRegister, result);
+    writeControlAndStatusRegister(
+      registers,
+      args.controlAndStatusRegister,
+      andBytes(
+        new Uint8Array(8),
+        previous,
+        xorBytes(
+          new Uint8Array(8),
+          readGeneralPurposeRegister(registers, args.sourceRegister1),
+          ALL_ONES_BYTES
+        )
+      )
+    );
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
   advanceProgramCounter(registers);
@@ -108,9 +123,11 @@ const csrrwi = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArg
 const csrrsi = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArgs): void => {
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
   if (!isZeroBytes(args.immediate)) {
-    const result = new Uint8Array(8);
-    orBytes(result, previous, args.immediate);
-    writeControlAndStatusRegister(registers, args.controlAndStatusRegister, result);
+    writeControlAndStatusRegister(
+      registers,
+      args.controlAndStatusRegister,
+      orBytes(new Uint8Array(8), previous, args.immediate)
+    );
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
   advanceProgramCounter(registers);
@@ -120,15 +137,19 @@ const csrrsi = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArg
 const csrrci = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArgs): void => {
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
   if (!isZeroBytes(args.immediate)) {
-    const inverted = new Uint8Array(8);
-    xorBytes(inverted, args.immediate, ALL_ONES_BYTES);
-    const result = new Uint8Array(8);
-    andBytes(result, previous, inverted);
-    writeControlAndStatusRegister(registers, args.controlAndStatusRegister, result);
+    writeControlAndStatusRegister(
+      registers,
+      args.controlAndStatusRegister,
+      andBytes(
+        new Uint8Array(8),
+        previous,
+        xorBytes(new Uint8Array(8), args.immediate, ALL_ONES_BYTES)
+      )
+    );
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
   advanceProgramCounter(registers);
 };
 
-export { ecall, ebreak, csrrw, csrrs, csrrc, csrrwi, csrrsi, csrrci };
+export { ecall, ebreak, mret, csrrw, csrrs, csrrc, csrrwi, csrrsi, csrrci };
 export type { CsrRegisterArgs, CsrImmediateArgs };

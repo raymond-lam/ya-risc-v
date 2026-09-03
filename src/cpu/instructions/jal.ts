@@ -30,12 +30,15 @@ type JalArgs = {
 
 /** jal: rd = pc + 4; pc = pc + imm (J-type). */
 const jal = (registers: Registers, _memory: Uint8Array, args: JalArgs): void => {
-  const link = new Uint8Array(8);
-  addBytes(link, readProgramCounter(registers), FOUR_BYTES);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, link);
-  const target = new Uint8Array(8);
-  addBytes(target, readProgramCounter(registers), args.immediate);
-  setProgramCounter(registers, target);
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    addBytes(new Uint8Array(8), readProgramCounter(registers), FOUR_BYTES)
+  );
+  setProgramCounter(
+    registers,
+    addBytes(new Uint8Array(8), readProgramCounter(registers), args.immediate)
+  );
 };
 
 export { jal };

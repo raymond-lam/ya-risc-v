@@ -14,56 +14,62 @@
  * limitations under the License.
  */
 
-/** Copy `source` into `destination` (same length assumed). */
-const copyBytes = (destination: Uint8Array, source: Uint8Array): void => {
+/** Copy `source` into `destination` (same length assumed). Returns `destination`. */
+const copyBytes = (destination: Uint8Array, source: Uint8Array): Uint8Array => {
   for (let index = 0; index < destination.length; index += 1) {
     destination[index] = source[index] ?? 0;
   }
+  return destination;
 };
 
-/** destination = source + addend (64-bit little-endian, wraps). */
-const addBytes = (destination: Uint8Array, source: Uint8Array, addend: Uint8Array): void => {
+/** destination = source + addend (64-bit little-endian, wraps). Returns `destination`. */
+const addBytes = (destination: Uint8Array, source: Uint8Array, addend: Uint8Array): Uint8Array => {
   let carry = 0;
   for (let index = 0; index < 8; index += 1) {
     const sum = (source[index] ?? 0) + (addend[index] ?? 0) + carry;
     destination[index] = sum & 0xff;
     carry = sum >>> 8;
   }
+  return destination;
 };
 
-/** destination = minuend - subtrahend (64-bit little-endian, wraps). */
+/** destination = minuend - subtrahend (64-bit little-endian, wraps). Returns `destination`. */
 const subtractBytes = (
   destination: Uint8Array,
   minuend: Uint8Array,
   subtrahend: Uint8Array
-): void => {
+): Uint8Array => {
   let borrow = 0;
   for (let index = 0; index < 8; index += 1) {
     const difference = (minuend[index] ?? 0) - (subtrahend[index] ?? 0) - borrow;
     destination[index] = difference & 0xff;
     borrow = difference < 0 ? 1 : 0;
   }
+  return destination;
 };
 
-/** destination = source & mask (64-bit little-endian). */
-const andBytes = (destination: Uint8Array, source: Uint8Array, mask: Uint8Array): void => {
+/** destination = source & mask (64-bit little-endian). Returns `destination`. */
+const andBytes = (destination: Uint8Array, source: Uint8Array, mask: Uint8Array): Uint8Array => {
   for (let index = 0; index < 8; index += 1) {
     destination[index] = (source[index] ?? 0) & (mask[index] ?? 0);
   }
+  return destination;
 };
 
-/** destination = source | mask (64-bit little-endian). */
-const orBytes = (destination: Uint8Array, source: Uint8Array, mask: Uint8Array): void => {
+/** destination = source | mask (64-bit little-endian). Returns `destination`. */
+const orBytes = (destination: Uint8Array, source: Uint8Array, mask: Uint8Array): Uint8Array => {
   for (let index = 0; index < 8; index += 1) {
     destination[index] = (source[index] ?? 0) | (mask[index] ?? 0);
   }
+  return destination;
 };
 
-/** destination = source ^ mask (64-bit little-endian). */
-const xorBytes = (destination: Uint8Array, source: Uint8Array, mask: Uint8Array): void => {
+/** destination = source ^ mask (64-bit little-endian). Returns `destination`. */
+const xorBytes = (destination: Uint8Array, source: Uint8Array, mask: Uint8Array): Uint8Array => {
   for (let index = 0; index < 8; index += 1) {
     destination[index] = (source[index] ?? 0) ^ (mask[index] ?? 0);
   }
+  return destination;
 };
 
 /** True if all 8 bytes are zero. */
@@ -98,7 +104,11 @@ const compareSignedBytes = (left: Uint8Array, right: Uint8Array): number => {
   return compareUnsignedBytes(left, right);
 };
 
-const shiftLeftBytes = (destination: Uint8Array, source: Uint8Array, shiftAmount: number): void => {
+const shiftLeftBytes = (
+  destination: Uint8Array,
+  source: Uint8Array,
+  shiftAmount: number
+): Uint8Array => {
   const amount = shiftAmount & 63;
   destination.fill(0);
   const byteShift = amount >>> 3;
@@ -111,13 +121,14 @@ const shiftLeftBytes = (destination: Uint8Array, source: Uint8Array, shiftAmount
     }
     destination[index] = value & 0xff;
   }
+  return destination;
 };
 
 const shiftRightLogicalBytes = (
   destination: Uint8Array,
   source: Uint8Array,
   shiftAmount: number
-): void => {
+): Uint8Array => {
   const amount = shiftAmount & 63;
   destination.fill(0);
   const byteShift = amount >>> 3;
@@ -130,18 +141,19 @@ const shiftRightLogicalBytes = (
     }
     destination[index] = value & 0xff;
   }
+  return destination;
 };
 
 const shiftRightArithmeticBytes = (
   destination: Uint8Array,
   source: Uint8Array,
   shiftAmount: number
-): void => {
+): Uint8Array => {
   const amount = shiftAmount & 63;
   const signByte = ((source[7] ?? 0) & 0x80) !== 0 ? 0xff : 0x00;
   shiftRightLogicalBytes(destination, source, amount);
   if (signByte === 0) {
-    return;
+    return destination;
   }
   // Fill shifted-in bits with ones.
   const byteShift = amount >>> 3;
@@ -154,16 +166,20 @@ const shiftRightArithmeticBytes = (
     const mask = (0xff << (8 - bitShift)) & 0xff;
     destination[topIndex] = (destination[topIndex] ?? 0) | mask;
   }
+  return destination;
 };
 
-/** Copy the low 32 bits into a new 8-byte buffer (high bytes zero). */
-const low32Bytes = (source: Uint8Array): Uint8Array => {
-  const bytes = new Uint8Array(8);
-  bytes[0] = source[0] ?? 0;
-  bytes[1] = source[1] ?? 0;
-  bytes[2] = source[2] ?? 0;
-  bytes[3] = source[3] ?? 0;
-  return bytes;
+/** Copy the low 32 bits of `source` into `destination` (high bytes zero). Returns `destination`. */
+const low32Bytes = (destination: Uint8Array, source: Uint8Array): Uint8Array => {
+  destination[0] = source[0] ?? 0;
+  destination[1] = source[1] ?? 0;
+  destination[2] = source[2] ?? 0;
+  destination[3] = source[3] ?? 0;
+  destination[4] = 0;
+  destination[5] = 0;
+  destination[6] = 0;
+  destination[7] = 0;
+  return destination;
 };
 
 /**
@@ -187,46 +203,60 @@ const bytesToBigInt = (bytes: Uint8Array): bigint => {
 const byte0ToNumber = (bytes: Uint8Array, mask: number): number => (bytes[0] ?? 0) & mask;
 
 /**
- * Sign-extend a `bitWidth`-bit number into an 8-byte little-endian encoding.
- * `bitWidth` must be ≤ 32.
+ * Sign-extend a `bitWidth`-bit number into `destination` (8-byte little-endian).
+ * `bitWidth` must be ≤ 32. For full XLEN values use byte arithmetic or
+ * {@link bytesToBigInt}; JS `number` is not exact for all 64-bit integers.
  */
-const signedNumberToBytes = (value: number, bitWidth: number): Uint8Array => {
+const signedNumberToBytes = (
+  destination: Uint8Array,
+  value: number,
+  bitWidth: number
+): Uint8Array => {
   const shift = 32 - bitWidth;
   let remaining = (value << shift) >> shift;
-  const bytes = new Uint8Array(8);
   for (let index = 0; index < 8; index += 1) {
-    bytes[index] = remaining & 0xff;
+    destination[index] = remaining & 0xff;
     remaining >>= 8;
   }
-  return bytes;
+  return destination;
 };
 
 /**
- * Sign-extend the low `byteLength` bytes of `value` to 64 bits in place.
+ * Pack an unsigned 32-bit host value into `destination` (high bytes zero).
+ * Inverse of {@link bytesToNumber} for instruction words and other u32 fields.
+ */
+const unsignedNumberToBytes = (destination: Uint8Array, value: number): Uint8Array => {
+  const word = value >>> 0;
+  destination[0] = word & 0xff;
+  destination[1] = (word >>> 8) & 0xff;
+  destination[2] = (word >>> 16) & 0xff;
+  destination[3] = (word >>> 24) & 0xff;
+  destination[4] = 0;
+  destination[5] = 0;
+  destination[6] = 0;
+  destination[7] = 0;
+  return destination;
+};
+
+/**
+ * Sign-extend the low `byteLength` bytes already in `destination` to 64 bits in place.
  * Bytes at indices `byteLength`..7 are filled from the sign bit of byte `byteLength - 1`.
  */
-const signExtendBytes = (value: Uint8Array, byteLength: number): void => {
-  const signByte = ((value[byteLength - 1] ?? 0) & 0x80) !== 0 ? 0xff : 0x00;
+const signExtendBytes = (destination: Uint8Array, byteLength: number): Uint8Array => {
+  const signByte = ((destination[byteLength - 1] ?? 0) & 0x80) !== 0 ? 0xff : 0x00;
   for (let index = byteLength; index < 8; index += 1) {
-    value[index] = signByte;
+    destination[index] = signByte;
   }
+  return destination;
 };
 
 /**
- * Zero-extend the low `byteLength` bytes of `value` to 64 bits in place.
+ * Zero-extend the low `byteLength` bytes already in `destination` to 64 bits in place.
  * Bytes at indices `byteLength`..7 are cleared.
  */
-const zeroExtendBytes = (value: Uint8Array, byteLength: number): void => {
-  value.fill(0, byteLength);
-};
-
-/** Copy the low 32 bits of `source` into `destination` and sign-extend to 64 bits. */
-const signExtendLow32Bytes = (destination: Uint8Array, source: Uint8Array): void => {
-  destination[0] = source[0] ?? 0;
-  destination[1] = source[1] ?? 0;
-  destination[2] = source[2] ?? 0;
-  destination[3] = source[3] ?? 0;
-  signExtendBytes(destination, 4);
+const zeroExtendBytes = (destination: Uint8Array, byteLength: number): Uint8Array => {
+  destination.fill(0, byteLength);
+  return destination;
 };
 
 export {
@@ -247,7 +277,7 @@ export {
   bytesToBigInt,
   byte0ToNumber,
   signedNumberToBytes,
+  unsignedNumberToBytes,
   signExtendBytes,
   zeroExtendBytes,
-  signExtendLow32Bytes,
 };

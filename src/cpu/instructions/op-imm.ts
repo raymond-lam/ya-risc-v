@@ -47,9 +47,15 @@ type ShiftImmArgs = {
 
 /** addi: rd = rs1 + imm. */
 const addi = (registers: Registers, _memory: Uint8Array, args: OpImmArgs): void => {
-  const result = new Uint8Array(8);
-  addBytes(result, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    addBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      args.immediate
+    )
+  );
   advanceProgramCounter(registers);
 };
 
@@ -81,61 +87,85 @@ const sltiu = (registers: Registers, _memory: Uint8Array, args: OpImmArgs): void
 
 /** xori: rd = rs1 ^ imm. */
 const xori = (registers: Registers, _memory: Uint8Array, args: OpImmArgs): void => {
-  const result = new Uint8Array(8);
-  xorBytes(result, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    xorBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      args.immediate
+    )
+  );
   advanceProgramCounter(registers);
 };
 
 /** ori: rd = rs1 | imm. */
 const ori = (registers: Registers, _memory: Uint8Array, args: OpImmArgs): void => {
-  const result = new Uint8Array(8);
-  orBytes(result, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    orBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      args.immediate
+    )
+  );
   advanceProgramCounter(registers);
 };
 
 /** andi: rd = rs1 & imm. */
 const andi = (registers: Registers, _memory: Uint8Array, args: OpImmArgs): void => {
-  const result = new Uint8Array(8);
-  andBytes(result, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    andBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      args.immediate
+    )
+  );
   advanceProgramCounter(registers);
 };
 
 /** slli: rd = rs1 << shamt. */
 const slli = (registers: Registers, _memory: Uint8Array, args: ShiftImmArgs): void => {
-  const result = new Uint8Array(8);
-  shiftLeftBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    args.shiftAmount
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    shiftLeftBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      args.shiftAmount
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** srli: rd = rs1 >> shamt (logical). */
 const srli = (registers: Registers, _memory: Uint8Array, args: ShiftImmArgs): void => {
-  const result = new Uint8Array(8);
-  shiftRightLogicalBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    args.shiftAmount
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    shiftRightLogicalBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      args.shiftAmount
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** srai: rd = rs1 >> shamt (arithmetic). */
 const srai = (registers: Registers, _memory: Uint8Array, args: ShiftImmArgs): void => {
-  const result = new Uint8Array(8);
-  shiftRightArithmeticBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    args.shiftAmount
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    shiftRightArithmeticBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      args.shiftAmount
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 

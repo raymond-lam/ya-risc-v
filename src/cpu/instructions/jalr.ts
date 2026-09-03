@@ -32,12 +32,17 @@ type JalrArgs = {
 
 /** jalr: rd = pc + 4; pc = (rs1 + imm) & ~1 (I-type). */
 const jalr = (registers: Registers, _memory: Uint8Array, args: JalrArgs): void => {
-  const target = new Uint8Array(8);
-  addBytes(target, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
+  const target = addBytes(
+    new Uint8Array(8),
+    readGeneralPurposeRegister(registers, args.sourceRegister1),
+    args.immediate
+  );
   target[0] = (target[0] ?? 0) & 0xfe;
-  const link = new Uint8Array(8);
-  addBytes(link, readProgramCounter(registers), FOUR_BYTES);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, link);
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    addBytes(new Uint8Array(8), readProgramCounter(registers), FOUR_BYTES)
+  );
   setProgramCounter(registers, target);
 };
 

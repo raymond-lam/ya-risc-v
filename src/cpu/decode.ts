@@ -34,6 +34,7 @@ import fence from '#cpu/instructions/misc-mem.js';
 import {
   ecall,
   ebreak,
+  mret,
   csrrw,
   csrrs,
   csrrc,
@@ -41,6 +42,7 @@ import {
   csrrsi,
   csrrci,
 } from '#cpu/instructions/system.js';
+import { CAUSE_ILLEGAL_INSTRUCTION, enterTrap, instructionWordTrapValue } from '#cpu/trap.js';
 
 const OPCODE_LOAD = 0x03; // loads: lb/lh/lw/ld/lbu/lhu/lwu
 const OPCODE_MISC_MEM = 0x0f; // fence (memory ordering)
@@ -54,7 +56,7 @@ const OPCODE_OP_32 = 0x3b; // 32-bit register–register ops (RV64): addw/subw/s
 const OPCODE_BRANCH = 0x63; // conditional branches: beq/bne/blt/bge/bltu/bgeu
 const OPCODE_JALR = 0x67; // jump and link register
 const OPCODE_JAL = 0x6f; // jump and link
-const OPCODE_SYSTEM = 0x73; // system: ecall/ebreak/csrrw/csrrs/csrrc/csrrwi/csrrsi/csrrci
+const OPCODE_SYSTEM = 0x73; // system: ecall/ebreak/mret/csrrw/csrrs/csrrc/csrrwi/csrrsi/csrrci
 
 const FUNCT3_ADD_SUB = 0x0; // addition (OP also uses funct7 for subtraction)
 const FUNCT3_SLL = 0x1; // shift left logical
@@ -86,7 +88,7 @@ const FUNCT3_SW = 0x2; // store word
 const FUNCT3_SD = 0x3; // store doubleword
 
 const FUNCT3_FENCE = 0x0; // fence under MISC-MEM
-const FUNCT3_SYSTEM = 0x0; // ecall/ebreak under SYSTEM (distinguished by imm)
+const FUNCT3_SYSTEM = 0x0; // ecall/ebreak/mret under SYSTEM (distinguished by imm)
 const FUNCT3_CSRRW = 0x1; // atomic CSR read/write
 const FUNCT3_CSRRS = 0x2; // atomic CSR read and set
 const FUNCT3_CSRRC = 0x3; // atomic CSR read and clear
@@ -94,11 +96,15 @@ const FUNCT3_CSRRWI = 0x5; // atomic CSR read/write immediate
 const FUNCT3_CSRRSI = 0x6; // atomic CSR read and set immediate
 const FUNCT3_CSRRCI = 0x7; // atomic CSR read and clear immediate
 
+/** funct12 for mret (imm[11:0] when funct3 = SYSTEM). */
+const FUNCT12_MRET = 0x302;
+
 const FUNCT7_NORMAL = 0x00; // default funct7: add/sll/srl/…
 const FUNCT7_SUB_SRA = 0x20; // alternate funct7: sub/sra (and sraw/sraiw)
 
-const illegalInstruction = (instructionWord: number): never => {
-  throw new Error(`Illegal instruction: 0x${instructionWord.toString(16)}.`);
+/** Illegal encoding: synchronous trap with cause 2; mtval holds the instruction word. */
+const illegalInstruction = (registers: Registers, instructionWord: number): void => {
+  enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(instructionWord));
 };
 
 /**
@@ -111,7 +117,7 @@ const illegalInstruction = (instructionWord: number): never => {
  */
 const decodeITypeImmediate = (instructionWord: number): Uint8Array => {
   const imm11_0 = instructionWord >>> 20;
-  return signedNumberToBytes(imm11_0, 12);
+  return signedNumberToBytes(new Uint8Array(8), imm11_0, 12);
 };
 
 /**
@@ -127,7 +133,7 @@ const decodeSTypeImmediate = (instructionWord: number): Uint8Array => {
   const imm11_5 = (instructionWord >>> 25) & 0x7f;
   const imm4_0 = (instructionWord >>> 7) & 0x1f;
   const imm11_0 = (imm11_5 << 5) | imm4_0;
-  return signedNumberToBytes(imm11_0, 12);
+  return signedNumberToBytes(new Uint8Array(8), imm11_0, 12);
 };
 
 /**
@@ -149,7 +155,7 @@ const decodeBTypeImmediate = (instructionWord: number): Uint8Array => {
   const imm10_5 = (instructionWord >>> 25) & 0x3f;
   const imm4_1 = (instructionWord >>> 8) & 0xf;
   const imm12_0 = (imm12 << 12) | (imm11 << 11) | (imm10_5 << 5) | (imm4_1 << 1);
-  return signedNumberToBytes(imm12_0, 13);
+  return signedNumberToBytes(new Uint8Array(8), imm12_0, 13);
 };
 
 /**
@@ -163,7 +169,7 @@ const decodeBTypeImmediate = (instructionWord: number): Uint8Array => {
  */
 const decodeUTypeImmediate = (instructionWord: number): Uint8Array => {
   const imm31_12_placed = instructionWord & 0xfffff000;
-  return signedNumberToBytes(imm31_12_placed, 32);
+  return signedNumberToBytes(new Uint8Array(8), imm31_12_placed, 32);
 };
 
 /**
@@ -185,7 +191,7 @@ const decodeJTypeImmediate = (instructionWord: number): Uint8Array => {
   const imm11 = (instructionWord >>> 20) & 0x1;
   const imm10_1 = (instructionWord >>> 21) & 0x3ff;
   const imm20_0 = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
-  return signedNumberToBytes(imm20_0, 21);
+  return signedNumberToBytes(new Uint8Array(8), imm20_0, 21);
 };
 
 const destinationRegisterOf = (instructionWord: number): number => (instructionWord >>> 7) & 0x1f;
@@ -227,7 +233,7 @@ const decode = (
 
     case OPCODE_JALR: {
       if (function3Of(encodedInstructionWord) !== 0) {
-        return () => illegalInstruction(encodedInstructionWord);
+        return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const sourceRegister1 = sourceRegister1Of(encodedInstructionWord);
@@ -260,7 +266,7 @@ const decode = (
           return (registers, memory) =>
             bgeu(registers, memory, { sourceRegister1, sourceRegister2, immediate });
         default:
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
@@ -291,7 +297,7 @@ const decode = (
           return (registers, memory) =>
             lwu(registers, memory, { destinationRegister, sourceRegister1, immediate });
         default:
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
@@ -313,7 +319,7 @@ const decode = (
           return (registers, memory) =>
             sd(registers, memory, { sourceRegister1, sourceRegister2, immediate });
         default:
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
@@ -353,7 +359,7 @@ const decode = (
         }
         case FUNCT3_SLL: {
           if (((encodedInstructionWord >>> 26) & 0x3f) !== 0) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           const shiftAmount = (encodedInstructionWord >>> 20) & 0x3f;
           return (registers, memory) =>
@@ -370,17 +376,17 @@ const decode = (
             return (registers, memory) =>
               srai(registers, memory, { destinationRegister, sourceRegister1, shiftAmount });
           }
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
         }
         default:
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
     case OPCODE_OP: {
       const function7 = function7Of(encodedInstructionWord);
       if (function7 !== FUNCT7_NORMAL && function7 !== FUNCT7_SUB_SRA) {
-        return () => illegalInstruction(encodedInstructionWord);
+        return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const sourceRegister1 = sourceRegister1Of(encodedInstructionWord);
@@ -395,25 +401,25 @@ const decode = (
             sub(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         case FUNCT3_SLL:
           if (function7 !== FUNCT7_NORMAL) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           return (registers, memory) =>
             sll(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         case FUNCT3_SLT:
           if (function7 !== FUNCT7_NORMAL) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           return (registers, memory) =>
             slt(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         case FUNCT3_SLTU:
           if (function7 !== FUNCT7_NORMAL) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           return (registers, memory) =>
             sltu(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         case FUNCT3_XOR:
           if (function7 !== FUNCT7_NORMAL) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           return (registers, memory) =>
             xor(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
@@ -426,18 +432,18 @@ const decode = (
             sra(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         case FUNCT3_OR:
           if (function7 !== FUNCT7_NORMAL) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           return (registers, memory) =>
             or(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         case FUNCT3_AND:
           if (function7 !== FUNCT7_NORMAL) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           return (registers, memory) =>
             and(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         default:
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
@@ -452,7 +458,7 @@ const decode = (
         }
         case FUNCT3_SLL: {
           if (function7Of(encodedInstructionWord) !== FUNCT7_NORMAL) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           const shiftAmount = (encodedInstructionWord >>> 20) & 0x1f;
           return (registers, memory) =>
@@ -469,17 +475,17 @@ const decode = (
             return (registers, memory) =>
               sraiw(registers, memory, { destinationRegister, sourceRegister1, shiftAmount });
           }
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
         }
         default:
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
     case OPCODE_OP_32: {
       const function7 = function7Of(encodedInstructionWord);
       if (function7 !== FUNCT7_NORMAL && function7 !== FUNCT7_SUB_SRA) {
-        return () => illegalInstruction(encodedInstructionWord);
+        return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const sourceRegister1 = sourceRegister1Of(encodedInstructionWord);
@@ -494,7 +500,7 @@ const decode = (
             subw(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         case FUNCT3_SLL:
           if (function7 !== FUNCT7_NORMAL) {
-            return () => illegalInstruction(encodedInstructionWord);
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
           }
           return (registers, memory) =>
             sllw(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
@@ -506,7 +512,7 @@ const decode = (
           return (registers, memory) =>
             sraw(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
         default:
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
@@ -514,7 +520,7 @@ const decode = (
       if (function3Of(encodedInstructionWord) === FUNCT3_FENCE) {
         return (registers, memory) => fence(registers, memory);
       }
-      return () => illegalInstruction(encodedInstructionWord);
+      return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
     }
 
     case OPCODE_SYSTEM: {
@@ -529,7 +535,13 @@ const decode = (
           if (controlAndStatusRegister === 1) {
             return (registers, memory) => ebreak(registers, memory);
           }
-          return () => illegalInstruction(encodedInstructionWord);
+          if (controlAndStatusRegister === FUNCT12_MRET) {
+            if (destinationRegister !== 0 || sourceRegister1 !== 0) {
+              return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+            }
+            return (registers, memory) => mret(registers, memory);
+          }
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
         case FUNCT3_CSRRW:
           return (registers, memory) =>
             csrrw(registers, memory, {
@@ -555,30 +567,30 @@ const decode = (
           return (registers, memory) =>
             csrrwi(registers, memory, {
               destinationRegister,
-              immediate: signedNumberToBytes(sourceRegister1, 32),
+              immediate: signedNumberToBytes(new Uint8Array(8), sourceRegister1, 32),
               controlAndStatusRegister,
             });
         case FUNCT3_CSRRSI:
           return (registers, memory) =>
             csrrsi(registers, memory, {
               destinationRegister,
-              immediate: signedNumberToBytes(sourceRegister1, 32),
+              immediate: signedNumberToBytes(new Uint8Array(8), sourceRegister1, 32),
               controlAndStatusRegister,
             });
         case FUNCT3_CSRRCI:
           return (registers, memory) =>
             csrrci(registers, memory, {
               destinationRegister,
-              immediate: signedNumberToBytes(sourceRegister1, 32),
+              immediate: signedNumberToBytes(new Uint8Array(8), sourceRegister1, 32),
               controlAndStatusRegister,
             });
         default:
-          return () => illegalInstruction(encodedInstructionWord);
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
     default:
-      return () => illegalInstruction(encodedInstructionWord);
+      return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
   }
 };
 

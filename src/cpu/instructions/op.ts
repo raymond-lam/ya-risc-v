@@ -43,37 +43,43 @@ type OpArgs = {
 
 /** add: rd = rs1 + rs2. */
 const add = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
-  const result = new Uint8Array(8);
-  addBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    readGeneralPurposeRegister(registers, args.sourceRegister2)
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    addBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      readGeneralPurposeRegister(registers, args.sourceRegister2)
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** sub: rd = rs1 - rs2. */
 const sub = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
-  const result = new Uint8Array(8);
-  subtractBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    readGeneralPurposeRegister(registers, args.sourceRegister2)
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    subtractBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      readGeneralPurposeRegister(registers, args.sourceRegister2)
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** sll: rd = rs1 << rs2. */
 const sll = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
-  const result = new Uint8Array(8);
-  shiftLeftBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    shiftLeftBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
@@ -105,61 +111,71 @@ const sltu = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => 
 
 /** xor: rd = rs1 ^ rs2. */
 const xor = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
-  const result = new Uint8Array(8);
-  xorBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    readGeneralPurposeRegister(registers, args.sourceRegister2)
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    xorBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      readGeneralPurposeRegister(registers, args.sourceRegister2)
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** srl: rd = rs1 >> rs2 (logical). */
 const srl = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
-  const result = new Uint8Array(8);
-  shiftRightLogicalBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    shiftRightLogicalBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** sra: rd = rs1 >> rs2 (arithmetic). */
 const sra = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
-  const result = new Uint8Array(8);
-  shiftRightArithmeticBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    shiftRightArithmeticBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** or: rd = rs1 | rs2. */
 const or = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
-  const result = new Uint8Array(8);
-  orBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    readGeneralPurposeRegister(registers, args.sourceRegister2)
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    orBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      readGeneralPurposeRegister(registers, args.sourceRegister2)
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** and: rd = rs1 & rs2. */
 const and = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
-  const result = new Uint8Array(8);
-  andBytes(
-    result,
-    readGeneralPurposeRegister(registers, args.sourceRegister1),
-    readGeneralPurposeRegister(registers, args.sourceRegister2)
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    andBytes(
+      new Uint8Array(8),
+      readGeneralPurposeRegister(registers, args.sourceRegister1),
+      readGeneralPurposeRegister(registers, args.sourceRegister2)
+    )
   );
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 

@@ -29,39 +29,39 @@ import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
 describe('branch', () => {
   it('beq branches when equal', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(100, 32));
-    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(5, 32));
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(5, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 5, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 5, 32));
     beq(registers, createMemory(256), {
       sourceRegister1: 1,
       sourceRegister2: 2,
-      immediate: signedNumberToBytes(16, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
     });
     assert.equal(bytesToNumber(readProgramCounter(registers)), 116);
   });
 
   it('bne falls through when equal', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(100, 32));
-    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(5, 32));
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(5, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 5, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 5, 32));
     bne(registers, createMemory(256), {
       sourceRegister1: 1,
       sourceRegister2: 2,
-      immediate: signedNumberToBytes(16, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
     });
     assert.equal(bytesToNumber(readProgramCounter(registers)), 104);
   });
 
   it('blt branches on signed less-than', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(200, 32));
-    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(-1, 32));
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(0, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 200, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), -1, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0, 32));
     blt(registers, createMemory(256), {
       sourceRegister1: 1,
       sourceRegister2: 2,
-      immediate: signedNumberToBytes(8, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 8, 32),
     });
     assert.equal(bytesToNumber(readProgramCounter(registers)), 208);
   });

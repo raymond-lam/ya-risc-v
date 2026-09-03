@@ -3,10 +3,11 @@
 A RISC-V emulator written in TypeScript for Node (>= 24, ESM only). The CLI (`src/index.ts`)
 reads a raw program image, maps it into shared guest memory, and runs the CPU in a worker thread.
 
-**Work in progress.** RV64I and Zicsr are implemented; further extensions and privileged/trap
-support are still to come. Missing instructions and features are unfinished work, not deliberate
-scope — don't treat the current opcode coverage in `decode.ts` as the intended ceiling, and don't
-add code that assumes today's ISA is all there will ever be.
+**Work in progress.** RV64I, Zicsr, and M-mode synchronous traps (`ecall`/`ebreak`/illegal →
+`mtvec`, plus `mret`) are implemented; further extensions and privilege levels are still to come.
+Missing instructions and features are unfinished work, not deliberate scope — don't treat the
+current opcode coverage in `decode.ts` as the intended ceiling, and don't add code that assumes
+today's ISA is all there will ever be.
 
 ## Commands
 
@@ -26,6 +27,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - `src/cpu/index.ts` — host-side `run`, spawns the worker and returns an awaitable handle.
 - `src/cpu/run.ts` — worker entry; the fetch/decode/execute loop.
 - `src/cpu/decode.ts` — opcode/funct switch; returns an execute thunk, memoized by instruction word.
+- `src/cpu/trap.ts` — M-mode synchronous trap entry and `mret` (`mstatus`/`mepc`/`mcause`/`mtval`/`mtvec`).
 - `src/cpu/instructions/` — one file per opcode group, named after the RISC-V opcode (`op-imm-32.ts`).
 - `src/cpu/registers.ts`, `src/memory.ts`, `src/utils/bytes.ts` — architectural state and byte helpers.
 
@@ -34,10 +36,13 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - **Every architectural value is an 8-byte little-endian `Uint8Array`.** Registers, the PC, CSRs,
   and immediates never become `number` or `bigint`. Do arithmetic with the helpers in
   `#utils/bytes.js` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
-  …), not by converting to JS numbers. Guest addresses stay as byte arrays through
-  `loadBytes`/`storeBytes`, which convert via `bytesToBigInt` and compare against the memory
-  length before taking `Number` for the TypedArray index. `bytesToNumber` is for 32-bit
-  instruction encodings only (low 4 bytes).
+  …), including CSR bitfield updates in `trap.ts`. Mutating helpers take a `destination`
+  buffer and return it for chaining (`const x = addBytes(new Uint8Array(8), a, b)`). Guest
+  addresses stay as byte arrays through `loadBytes`/`storeBytes`, which convert via
+  `bytesToBigInt` and compare against the memory length before taking `Number` for the
+  TypedArray index. `bytesToNumber` reads u32 from architectural bytes. `signedNumberToBytes`,
+  `unsignedNumberToBytes`, and `low32Bytes` pack values into a caller-allocated buffer (same
+  destination/return convention).
 - **Instruction functions are `(registers, memory, args) => void`** and own the PC: call
   `advanceProgramCounter` on the fall-through path, or `setProgramCounter` when jumping/branching.
   Unused parameters are prefixed with `_`. Args go in a named type (`OpArgs`, `LoadArgs`) exported
@@ -47,12 +52,14 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - **Guest memory is a `SharedArrayBuffer`** shared with the worker, accessed with plain byte reads
   and writes. The absence of `Atomics` is deliberate: unsynchronized hosts should race like real
   memory.
-- Traps aren't implemented yet. For now `ecall`/`ebreak` and illegal instructions throw, which kills
-  the worker and rejects the run handle. Treat that as a placeholder for real trap handling.
+- **M-mode synchronous traps.** `ecall`, `ebreak`, and illegal encodings call `enterTrap` in
+  `trap.ts`: they write `mepc`/`mcause`/`mtval`, update `mstatus` (MPIE←MIE, MIE←0, MPP←M), and
+  set the PC from `mtvec` (direct mode). `mret` restores that stack and returns to `mepc`. No
+  U/S modes or interrupts yet.
 - **Zicsr is raw CSR access.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live in
   `system.ts` (SYSTEM opcode group). They snapshot the CSR slot before writing `rd` (the file is
   live). `csrrs`/`csrrc` omit the write when `rs1` is `x0`; `csrrsi`/`csrrci` omit it when the
-  immediate is zero. Do not add privilege checks or WARL masks until trap/mode support exists;
+  immediate is zero. Do not add privilege checks or WARL masks until multi-mode support exists;
   identity CSRs stay read-only via `ReadonlyUint8Array`.
 
 ## Adding instructions

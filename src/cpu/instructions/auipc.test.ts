@@ -29,12 +29,15 @@ import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
 describe('auipc', () => {
   it('adds the immediate to pc', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(0x1000, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
     auipc(registers, createMemory(256), {
       destinationRegister: 1,
-      immediate: signedNumberToBytes(0x2000, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 0x2000, 32),
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x3000, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), 0x3000, 32)
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1004);
   });
 });

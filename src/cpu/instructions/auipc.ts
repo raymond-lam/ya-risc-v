@@ -29,9 +29,11 @@ type AuipcArgs = {
 
 /** auipc: rd = pc + imm (U-type). */
 const auipc = (registers: Registers, _memory: Uint8Array, args: AuipcArgs): void => {
-  const result = new Uint8Array(8);
-  addBytes(result, readProgramCounter(registers), args.immediate);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    addBytes(new Uint8Array(8), readProgramCounter(registers), args.immediate)
+  );
   advanceProgramCounter(registers);
 };
 

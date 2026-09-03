@@ -31,7 +31,7 @@ describe('memory', () => {
     const eight = new Uint8Array([0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
     storeBytes({
       memory,
-      address: signedNumberToBytes(8, 32),
+      address: signedNumberToBytes(new Uint8Array(8), 8, 32),
       source: eight,
       byteLength: 8,
     });
@@ -40,7 +40,7 @@ describe('memory', () => {
     loadBytes({
       destination,
       memory,
-      address: signedNumberToBytes(8, 32),
+      address: signedNumberToBytes(new Uint8Array(8), 8, 32),
       byteLength: 8,
     });
     assert.deepEqual(destination, eight);
@@ -53,7 +53,7 @@ describe('memory', () => {
     loadBytes({
       destination,
       memory,
-      address: signedNumberToBytes(4, 32),
+      address: signedNumberToBytes(new Uint8Array(8), 4, 32),
       byteLength: 1,
     });
     assert.deepEqual(destination, new Uint8Array([0xab, 0, 0, 0, 0, 0, 0, 0]));

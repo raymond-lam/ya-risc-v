@@ -30,14 +30,17 @@ import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
 describe('jalr', () => {
   it('links and clears the target least-significant bit', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(100, 32));
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(0x21, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x21, 32));
     jalr(registers, createMemory(256), {
       destinationRegister: 1,
       sourceRegister1: 2,
-      immediate: signedNumberToBytes(0, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(104, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), 104, 32)
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x20);
   });
 });

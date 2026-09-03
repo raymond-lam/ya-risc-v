@@ -28,13 +28,20 @@ import { signedNumberToBytes } from '#utils/bytes.js';
 describe('op-32', () => {
   it('addw wraps and sign-extends within 32 bits', () => {
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(0xffffffff, 32));
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(1, 32));
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      signedNumberToBytes(new Uint8Array(8), 0xffffffff, 32)
+    );
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
     addw(registers, createMemory(256), {
       destinationRegister: 3,
       sourceRegister1: 1,
       sourceRegister2: 2,
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 3), signedNumberToBytes(0, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
   });
 });

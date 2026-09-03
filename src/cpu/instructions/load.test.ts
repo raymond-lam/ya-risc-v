@@ -30,21 +30,27 @@ describe('load', () => {
     const guest = createMemory(256);
     guest[10] = 0x80;
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(10, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 10, 32));
 
     lb(registers, guest, {
       destinationRegister: 1,
       sourceRegister1: 2,
-      immediate: signedNumberToBytes(0, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(-128, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), -128, 32)
+    );
 
     lbu(registers, guest, {
       destinationRegister: 3,
       sourceRegister1: 2,
-      immediate: signedNumberToBytes(0, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 3), signedNumberToBytes(0x80, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
   });
 
   it('lw loads a word', () => {
@@ -54,14 +60,17 @@ describe('load', () => {
     guest[10] = 0x34;
     guest[11] = 0x12;
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(8, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 8, 32));
 
     lw(registers, guest, {
       destinationRegister: 1,
       sourceRegister1: 2,
-      immediate: signedNumberToBytes(0, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x12345678, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), 0x12345678, 32)
+    );
   });
 
   it('lb does not wrap a 2^32+offset address into low memory', () => {
@@ -73,8 +82,11 @@ describe('load', () => {
     lb(registers, guest, {
       destinationRegister: 1,
       sourceRegister1: 2,
-      immediate: signedNumberToBytes(0, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
   });
 });

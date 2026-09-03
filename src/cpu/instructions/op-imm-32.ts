@@ -20,7 +20,7 @@ import {
   shiftLeftBytes,
   shiftRightLogicalBytes,
   shiftRightArithmeticBytes,
-  signExtendLow32Bytes,
+  signExtendBytes,
 } from '#utils/bytes.js';
 import {
   readGeneralPurposeRegister,
@@ -43,58 +43,75 @@ type ShiftImm32Args = {
 
 /** addiw: rd = sext32(rs1[31:0] + imm). */
 const addiw = (registers: Registers, _memory: Uint8Array, args: OpImm32Args): void => {
-  const sum = new Uint8Array(8);
-  addBytes(
-    sum,
-    low32Bytes(readGeneralPurposeRegister(registers, args.sourceRegister1)),
-    args.immediate
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    signExtendBytes(
+      addBytes(
+        new Uint8Array(8),
+        low32Bytes(new Uint8Array(8), readGeneralPurposeRegister(registers, args.sourceRegister1)),
+        args.immediate
+      ),
+      4
+    )
   );
-  const result = new Uint8Array(8);
-  signExtendLow32Bytes(result, sum);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** slliw: rd = sext32(rs1[31:0] << shamt). */
 const slliw = (registers: Registers, _memory: Uint8Array, args: ShiftImm32Args): void => {
-  const shifted = new Uint8Array(8);
-  shiftLeftBytes(
-    shifted,
-    low32Bytes(readGeneralPurposeRegister(registers, args.sourceRegister1)),
-    args.shiftAmount
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    signExtendBytes(
+      shiftLeftBytes(
+        new Uint8Array(8),
+        low32Bytes(new Uint8Array(8), readGeneralPurposeRegister(registers, args.sourceRegister1)),
+        args.shiftAmount
+      ),
+      4
+    )
   );
-  const result = new Uint8Array(8);
-  signExtendLow32Bytes(result, shifted);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** srliw: rd = sext32(rs1[31:0] >> shamt) (logical). */
 const srliw = (registers: Registers, _memory: Uint8Array, args: ShiftImm32Args): void => {
-  const shifted = new Uint8Array(8);
-  shiftRightLogicalBytes(
-    shifted,
-    low32Bytes(readGeneralPurposeRegister(registers, args.sourceRegister1)),
-    args.shiftAmount
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    signExtendBytes(
+      shiftRightLogicalBytes(
+        new Uint8Array(8),
+        low32Bytes(new Uint8Array(8), readGeneralPurposeRegister(registers, args.sourceRegister1)),
+        args.shiftAmount
+      ),
+      4
+    )
   );
-  const result = new Uint8Array(8);
-  signExtendLow32Bytes(result, shifted);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
 /** sraiw: rd = sext32(rs1[31:0] >> shamt) (arithmetic). */
 const sraiw = (registers: Registers, _memory: Uint8Array, args: ShiftImm32Args): void => {
-  const extended = new Uint8Array(8);
-  signExtendLow32Bytes(
-    extended,
-    low32Bytes(readGeneralPurposeRegister(registers, args.sourceRegister1))
+  writeGeneralPurposeRegister(
+    registers,
+    args.destinationRegister,
+    signExtendBytes(
+      shiftRightArithmeticBytes(
+        new Uint8Array(8),
+        signExtendBytes(
+          low32Bytes(
+            new Uint8Array(8),
+            readGeneralPurposeRegister(registers, args.sourceRegister1)
+          ),
+          4
+        ),
+        args.shiftAmount
+      ),
+      4
+    )
   );
-  const shifted = new Uint8Array(8);
-  shiftRightArithmeticBytes(shifted, extended, args.shiftAmount);
-  const result = new Uint8Array(8);
-  signExtendLow32Bytes(result, shifted);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, result);
   advanceProgramCounter(registers);
 };
 
