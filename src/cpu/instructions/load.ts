@@ -29,11 +29,12 @@ type LoadArgs = {
   immediate: Uint8Array;
 };
 
-const loadEffectiveAddress = (registers: Registers, args: LoadArgs): Uint8Array => {
-  const address = new Uint8Array(8);
-  addBytes(address, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
-  return address;
-};
+const loadEffectiveAddress = (registers: Registers, args: LoadArgs): Uint8Array =>
+  addBytes(
+    new Uint8Array(8),
+    readGeneralPurposeRegister(registers, args.sourceRegister1),
+    args.immediate
+  );
 
 /** lb: rd = sext(mem[rs1+imm], 8). */
 const lb = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
@@ -44,8 +45,7 @@ const lb = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
     address: loadEffectiveAddress(registers, args),
     byteLength: 1,
   });
-  signExtendBytes(loaded, 1);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, loaded);
+  writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 1));
   advanceProgramCounter(registers);
 };
 
@@ -58,8 +58,7 @@ const lh = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
     address: loadEffectiveAddress(registers, args),
     byteLength: 2,
   });
-  signExtendBytes(loaded, 2);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, loaded);
+  writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 2));
   advanceProgramCounter(registers);
 };
 
@@ -72,8 +71,7 @@ const lw = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
     address: loadEffectiveAddress(registers, args),
     byteLength: 4,
   });
-  signExtendBytes(loaded, 4);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, loaded);
+  writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 4));
   advanceProgramCounter(registers);
 };
 
@@ -99,8 +97,7 @@ const lbu = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => 
     address: loadEffectiveAddress(registers, args),
     byteLength: 1,
   });
-  zeroExtendBytes(loaded, 1);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, loaded);
+  writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 1));
   advanceProgramCounter(registers);
 };
 
@@ -113,8 +110,7 @@ const lhu = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => 
     address: loadEffectiveAddress(registers, args),
     byteLength: 2,
   });
-  zeroExtendBytes(loaded, 2);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, loaded);
+  writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 2));
   advanceProgramCounter(registers);
 };
 
@@ -127,8 +123,7 @@ const lwu = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => 
     address: loadEffectiveAddress(registers, args),
     byteLength: 4,
   });
-  zeroExtendBytes(loaded, 4);
-  writeGeneralPurposeRegister(registers, args.destinationRegister, loaded);
+  writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 4));
   advanceProgramCounter(registers);
 };
 

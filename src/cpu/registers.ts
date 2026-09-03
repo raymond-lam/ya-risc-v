@@ -32,9 +32,11 @@ const MHARTID = 0xf14;
 
 /** The 0 and 1 that slt/slti/sltu/sltiu write to rd. */
 const REGISTER_ZERO_BYTES = new ReadonlyUint8Array(8);
-const REGISTER_ONE_BYTES = ReadonlyUint8Array.fromBytes(signedNumberToBytes(1, 32));
+const REGISTER_ONE_BYTES = ReadonlyUint8Array.fromBytes(
+  signedNumberToBytes(new Uint8Array(8), 1, 32)
+);
 
-const FOUR_BYTES = ReadonlyUint8Array.fromBytes(signedNumberToBytes(4, 32));
+const FOUR_BYTES = ReadonlyUint8Array.fromBytes(signedNumberToBytes(new Uint8Array(8), 4, 32));
 
 const createRegisters = (): Registers => {
   const generalPurpose = Array.from(
@@ -63,9 +65,7 @@ const writeGeneralPurposeRegister = (
   registers: Registers,
   index: number,
   value: Uint8Array
-): void => {
-  copyBytes(registers.generalPurpose[index]!, value);
-};
+): Uint8Array => copyBytes(registers.generalPurpose[index]!, value);
 
 const readGeneralPurposeRegister = (registers: Registers, index: number): Uint8Array =>
   registers.generalPurpose[index]!;
@@ -74,34 +74,33 @@ const setBooleanGeneralPurposeRegister = (
   registers: Registers,
   index: number,
   condition: boolean
-): void => {
+): Uint8Array =>
   writeGeneralPurposeRegister(
     registers,
     index,
     condition ? REGISTER_ONE_BYTES : REGISTER_ZERO_BYTES
   );
-};
 
 const readProgramCounter = (registers: Registers): Uint8Array => registers.programCounter;
 
-const setProgramCounter = (registers: Registers, value: Uint8Array): void => {
+const setProgramCounter = (registers: Registers, value: Uint8Array): Uint8Array =>
   copyBytes(registers.programCounter, value);
-};
 
-const advanceProgramCounter = (registers: Registers): void => {
+const advanceProgramCounter = (registers: Registers): Uint8Array =>
   addBytes(registers.programCounter, registers.programCounter, FOUR_BYTES);
-};
 
 const readControlAndStatusRegister = (registers: Registers, index: number): Uint8Array =>
   registers.controlAndStatus[index]!;
+
+/** Copy a CSR; the file slot is live and must not be used as a mutable old value. */
+const snapshotControlAndStatusRegister = (registers: Registers, index: number): Uint8Array =>
+  copyBytes(new Uint8Array(8), readControlAndStatusRegister(registers, index));
 
 const writeControlAndStatusRegister = (
   registers: Registers,
   index: number,
   value: Uint8Array
-): void => {
-  copyBytes(registers.controlAndStatus[index]!, value);
-};
+): Uint8Array => copyBytes(registers.controlAndStatus[index]!, value);
 
 export {
   GENERAL_PURPOSE_REGISTER_COUNT,
@@ -115,5 +114,6 @@ export {
   setProgramCounter,
   advanceProgramCounter,
   readControlAndStatusRegister,
+  snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
 };

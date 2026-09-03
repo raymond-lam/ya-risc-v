@@ -29,7 +29,7 @@ const runGuest = async (imagePath: string): Promise<void> => {
 
   const cpu = run({
     memory,
-    resetPc: signedNumberToBytes(0, 32),
+    resetPc: signedNumberToBytes(new Uint8Array(8), 0, 32),
   });
 
   const shutdown = (): void => {

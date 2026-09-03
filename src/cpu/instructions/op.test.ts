@@ -28,45 +28,57 @@ import { signedNumberToBytes } from '#utils/bytes.js';
 describe('op', () => {
   it('add and sub combine two registers', () => {
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(20, 32));
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(7, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 20, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
 
     add(registers, createMemory(256), {
       destinationRegister: 3,
       sourceRegister1: 1,
       sourceRegister2: 2,
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 3), signedNumberToBytes(27, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 27, 32)
+    );
 
     sub(registers, createMemory(256), {
       destinationRegister: 4,
       sourceRegister1: 1,
       sourceRegister2: 2,
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 4), signedNumberToBytes(13, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 4),
+      signedNumberToBytes(new Uint8Array(8), 13, 32)
+    );
   });
 
   it('slt sets rd from a signed comparison', () => {
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(-2, 32));
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(1, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), -2, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
     slt(registers, createMemory(256), {
       destinationRegister: 3,
       sourceRegister1: 1,
       sourceRegister2: 2,
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 3), signedNumberToBytes(1, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
   });
 
   it('xor combines two registers', () => {
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(0xaa, 32));
-    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(0x55, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0xaa, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x55, 32));
     xor(registers, createMemory(256), {
       destinationRegister: 3,
       sourceRegister1: 1,
       sourceRegister2: 2,
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 3), signedNumberToBytes(0xff, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 0xff, 32)
+    );
   });
 });

@@ -25,11 +25,12 @@ type StoreArgs = {
   immediate: Uint8Array;
 };
 
-const storeEffectiveAddress = (registers: Registers, args: StoreArgs): Uint8Array => {
-  const address = new Uint8Array(8);
-  addBytes(address, readGeneralPurposeRegister(registers, args.sourceRegister1), args.immediate);
-  return address;
-};
+const storeEffectiveAddress = (registers: Registers, args: StoreArgs): Uint8Array =>
+  addBytes(
+    new Uint8Array(8),
+    readGeneralPurposeRegister(registers, args.sourceRegister1),
+    args.immediate
+  );
 
 /** sb: mem[rs1+imm] = rs2[7:0]. */
 const sb = (registers: Registers, memory: Uint8Array, args: StoreArgs): void => {

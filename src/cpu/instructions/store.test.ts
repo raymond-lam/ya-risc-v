@@ -25,12 +25,12 @@ describe('store', () => {
   it('sb stores the low byte', () => {
     const guest = createMemory(256);
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(0xab, 32));
-    writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(20, 32));
+    writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 0xab, 32));
+    writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(new Uint8Array(8), 20, 32));
     sb(registers, guest, {
       sourceRegister1: 4,
       sourceRegister2: 3,
-      immediate: signedNumberToBytes(0, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
     });
     assert.equal(guest[20], 0xab);
   });
@@ -38,12 +38,16 @@ describe('store', () => {
   it('sw stores a word', () => {
     const guest = createMemory(256);
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(20, 32));
-    writeGeneralPurposeRegister(registers, 5, signedNumberToBytes(0x44332211, 32));
+    writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(new Uint8Array(8), 20, 32));
+    writeGeneralPurposeRegister(
+      registers,
+      5,
+      signedNumberToBytes(new Uint8Array(8), 0x44332211, 32)
+    );
     sw(registers, guest, {
       sourceRegister1: 4,
       sourceRegister2: 5,
-      immediate: signedNumberToBytes(4, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 4, 32),
     });
     assert.deepEqual(guest.subarray(24, 28), Uint8Array.of(0x11, 0x22, 0x33, 0x44));
   });

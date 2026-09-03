@@ -25,6 +25,8 @@ const eslintConfig = [
       'import/resolver': {
         typescript: {
           project: ['./tsconfig.json'],
+          // Match tsconfig customConditions / tsx so #* maps to src/, not a stale dist/.
+          conditionNames: ['@ya-risc-v/source', 'types', 'import', 'node', 'default'],
         },
         node: true,
       },

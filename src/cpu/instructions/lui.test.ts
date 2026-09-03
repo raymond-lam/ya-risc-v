@@ -26,9 +26,12 @@ describe('lui', () => {
     const registers = createRegisters();
     lui(registers, createMemory(256), {
       destinationRegister: 1,
-      immediate: signedNumberToBytes(0x12345000, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 0x12345000, 32),
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(0x12345000, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), 0x12345000, 32)
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 });

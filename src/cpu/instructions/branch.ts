@@ -30,9 +30,10 @@ type BranchArgs = {
 };
 
 const takeBranch = (registers: Registers, immediate: Uint8Array): void => {
-  const target = new Uint8Array(8);
-  addBytes(target, readProgramCounter(registers), immediate);
-  setProgramCounter(registers, target);
+  setProgramCounter(
+    registers,
+    addBytes(new Uint8Array(8), readProgramCounter(registers), immediate)
+  );
 };
 
 /** beq: branch if rs1 == rs2. */

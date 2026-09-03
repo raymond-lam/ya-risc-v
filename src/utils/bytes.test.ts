@@ -32,113 +32,152 @@ import {
   shiftRightArithmeticBytes,
   shiftRightLogicalBytes,
   signExtendBytes,
-  signExtendLow32Bytes,
   signedNumberToBytes,
   subtractBytes,
+  unsignedNumberToBytes,
   xorBytes,
   zeroExtendBytes,
 } from '#utils/bytes.js';
 
 describe('utils/bytes', () => {
-  it('copyBytes copies source into destination', () => {
+  it('copyBytes copies source into destination and returns it', () => {
     const destination = new Uint8Array(8);
-    copyBytes(destination, signedNumberToBytes(0x1234, 32));
-    assert.deepEqual(destination, signedNumberToBytes(0x1234, 32));
+    const result = copyBytes(destination, signedNumberToBytes(new Uint8Array(8), 0x1234, 32));
+    assert.equal(result, destination);
+    assert.deepEqual(destination, signedNumberToBytes(new Uint8Array(8), 0x1234, 32));
   });
 
-  it('addBytes wraps at 64 bits', () => {
+  it('addBytes wraps at 64 bits and returns destination', () => {
     const destination = new Uint8Array(8);
-    addBytes(destination, signedNumberToBytes(-1, 32), signedNumberToBytes(1, 32));
-    assert.deepEqual(destination, signedNumberToBytes(0, 32));
+    const result = addBytes(
+      destination,
+      signedNumberToBytes(new Uint8Array(8), -1, 32),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.equal(result, destination);
+    assert.deepEqual(destination, signedNumberToBytes(new Uint8Array(8), 0, 32));
   });
 
-  it('subtractBytes wraps at 64 bits', () => {
-    const destination = new Uint8Array(8);
-    subtractBytes(destination, signedNumberToBytes(0, 32), signedNumberToBytes(1, 32));
-    assert.deepEqual(destination, signedNumberToBytes(-1, 32));
+  it('subtractBytes wraps at 64 bits and returns destination', () => {
+    assert.deepEqual(
+      subtractBytes(
+        new Uint8Array(8),
+        signedNumberToBytes(new Uint8Array(8), 0, 32),
+        signedNumberToBytes(new Uint8Array(8), 1, 32)
+      ),
+      signedNumberToBytes(new Uint8Array(8), -1, 32)
+    );
   });
 
-  it('andBytes / orBytes / xorBytes operate bytewise', () => {
-    const left = signedNumberToBytes(0x0f0f0f0f, 32);
-    const right = signedNumberToBytes(0x00ff00ff, 32);
-    const andResult = new Uint8Array(8);
-    const orResult = new Uint8Array(8);
-    const xorResult = new Uint8Array(8);
-    andBytes(andResult, left, right);
-    orBytes(orResult, left, right);
-    xorBytes(xorResult, left, right);
-    assert.deepEqual(andResult, signedNumberToBytes(0x000f000f, 32));
-    assert.deepEqual(orResult, signedNumberToBytes(0x0fff0fff, 32));
-    assert.deepEqual(xorResult, signedNumberToBytes(0x0ff00ff0, 32));
+  it('andBytes / orBytes / xorBytes operate bytewise and return destination', () => {
+    const left = signedNumberToBytes(new Uint8Array(8), 0x0f0f0f0f, 32);
+    const right = signedNumberToBytes(new Uint8Array(8), 0x00ff00ff, 32);
+    assert.deepEqual(
+      andBytes(new Uint8Array(8), left, right),
+      signedNumberToBytes(new Uint8Array(8), 0x000f000f, 32)
+    );
+    assert.deepEqual(
+      orBytes(new Uint8Array(8), left, right),
+      signedNumberToBytes(new Uint8Array(8), 0x0fff0fff, 32)
+    );
+    assert.deepEqual(
+      xorBytes(new Uint8Array(8), left, right),
+      signedNumberToBytes(new Uint8Array(8), 0x0ff00ff0, 32)
+    );
   });
 
   it('isZeroBytes is true only for all-zero bytes', () => {
-    assert.equal(isZeroBytes(signedNumberToBytes(0, 32)), true);
-    assert.equal(isZeroBytes(signedNumberToBytes(1, 32)), false);
+    assert.equal(isZeroBytes(signedNumberToBytes(new Uint8Array(8), 0, 32)), true);
+    assert.equal(isZeroBytes(signedNumberToBytes(new Uint8Array(8), 1, 32)), false);
   });
 
   it('compareUnsignedBytes and compareSignedBytes disagree on high bit', () => {
-    const negative = signedNumberToBytes(-1, 32);
-    const positive = signedNumberToBytes(1, 32);
+    const negative = signedNumberToBytes(new Uint8Array(8), -1, 32);
+    const positive = signedNumberToBytes(new Uint8Array(8), 1, 32);
     assert.equal(compareUnsignedBytes(negative, positive), 1);
     assert.equal(compareSignedBytes(negative, positive), -1);
     assert.equal(compareUnsignedBytes(positive, positive), 0);
   });
 
-  it('shiftLeftBytes and shiftRightLogicalBytes move bits', () => {
-    const source = signedNumberToBytes(1, 32);
-    const left = new Uint8Array(8);
-    const right = new Uint8Array(8);
-    shiftLeftBytes(left, source, 8);
-    shiftRightLogicalBytes(right, left, 8);
-    assert.deepEqual(left, signedNumberToBytes(0x100, 32));
-    assert.deepEqual(right, signedNumberToBytes(1, 32));
+  it('shiftLeftBytes and shiftRightLogicalBytes move bits and return destination', () => {
+    const source = signedNumberToBytes(new Uint8Array(8), 1, 32);
+    const left = shiftLeftBytes(new Uint8Array(8), source, 8);
+    const right = shiftRightLogicalBytes(new Uint8Array(8), left, 8);
+    assert.deepEqual(left, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
+    assert.deepEqual(right, signedNumberToBytes(new Uint8Array(8), 1, 32));
   });
 
-  it('shiftRightArithmeticBytes sign-fills', () => {
-    const source = signedNumberToBytes(-256, 32);
-    const destination = new Uint8Array(8);
-    shiftRightArithmeticBytes(destination, source, 8);
-    assert.deepEqual(destination, signedNumberToBytes(-1, 32));
+  it('shiftRightArithmeticBytes sign-fills and returns destination', () => {
+    assert.deepEqual(
+      shiftRightArithmeticBytes(
+        new Uint8Array(8),
+        signedNumberToBytes(new Uint8Array(8), -256, 32),
+        8
+      ),
+      signedNumberToBytes(new Uint8Array(8), -1, 32)
+    );
   });
 
   it('signedNumberToBytes sign-extends narrow immediates', () => {
-    assert.deepEqual(signedNumberToBytes(0x800, 12), signedNumberToBytes(-2048, 32));
-    assert.deepEqual(signedNumberToBytes(1, 12), signedNumberToBytes(1, 32));
+    assert.deepEqual(
+      signedNumberToBytes(new Uint8Array(8), 0x800, 12),
+      signedNumberToBytes(new Uint8Array(8), -2048, 32)
+    );
+    assert.deepEqual(
+      signedNumberToBytes(new Uint8Array(8), 1, 12),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
   });
 
   it('bytesToNumber and byte0ToNumber read little-endian lows', () => {
-    const bytes = signedNumberToBytes(0x12345678, 32);
+    const bytes = signedNumberToBytes(new Uint8Array(8), 0x12345678, 32);
     assert.equal(bytesToNumber(bytes), 0x12345678);
     assert.equal(byte0ToNumber(bytes, 0xff), 0x78);
     assert.equal(byte0ToNumber(bytes, 0x3f), 0x38);
   });
 
+  it('unsignedNumberToBytes zero-extends a u32 (including when bit 31 is set)', () => {
+    assert.deepEqual(
+      unsignedNumberToBytes(new Uint8Array(8), 0x12345678),
+      signedNumberToBytes(new Uint8Array(8), 0x12345678, 32)
+    );
+    assert.deepEqual(
+      unsignedNumberToBytes(new Uint8Array(8), 0x80000000),
+      new Uint8Array([0x00, 0x00, 0x00, 0x80, 0, 0, 0, 0])
+    );
+    assert.notDeepEqual(
+      unsignedNumberToBytes(new Uint8Array(8), 0x80000000),
+      signedNumberToBytes(new Uint8Array(8), 0x80000000, 32)
+    );
+  });
+
   it('bytesToBigInt reads a full little-endian u64', () => {
-    assert.equal(bytesToBigInt(signedNumberToBytes(16, 32)), 16n);
+    assert.equal(bytesToBigInt(signedNumberToBytes(new Uint8Array(8), 16, 32)), 16n);
     // 2^32 + 16
     assert.equal(bytesToBigInt(new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0])), 0x1_0000_0010n);
   });
 
   it('low32Bytes clears the high half', () => {
     const source = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
-    assert.deepEqual(low32Bytes(source), new Uint8Array([1, 2, 3, 4, 0, 0, 0, 0]));
+    assert.deepEqual(
+      low32Bytes(new Uint8Array(8), source),
+      new Uint8Array([1, 2, 3, 4, 0, 0, 0, 0])
+    );
   });
 
-  it('signExtendBytes and zeroExtendBytes fill the high bytes', () => {
+  it('signExtendBytes and zeroExtendBytes fill the high bytes in place', () => {
     const signed = new Uint8Array([0x80, 0, 0, 0, 0xaa, 0xaa, 0xaa, 0xaa]);
-    signExtendBytes(signed, 1);
+    assert.equal(signExtendBytes(signed, 1), signed);
     assert.deepEqual(signed, new Uint8Array([0x80, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]));
 
     const unsigned = new Uint8Array([0x80, 0, 0, 0, 0xaa, 0xaa, 0xaa, 0xaa]);
-    zeroExtendBytes(unsigned, 1);
+    assert.equal(zeroExtendBytes(unsigned, 1), unsigned);
     assert.deepEqual(unsigned, new Uint8Array([0x80, 0, 0, 0, 0, 0, 0, 0]));
   });
 
-  it('signExtendLow32Bytes copies and sign-extends the low word', () => {
-    const destination = new Uint8Array(8);
-    signExtendLow32Bytes(destination, signedNumberToBytes(0x80000000, 32));
-    assert.deepEqual(destination, signedNumberToBytes(0x80000000, 32));
+  it('signExtendBytes with byteLength 4 sign-extends a 32-bit word', () => {
+    const destination = signExtendBytes(signedNumberToBytes(new Uint8Array(8), 0x80000000, 32), 4);
+    assert.deepEqual(destination, signedNumberToBytes(new Uint8Array(8), 0x80000000, 32));
     assert.equal(destination[7], 0xff);
   });
 });

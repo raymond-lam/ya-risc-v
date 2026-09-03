@@ -34,13 +34,13 @@ describe('registers', () => {
     const registers = createRegisters();
     assert.deepEqual(
       [...readGeneralPurposeRegister(registers, 0)],
-      [...signedNumberToBytes(0, 32)]
+      [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
   });
 
   it('writes and reads a general-purpose register', () => {
     const registers = createRegisters();
-    const value = signedNumberToBytes(42, 32);
+    const value = signedNumberToBytes(new Uint8Array(8), 42, 32);
     writeGeneralPurposeRegister(registers, 1, value);
     assert.deepEqual(readGeneralPurposeRegister(registers, 1), value);
   });
@@ -49,13 +49,19 @@ describe('registers', () => {
     const registers = createRegisters();
     setBooleanGeneralPurposeRegister(registers, 2, true);
     setBooleanGeneralPurposeRegister(registers, 3, false);
-    assert.deepEqual(readGeneralPurposeRegister(registers, 2), signedNumberToBytes(1, 32));
-    assert.deepEqual(readGeneralPurposeRegister(registers, 3), signedNumberToBytes(0, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 2),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
   });
 
   it('setProgramCounter and advanceProgramCounter update pc by 4', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(100, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 100);
     advanceProgramCounter(registers);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 104);
@@ -63,26 +69,26 @@ describe('registers', () => {
 
   it('writes and reads a control-and-status register', () => {
     const registers = createRegisters();
-    const value = signedNumberToBytes(0x1234, 32);
+    const value = signedNumberToBytes(new Uint8Array(8), 0x1234, 32);
     writeControlAndStatusRegister(registers, 0x300, value);
     assert.deepEqual(readControlAndStatusRegister(registers, 0x300), value);
   });
 
   it('x0 ignores writes at runtime', () => {
     const registers = createRegisters();
-    writeGeneralPurposeRegister(registers, 0, signedNumberToBytes(99, 32));
+    writeGeneralPurposeRegister(registers, 0, signedNumberToBytes(new Uint8Array(8), 99, 32));
     assert.deepEqual(
       [...readGeneralPurposeRegister(registers, 0)],
-      [...signedNumberToBytes(0, 32)]
+      [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
   });
 
   it('identity CSRs ignore writes at runtime', () => {
     const registers = createRegisters();
-    writeControlAndStatusRegister(registers, 0xf14, signedNumberToBytes(99, 32));
+    writeControlAndStatusRegister(registers, 0xf14, signedNumberToBytes(new Uint8Array(8), 99, 32));
     assert.deepEqual(
       [...readControlAndStatusRegister(registers, 0xf14)],
-      [...signedNumberToBytes(0, 32)]
+      [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
   });
 });

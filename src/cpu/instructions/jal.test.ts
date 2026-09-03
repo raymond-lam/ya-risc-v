@@ -29,12 +29,15 @@ import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
 describe('jal', () => {
   it('links and jumps', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(100, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
     jal(registers, createMemory(256), {
       destinationRegister: 1,
-      immediate: signedNumberToBytes(12, 32),
+      immediate: signedNumberToBytes(new Uint8Array(8), 12, 32),
     });
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(104, 32));
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), 104, 32)
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 112);
   });
 });

@@ -4,10 +4,11 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 > [!WARNING]
 > **This is a work in progress and nowhere near finished.** RV64I and Zicsr execute and are covered
-> by tests, but there is no trap handling, no privilege or CSR *semantics*, no further extensions,
-> and no operating-system or device support. It cannot boot anything real yet. Anything listed under
-> [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate limit on
-> scope — the goal is a much more complete machine than what is here today.
+> by tests. M-mode synchronous traps vector `ecall`/`ebreak`/illegal encodings through `mtvec` and
+> return via `mret`, but there is no multi-mode privilege, no interrupt delivery, no further
+> extensions, and no operating-system or device support. It cannot boot anything real yet. Anything
+> listed under [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate
+> limit on scope — the goal is a much more complete machine than what is here today.
 
 ## Status
 
@@ -19,21 +20,24 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`. These
   are raw read–modify–write of the CSR file (`csrrs`/`csrrc` skip the write when the source is zero).
   There is no privilege check and no WARL/side-effect behavior yet.
+- **M-mode synchronous traps:** `ecall`, `ebreak`, and illegal encodings write `mepc` / `mcause` /
+  `mtval`, update `mstatus` (MPIE←MIE, MIE←0, MPP←M), and jump to `mtvec` (direct mode). `mret`
+  restores that stack and returns to `mepc`.
 - `fence`, decoded and executed as a no-op, which is architecturally legal for this emulator.
 - Integer registers x0–x31, the program counter, and a dense 4096-entry CSR file, with x0 and the
   identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`) hardwired read-only.
 - A fetch/decode/execute loop running on a worker thread against shared guest memory, with decoded
   instructions memoized by their 32-bit encoding.
-- 62 unit tests over the decoder, the instructions, the register file, memory, and the byte helpers.
+- Unit tests over the decoder, the instructions, traps, the register file, memory, and the byte
+  helpers.
 
 ### Not yet implemented
 
-- **Traps and exceptions.** `ecall`, `ebreak`, and illegal instructions currently throw a JavaScript
-  error, which terminates the worker instead of trapping into a handler.
+- **Interrupts and multi-mode privilege.** No U/S modes, no interrupt delivery (`mie`/`mip`/PLIC),
+  no timer (CLINT). Trap CSRs used by M-mode exceptions/`mret` have real semantics; other privileged
+  fields are still ordinary storage.
 - **Extensions.** No M (multiply/divide), A (atomics), F/D (floating point), or C (compressed).
-- **Privilege levels, interrupts, timers, and virtual memory.** No machine/supervisor/user modes,
-  no `mstatus`/`mtvec` semantics, no paging. CSR instructions can already read and write those
-  registers as ordinary 64-bit slots; the fields do not yet mean anything.
+- **Virtual memory.** No paging (`satp` / Sv39).
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
 - **A real address space.** Guest memory is sized to exactly the image length, so there is no room
@@ -61,9 +65,10 @@ npm run dev path/to/image.bin
 `npm run dev` runs straight from TypeScript sources via `tsx`. The image is treated as a flat binary:
 it is copied into guest memory at address 0 and the program counter resets to 0.
 
-Because traps are not implemented, a program that executes `ecall`, `ebreak`, or an unrecognized
-encoding will fail with a thrown error rather than being handled by the guest. Running off the end of
-the image reads zeros, which decodes as an illegal instruction and stops the machine.
+Because traps vector to `mtvec`, a program that executes `ecall`, `ebreak`, or an unrecognized
+encoding continues at the handler if one is installed; with `mtvec` left at 0 the hart re-fetches
+from address 0. Running off the end of the image still reads zeros, which decode as illegal
+instructions and trap repeatedly unless a handler advances past them.
 
 To build and run the compiled output instead:
 
@@ -99,6 +104,7 @@ src/
     index.ts            Host-side run(); spawns the worker, returns an awaitable handle
     run.ts              Worker entry point and the fetch/decode/execute loop
     decode.ts           Instruction decode into memoized execute thunks
+    trap.ts             M-mode synchronous trap entry and mret
     registers.ts        Register file: x0–x31, the program counter, and CSRs
     types.ts            Architectural state types
     instructions/       One file per opcode group (op-imm.ts, load.ts, branch.ts, …)

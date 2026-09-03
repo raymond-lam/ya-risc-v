@@ -26,7 +26,7 @@ const main = (): void => {
   setProgramCounter(registers, resetPc);
   const instructionWord = new Uint8Array(4);
 
-  // No exit condition: the hart runs until an instruction throws or the host terminates us.
+  // No exit condition: the hart runs until the host terminates us.
   for (;;) {
     loadBytes({
       destination: instructionWord,
