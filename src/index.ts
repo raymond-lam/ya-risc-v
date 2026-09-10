@@ -18,7 +18,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { Command, InvalidArgumentError } from 'commander';
-import { createMemory } from '#memory.js';
+import { createMemory } from '#memory/index.js';
 import { run } from '#cpu/index.js';
 import { unsignedBigIntToBytes } from '#utils/bytes.js';
 import type { Memory, ReadonlyUint8Array } from '#types.js';

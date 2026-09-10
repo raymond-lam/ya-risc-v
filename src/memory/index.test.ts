@@ -16,22 +16,32 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createMemory, loadBytes, storeBytes } from '#memory.js';
+import { createMemory, loadBytes, storeBytes } from '#memory/index.js';
+import { popTransmit, pushReceive } from '#memory/uart.js';
 import createTestMemory from '#testing/guest-memory.js';
 import { signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes.js';
 import type { Memory, ReadonlyUint8Array } from '#types.js';
 
-/** 16550 register window — matches `UART_SIZE` in memory.ts. */
-const UART_SIZE = 8n;
+/** LSR bits — local to tests (not part of the public UART surface). */
+const LSR_DR = 0x01;
+const LSR_THRE = 0x20;
+const LSR_TEMT = 0x40;
+
 const RAM_BASE = new Uint8Array(8) as ReadonlyUint8Array;
 const UART_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n) as ReadonlyUint8Array;
 const VIRT_RAM_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000n) as ReadonlyUint8Array;
 
+const uartAddress = (registerIndex: number): ReadonlyUint8Array => {
+  const address = new Uint8Array(UART_BASE);
+  address[0] = (address[0]! + registerIndex) & 0xff;
+  return address as ReadonlyUint8Array;
+};
+
 describe('memory', () => {
-  it('createMemory packs RAM and UART into one SharedArrayBuffer', () => {
+  it('createMemory packs RAM with UART state into one SharedArrayBuffer', () => {
     const memory = createTestMemory(64n);
     assert.equal(memory.ramSize, 64n);
-    assert.equal(memory.bytes.byteLength, Number(64n + UART_SIZE));
+    assert.ok(memory.bytes.byteLength > Number(64n + 8n));
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
   });
 
@@ -87,22 +97,6 @@ describe('memory', () => {
     assert.equal(memory.bytes[16], 0x42);
   });
 
-  it('maps UART guest addresses to the packed tail of bytes', () => {
-    const memory = createTestMemory(64n);
-    storeBytes({
-      memory,
-      address: UART_BASE,
-      source: new Uint8Array([0xa5]),
-      byteLength: 1,
-    });
-    assert.equal(memory.bytes[64], 0xa5);
-    assert.equal(memory.bytes[0], 0);
-
-    const destination = new Uint8Array(8);
-    loadBytes({ destination, memory, address: UART_BASE, byteLength: 1 });
-    assert.deepEqual(destination, new Uint8Array([0xa5, 0, 0, 0, 0, 0, 0, 0]));
-  });
-
   it('maps RAM at a non-zero base without allocating the guest PA hole', () => {
     const ramSize = 64n;
     const memory: Memory = {
@@ -115,7 +109,6 @@ describe('memory', () => {
       ramSize,
       uartBaseAddress: UART_BASE,
     };
-    assert.equal(memory.bytes.byteLength, Number(64n + UART_SIZE));
 
     // Guest PA 0x8000_0000 + 4 → host index 4
     const ramAddress = new Uint8Array(VIRT_RAM_BASE);
@@ -137,14 +130,6 @@ describe('memory', () => {
       byteLength: 1,
     });
     assert.deepEqual(low, new Uint8Array(8));
-
-    storeBytes({
-      memory,
-      address: UART_BASE,
-      source: new Uint8Array([0xc3]),
-      byteLength: 1,
-    });
-    assert.equal(memory.bytes[64], 0xc3);
   });
 
   it('rejects a UART window that overlaps RAM', () => {
@@ -165,6 +150,123 @@ describe('memory', () => {
       ramSize: 0x1000_0000n + 1n,
       uartBaseAddress: UART_BASE,
     });
-    assert.equal(bytes.byteLength, Number(0x1000_0000n + 1n + UART_SIZE));
+    assert.ok(bytes.byteLength > Number(0x1000_0000n + 1n));
+  });
+});
+
+describe('uart queues', () => {
+  it('THR store pushes TX; popTransmit drains; LSR reflects THRE/TEMT', () => {
+    const memory = createTestMemory(64n);
+
+    const lsrEmpty = new Uint8Array(8);
+    loadBytes({ destination: lsrEmpty, memory, address: uartAddress(5), byteLength: 1 });
+    assert.equal(lsrEmpty[0], LSR_THRE | LSR_TEMT);
+
+    storeBytes({
+      memory,
+      address: uartAddress(0),
+      source: new Uint8Array([0x41]),
+      byteLength: 1,
+    });
+    assert.equal(popTransmit(memory), 0x41);
+    assert.equal(popTransmit(memory), null);
+
+    storeBytes({
+      memory,
+      address: uartAddress(0),
+      source: new Uint8Array([0x42]),
+      byteLength: 1,
+    });
+    const lsrPending = new Uint8Array(8);
+    loadBytes({ destination: lsrPending, memory, address: uartAddress(5), byteLength: 1 });
+    assert.equal(lsrPending[0]! & LSR_TEMT, 0);
+    assert.equal(lsrPending[0]! & LSR_THRE, LSR_THRE);
+    assert.equal(popTransmit(memory), 0x42);
+  });
+
+  it('pushReceive then RBR load pops RX and clears DR', () => {
+    const memory = createTestMemory(64n);
+    assert.equal(pushReceive(memory, 0xab), true);
+
+    const lsrReady = new Uint8Array(8);
+    loadBytes({ destination: lsrReady, memory, address: uartAddress(5), byteLength: 1 });
+    assert.equal(lsrReady[0]! & LSR_DR, LSR_DR);
+
+    const rbr = new Uint8Array(8);
+    loadBytes({ destination: rbr, memory, address: uartAddress(0), byteLength: 1 });
+    assert.equal(rbr[0], 0xab);
+
+    const lsrAfter = new Uint8Array(8);
+    loadBytes({ destination: lsrAfter, memory, address: uartAddress(5), byteLength: 1 });
+    assert.equal(lsrAfter[0]! & LSR_DR, 0);
+
+    const emptyRbr = new Uint8Array(8);
+    loadBytes({ destination: emptyRbr, memory, address: uartAddress(0), byteLength: 1 });
+    assert.equal(emptyRbr[0], 0);
+  });
+
+  it('drops RX when the receive queue is full', () => {
+    const memory = createTestMemory(64n);
+    let filled = 0;
+    while (pushReceive(memory, filled & 0xff)) {
+      filled += 1;
+    }
+    assert.ok(filled > 0);
+
+    const first = new Uint8Array(8);
+    loadBytes({ destination: first, memory, address: uartAddress(0), byteLength: 1 });
+    assert.equal(first[0], 0);
+  });
+
+  it('drops TX when the transmit queue is full', () => {
+    const memory = createTestMemory(64n);
+    let filled = 0;
+    for (;;) {
+      storeBytes({
+        memory,
+        address: uartAddress(0),
+        source: new Uint8Array([filled & 0xff]),
+        byteLength: 1,
+      });
+      const lsr = new Uint8Array(8);
+      loadBytes({ destination: lsr, memory, address: uartAddress(5), byteLength: 1 });
+      filled += 1;
+      if ((lsr[0]! & LSR_THRE) === 0) {
+        break;
+      }
+      assert.ok(filled < 64);
+    }
+
+    storeBytes({
+      memory,
+      address: uartAddress(0),
+      source: new Uint8Array([0xff]),
+      byteLength: 1,
+    });
+    assert.equal(popTransmit(memory), 0);
+    assert.equal(popTransmit(memory), 1);
+  });
+
+  it('round-trips scratch and ignores LSR writes', () => {
+    const memory = createTestMemory(64n);
+    storeBytes({
+      memory,
+      address: uartAddress(7),
+      source: new Uint8Array([0x5a]),
+      byteLength: 1,
+    });
+    const scratch = new Uint8Array(8);
+    loadBytes({ destination: scratch, memory, address: uartAddress(7), byteLength: 1 });
+    assert.equal(scratch[0], 0x5a);
+
+    storeBytes({
+      memory,
+      address: uartAddress(5),
+      source: new Uint8Array([0xff]),
+      byteLength: 1,
+    });
+    const lsr = new Uint8Array(8);
+    loadBytes({ destination: lsr, memory, address: uartAddress(5), byteLength: 1 });
+    assert.equal(lsr[0], LSR_THRE | LSR_TEMT);
   });
 });

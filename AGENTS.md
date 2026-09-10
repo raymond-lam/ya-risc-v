@@ -30,7 +30,8 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - `src/cpu/decode.ts` — opcode/funct switch; returns an execute thunk, memoized by instruction word.
 - `src/cpu/trap.ts` — M-mode synchronous trap entry and `mret` (`mstatus`/`mepc`/`mcause`/`mtval`/`mtvec`).
 - `src/cpu/instructions/` — one file per opcode group, named after the RISC-V opcode (`op-imm-32.ts`).
-- `src/cpu/registers.ts`, `src/memory.ts`, `src/utils/bytes.ts` — architectural state and byte helpers.
+- `src/cpu/registers.ts`, `src/memory/` (`index` / `ram` / `uart`), `src/utils/bytes.ts` —
+  architectural state and byte helpers.
 
 ## Core invariants
 
@@ -39,10 +40,13 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `#utils/bytes.js` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
   …), including CSR bitfield updates in `trap.ts`. Mutating helpers take a `destination`
   buffer and return it for chaining (`const x = addBytes(new Uint8Array(8), a, b)`). Guest
-  addresses stay as byte arrays through `loadBytes`/`storeBytes` (and `hostIndex`). Map decode
+  addresses stay as byte arrays through `loadBytes`/`storeBytes`. Map decode
   uses `bytesToBigInt` only for range compares. Guest-mapped RAM size (`ramSize`) is `bigint`
-  (PA math); the UART window is a fixed 16550 register block (8 bytes). Transfer widths
-  (`byteLength` on load/store) and packed host indexes into `memory.bytes` are `number`.
+  (PA math); the UART window is a fixed 16550 register block (8 bytes) with RX/TX queues
+  packed in the SAB (host-only; RBR/THR/LSR loads/stores are queue side effects in
+  `memory/uart.ts`). **address** means a guest physical address (architectural bytes);
+  **index** means a host TypedArray index into `memory.bytes` (`number`). Transfer widths
+  (`byteLength` on load/store) are also `number`.
   `bytesToNumber` reads u32 from architectural bytes. `signedNumberToBytes`,
   `unsignedNumberToBytes`, `unsignedBigIntToBytes`, and `low32Bytes` pack values into a
   caller-allocated buffer (same destination/return convention).
@@ -83,7 +87,8 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space indent):
 
-- Import with `#` subpath specifiers and a `.js` extension (`import { loadBytes } from '#memory.js'`).
+- Import with `#` subpath specifiers and a `.js` extension
+  (`import { loadBytes } from '#memory/index.js'`).
   Relative imports are a lint error. The `@ya-risc-v/source` condition maps `#*` to `src/*`.
 - Arrow functions only — no `function` expressions or declarations, and no `export default function`.
 - Modules with a single export use `export default`; otherwise list named exports in one block at the
