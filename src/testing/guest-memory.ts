@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { createMemory } from '#memory.js';
+import { createMemory } from '#memory/index.js';
 import { unsignedBigIntToBytes } from '#utils/bytes.js';
 import type { Memory, ReadonlyUint8Array } from '#types.js';
 

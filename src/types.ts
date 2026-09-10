@@ -25,17 +25,24 @@ type ReadonlyUint8Array = {
 };
 
 /**
- * Guest address space: RAM and a 16550 UART register window packed into one SharedArrayBuffer.
+ * Guest address space: RAM and a 16550 UART register window, with RX/TX queues packed
+ * into one SharedArrayBuffer (queues are host-only, not guest-mapped).
  *
- * Guest PA layout:
- *   [ramBaseAddress, ramBaseAddress + ramSize)     — DRAM
- *   [uartBaseAddress, uartBaseAddress + 8)       — UART registers (fixed)
+ * Vocabulary:
+ *   - **address** — guest physical address (8-byte little-endian `Uint8Array`)
+ *   - **index** — host TypedArray index into `memory.bytes` (`number`)
  *
- * Host packing in `bytes` (sparse guest map; no hole allocated):
- *   [0, ramSize)        — DRAM
- *   [ramSize, ramSize + 8) — UART register bytes
+ * Guest PA layout (addresses):
+ *   [ramBaseAddress, ramBaseAddress + ramSize) — DRAM
+ *   [uartBaseAddress, uartBaseAddress + 8)     — UART registers (fixed)
  *
- * Guest bases/`ramSize` participate in PA math as `bigint`. Indexes into `bytes` are `number`.
+ * Host packing in `bytes` (indices; sparse guest map; no hole allocated):
+ *   [0, ramSize)                         — DRAM
+ *   [ramSize, ramSize + 8)               — UART register shadow (non-data/status)
+ *   then aligned queue metadata + RX ring + TX ring (see `uartHostLayout`)
+ *
+ * Guest bases/`ramSize` participate in PA math as `bigint`. Host indices are `number`.
+ * Loads/stores to RBR/THR/LSR go through UART queue side effects, not plain RAM semantics.
  */
 type Memory = {
   bytes: Uint8Array;

@@ -17,7 +17,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import decode from '#cpu/decode.js';
-import { loadBytes, storeBytes } from '#memory.js';
+import { loadBytes, storeBytes } from '#memory/index.js';
 import testMemory from '#testing/guest-memory.js';
 import {
   createRegisters,

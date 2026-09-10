@@ -105,7 +105,10 @@ and `tsc` over `src/`.
 ```
 src/
   index.ts              CLI: image + map options, create memory, start the CPU
-  memory.ts             Guest memory over a SharedArrayBuffer, plus load/store helpers
+  memory/
+    index.ts            Guest memory: createMemory, loadBytes, storeBytes
+    ram.ts              RAM host mapping and byte access
+    uart.ts             16550 window, RX/TX queues, host push/pop helpers
   ReadonlyUint8Array    Structural type for read-only byte buffers (no runtime Proxy)
   cpu/
     index.ts            Host-side run(); spawns the worker, returns an awaitable handle

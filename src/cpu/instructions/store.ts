@@ -18,7 +18,7 @@ import { addBytes } from '#utils/bytes.js';
 import { readGeneralPurposeRegister, advanceProgramCounter } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
 import type { Memory, ReadonlyUint8Array } from '#types.js';
-import { storeBytes } from '#memory.js';
+import { storeBytes } from '#memory/index.js';
 
 type StoreArgs = {
   sourceRegister1: number;

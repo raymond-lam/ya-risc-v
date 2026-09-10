@@ -22,7 +22,7 @@ import {
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
 import type { Memory, ReadonlyUint8Array } from '#types.js';
-import { loadBytes } from '#memory.js';
+import { loadBytes } from '#memory/index.js';
 
 type LoadArgs = {
   destinationRegister: number;

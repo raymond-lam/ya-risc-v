@@ -41,7 +41,7 @@ type Registers = {
  * vector; the worker creates its own registers.
  */
 type CpuWorkerData = {
-  /** Shared guest address space (RAM + UART packed in one SharedArrayBuffer). */
+  /** Shared guest address space (RAM + UART registers/queues in one SharedArrayBuffer). */
   memory: Memory;
   /** Reset PC as an 8-byte little-endian value (immutable after handoff). */
   resetPc: ReadonlyUint8Array;
