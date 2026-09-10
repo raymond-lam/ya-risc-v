@@ -21,15 +21,16 @@ import {
   advanceProgramCounter,
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 import { loadBytes } from '#memory.js';
 
 type LoadArgs = {
   destinationRegister: number;
   sourceRegister1: number;
-  immediate: Uint8Array;
+  immediate: ReadonlyUint8Array;
 };
 
-const loadEffectiveAddress = (registers: Registers, args: LoadArgs): Uint8Array =>
+const loadEffectiveAddress = (registers: Registers, args: LoadArgs): ReadonlyUint8Array =>
   addBytes(
     new Uint8Array(8),
     readGeneralPurposeRegister(registers, args.sourceRegister1),
@@ -37,7 +38,7 @@ const loadEffectiveAddress = (registers: Registers, args: LoadArgs): Uint8Array 
   );
 
 /** lb: rd = sext(mem[rs1+imm], 8). */
-const lb = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
+const lb = (registers: Registers, memory: Memory, args: LoadArgs): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -50,7 +51,7 @@ const lb = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
 };
 
 /** lh: rd = sext(mem[rs1+imm], 16). */
-const lh = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
+const lh = (registers: Registers, memory: Memory, args: LoadArgs): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -63,7 +64,7 @@ const lh = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
 };
 
 /** lw: rd = sext(mem[rs1+imm], 32). */
-const lw = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
+const lw = (registers: Registers, memory: Memory, args: LoadArgs): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -76,7 +77,7 @@ const lw = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
 };
 
 /** ld: rd = mem[rs1+imm] (64 bits). */
-const ld = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
+const ld = (registers: Registers, memory: Memory, args: LoadArgs): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -89,7 +90,7 @@ const ld = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
 };
 
 /** lbu: rd = zext(mem[rs1+imm], 8). */
-const lbu = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
+const lbu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -102,7 +103,7 @@ const lbu = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => 
 };
 
 /** lhu: rd = zext(mem[rs1+imm], 16). */
-const lhu = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
+const lhu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -115,7 +116,7 @@ const lhu = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => 
 };
 
 /** lwu: rd = zext(mem[rs1+imm], 32). */
-const lwu = (registers: Registers, memory: Uint8Array, args: LoadArgs): void => {
+const lwu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,

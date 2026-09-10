@@ -16,8 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { addi, slti, sltiu, xori } from '#cpu/instructions/op-imm.js';
-import { createMemory } from '#memory.js';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -29,7 +29,7 @@ import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
 describe('op-imm', () => {
   it('addi writes rs1 + imm and advances pc', () => {
     const registers = createRegisters();
-    addi(registers, createMemory(256), {
+    addi(registers, testMemory(256n), {
       destinationRegister: 1,
       sourceRegister1: 0,
       immediate: signedNumberToBytes(new Uint8Array(8), 10, 32),
@@ -45,7 +45,7 @@ describe('op-imm', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), -1, 32));
 
-    slti(registers, createMemory(256), {
+    slti(registers, testMemory(256n), {
       destinationRegister: 2,
       sourceRegister1: 1,
       immediate: signedNumberToBytes(new Uint8Array(8), 1, 32),
@@ -55,7 +55,7 @@ describe('op-imm', () => {
       signedNumberToBytes(new Uint8Array(8), 1, 32)
     );
 
-    sltiu(registers, createMemory(256), {
+    sltiu(registers, testMemory(256n), {
       destinationRegister: 3,
       sourceRegister1: 1,
       immediate: signedNumberToBytes(new Uint8Array(8), 1, 32),
@@ -69,7 +69,7 @@ describe('op-imm', () => {
   it('xori bitwise-xors the immediate', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
-    xori(registers, createMemory(256), {
+    xori(registers, testMemory(256n), {
       destinationRegister: 2,
       sourceRegister1: 1,
       immediate: signedNumberToBytes(new Uint8Array(8), 0xff, 32),

@@ -15,7 +15,7 @@
  */
 
 /* eslint-disable import/prefer-default-export -- CPU architectural state types */
-import type ReadonlyUint8Array from '#ReadonlyUint8Array.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 
 type Registers = {
   /** Integer GPRs: x0–x31. x0 is hardwired zero (read-only). */
@@ -25,8 +25,8 @@ type Registers = {
   /** Program counter (architectural, not a CSR). */
   programCounter: Uint8Array;
   /**
-   * Dense CSR file keyed by 12-bit index.
-   * Identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only.
+   * Dense CSR file keyed by 12-bit index. Only the implemented set is guest-accessible;
+   * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only.
    */
   controlAndStatus: readonly Uint8Array[] & {
     readonly 0xf11: ReadonlyUint8Array; // mvendorid
@@ -41,10 +41,10 @@ type Registers = {
  * vector; the worker creates its own registers.
  */
 type CpuWorkerData = {
-  /** Shared guest address space. */
-  memory: Uint8Array;
-  /** Reset PC as an 8-byte little-endian value. */
-  resetPc: Uint8Array;
+  /** Shared guest address space (RAM + UART packed in one SharedArrayBuffer). */
+  memory: Memory;
+  /** Reset PC as an 8-byte little-endian value (immutable after handoff). */
+  resetPc: ReadonlyUint8Array;
 };
 
 export type { Registers, CpuWorkerData };

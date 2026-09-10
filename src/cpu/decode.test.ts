@@ -17,7 +17,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import decode from '#cpu/decode.js';
-import { createMemory, loadBytes, storeBytes } from '#memory.js';
+import { loadBytes, storeBytes } from '#memory.js';
+import testMemory from '#testing/guest-memory.js';
 import {
   createRegisters,
   readControlAndStatusRegister,
@@ -42,7 +43,7 @@ const instructionBytes = (encoding: number): Uint8Array => {
 describe('decode + execute', () => {
   it('executes addi x1, x0, 42 and advances pc', () => {
     const registers = createRegisters();
-    const memory = createMemory(64);
+    const memory = testMemory(64n);
     // addi x1, x0, 42
     decode(instructionBytes(0x02a00093))(registers, memory);
     assert.deepEqual(
@@ -54,7 +55,7 @@ describe('decode + execute', () => {
 
   it('executes csrrw x1, 0x300, x2 and advances pc', () => {
     const registers = createRegisters();
-    const memory = createMemory(64);
+    const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x22, 32));
     writeControlAndStatusRegister(
       registers,
@@ -76,7 +77,7 @@ describe('decode + execute', () => {
 
   it('executes csrrwi x1, 0x300, 31 as a zero-extended immediate', () => {
     const registers = createRegisters();
-    const memory = createMemory(64);
+    const memory = testMemory(64n);
     // csrrwi x1, 0x300, 31
     decode(instructionBytes(0x300fd0f3))(registers, memory);
     assert.deepEqual(
@@ -91,7 +92,7 @@ describe('decode + execute', () => {
 
   it('executes lui x1, 0x12345', () => {
     const registers = createRegisters();
-    const memory = createMemory(64);
+    const memory = testMemory(64n);
     // lui x1, 0x12345
     decode(instructionBytes(0x123450b7))(registers, memory);
     assert.deepEqual(
@@ -102,7 +103,7 @@ describe('decode + execute', () => {
 
   it('executes sw then lw round-trip', () => {
     const registers = createRegisters();
-    const memory = createMemory(64);
+    const memory = testMemory(64n);
     writeGeneralPurposeRegister(
       registers,
       1,
@@ -131,7 +132,7 @@ describe('decode + execute', () => {
 
   it('executes the sample program through the DONE mailbox store', () => {
     const registers = createRegisters();
-    const memory = createMemory(64);
+    const memory = testMemory(64n);
     storeBytes({
       memory,
       address: signedNumberToBytes(new Uint8Array(8), 0, 32),
@@ -179,12 +180,12 @@ describe('decode + execute', () => {
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 1, 32)
     );
-    assert.equal(memory[60], 1);
+    assert.equal(memory.bytes[60], 1);
   });
 
   it('executes mret after seeding mepc', () => {
     const registers = createRegisters();
-    const memory = createMemory(64);
+    const memory = testMemory(64n);
     writeControlAndStatusRegister(
       registers,
       0x341,
@@ -197,7 +198,7 @@ describe('decode + execute', () => {
 
   it('traps on an illegal encoding and records mtval', () => {
     const registers = createRegisters();
-    const memory = createMemory(64);
+    const memory = testMemory(64n);
     writeControlAndStatusRegister(
       registers,
       0x305,

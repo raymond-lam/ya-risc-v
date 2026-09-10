@@ -17,15 +17,17 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - The full **RV64I** base integer instruction set: `lui`, `auipc`, `jal`, `jalr`, the six branches,
   all seven loads, all four stores, the register–immediate and register–register integer ops, and
   the RV64-specific 32-bit forms (`addiw`, `sllw`, `sraw`, …).
-- **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`. These
-  are raw read–modify–write of the CSR file (`csrrs`/`csrrc` skip the write when the source is zero).
-  There is no privilege check and no WARL/side-effect behavior yet.
+- **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
+  Only implemented CSRs are accessible (`mstatus`, `mtvec`, `mepc`, `mcause`, `mtval`, identity);
+  other indices and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the
+  write when the source is zero. There is no privilege check and no WARL/side-effect behavior yet.
 - **M-mode synchronous traps:** `ecall`, `ebreak`, and illegal encodings write `mepc` / `mcause` /
   `mtval`, update `mstatus` (MPIE←MIE, MIE←0, MPP←M), and jump to `mtvec` (direct mode). `mret`
   restores that stack and returns to `mepc`.
 - `fence`, decoded and executed as a no-op, which is architecturally legal for this emulator.
-- Integer registers x0–x31, the program counter, and a dense 4096-entry CSR file, with x0 and the
-  identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`) hardwired read-only.
+- Integer registers x0–x31, the program counter, and a dense 4096-entry CSR file backing the
+  implemented set, with x0 and the identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`)
+  hardwired read-only.
 - A fetch/decode/execute loop running on a worker thread against shared guest memory, with decoded
   instructions memoized by their 32-bit encoding.
 - Unit tests over the decoder, the instructions, traps, the register file, memory, and the byte
@@ -34,8 +36,8 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 ### Not yet implemented
 
 - **Interrupts and multi-mode privilege.** No U/S modes, no interrupt delivery (`mie`/`mip`/PLIC),
-  no timer (CLINT). Trap CSRs used by M-mode exceptions/`mret` have real semantics; other privileged
-  fields are still ordinary storage.
+  no timer (CLINT). Trap CSRs used by M-mode exceptions/`mret` have real semantics; other standard
+  CSRs are not implemented (access raises illegal-instruction).
 - **Extensions.** No M (multiply/divide), A (atomics), F/D (floating point), or C (compressed).
 - **Virtual memory.** No paging (`satp` / Sv39).
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
@@ -63,7 +65,12 @@ npm run dev path/to/image.bin
 ```
 
 `npm run dev` runs straight from TypeScript sources via `tsx`. The image is treated as a flat binary:
-it is copied into guest memory at address 0 and the program counter resets to 0.
+it is copied into guest RAM (default base `0`) and the program counter resets to `--ram-base`
+(override with `--reset-pc`). UART MMIO defaults to base `0x10000000` (fixed 8-byte 16550 window).
+
+```bash
+npm run dev -- path/to/image.bin --ram-base 0x80000000 --uart-base 0x10000000
+```
 
 Because traps vector to `mtvec`, a program that executes `ecall`, `ebreak`, or an unrecognized
 encoding continues at the handler if one is installed; with `mtvec` left at 0 the hart re-fetches
@@ -97,9 +104,9 @@ and `tsc` over `src/`.
 
 ```
 src/
-  index.ts              CLI: load an image, create memory, start the CPU
+  index.ts              CLI: image + map options, create memory, start the CPU
   memory.ts             Guest memory over a SharedArrayBuffer, plus load/store helpers
-  ReadonlyUint8Array.ts Uint8Array whose writes are dropped after construction
+  ReadonlyUint8Array    Structural type for read-only byte buffers (no runtime Proxy)
   cpu/
     index.ts            Host-side run(); spawns the worker, returns an awaitable handle
     run.ts              Worker entry point and the fetch/decode/execute loop

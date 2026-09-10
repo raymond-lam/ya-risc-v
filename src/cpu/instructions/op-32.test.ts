@@ -16,8 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { addw } from '#cpu/instructions/op-32.js';
-import { createMemory } from '#memory.js';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -34,7 +34,7 @@ describe('op-32', () => {
       signedNumberToBytes(new Uint8Array(8), 0xffffffff, 32)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
-    addw(registers, createMemory(256), {
+    addw(registers, testMemory(256n), {
       destinationRegister: 3,
       sourceRegister1: 1,
       sourceRegister2: 2,

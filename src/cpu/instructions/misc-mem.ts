@@ -16,9 +16,10 @@
 
 import { advanceProgramCounter } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory } from '#types.js';
 
 /** fence: memory-ordering barrier (no-op in this emulator). */
-const fence = (registers: Registers, _memory: Uint8Array): void => {
+const fence = (registers: Registers, _memory: Memory): void => {
   advanceProgramCounter(registers);
 };
 

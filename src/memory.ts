@@ -14,15 +14,59 @@
  * limitations under the License.
  */
 
-import { bytesToBigInt } from '#utils/bytes.js';
+import { addBytes, bytesToBigInt, copyBytes, signedNumberToBytes } from '#utils/bytes.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
+
+/** 16550 register window size (RBR/THR … SCR). FIFO state is device-private, not MMIO. */
+const UART_SIZE = 8n;
+
+const ONE_BYTE = signedNumberToBytes(new Uint8Array(8), 1, 32) as ReadonlyUint8Array;
 
 /**
- * Guest memory as a `Uint8Array` over a `SharedArrayBuffer`, shared with the CPU worker.
- * Access is plain byte reads and writes rather than `Atomics`, so host and guest race like
- * unsynchronized access to real memory.
+ * Map a guest physical address to a host index in the packed `memory.bytes` buffer,
+ * or `null` if unmapped. The address stays an architectural byte array; `bigint` is
+ * used only for the range compare. The returned host offset is a TypedArray index.
  */
-const createMemory = (byteLength: number): Uint8Array =>
-  new Uint8Array(new SharedArrayBuffer(byteLength));
+const hostIndex = (memory: Memory, address: ReadonlyUint8Array): number | null => {
+  const guestAddress = bytesToBigInt(address);
+  const ramBase = bytesToBigInt(memory.ramBaseAddress);
+  const ramEnd = ramBase + memory.ramSize;
+  const uartBase = bytesToBigInt(memory.uartBaseAddress);
+  const uartEnd = uartBase + UART_SIZE;
+
+  if (guestAddress >= uartBase && guestAddress < uartEnd) {
+    return Number(memory.ramSize + (guestAddress - uartBase));
+  }
+  if (guestAddress >= ramBase && guestAddress < ramEnd) {
+    return Number(guestAddress - ramBase);
+  }
+  return null;
+};
+
+/**
+ * Allocate a SharedArrayBuffer large enough for RAM plus the packed UART window.
+ * Returns only the byte view; the caller builds a `Memory` record around it.
+ */
+const createMemory = ({
+  ramBaseAddress,
+  ramSize,
+  uartBaseAddress,
+}: {
+  ramBaseAddress: ReadonlyUint8Array;
+  ramSize: bigint;
+  uartBaseAddress: ReadonlyUint8Array;
+}): Uint8Array => {
+  if (ramSize < 0n) {
+    throw new RangeError('ramSize must be non-negative');
+  }
+  const ramBase = bytesToBigInt(ramBaseAddress);
+  const uartBase = bytesToBigInt(uartBaseAddress);
+  if (ramSize !== 0n && ramBase < uartBase + UART_SIZE && uartBase < ramBase + ramSize) {
+    throw new RangeError('UART window overlaps RAM');
+  }
+  // Region sizes are bigint (guest map math); the packed host buffer length is a number.
+  return new Uint8Array(new SharedArrayBuffer(Number(ramSize + UART_SIZE)));
+};
 
 /** Copy `byteLength` bytes from `memory` at `address` into `destination` (high bytes cleared). */
 const loadBytes = ({
@@ -32,18 +76,16 @@ const loadBytes = ({
   byteLength,
 }: {
   destination: Uint8Array;
-  memory: Uint8Array;
-  address: Uint8Array;
+  memory: Memory;
+  address: ReadonlyUint8Array;
   byteLength: number;
 }): void => {
   destination.fill(0);
-  const guestAddress = bytesToBigInt(address);
-  if (guestAddress >= BigInt(memory.byteLength)) {
-    return;
-  }
-  const start = Number(guestAddress);
+  const cursor = copyBytes(new Uint8Array(8), address);
   for (let index = 0; index < byteLength; index += 1) {
-    destination[index] = memory[start + index] ?? 0;
+    const host = hostIndex(memory, cursor);
+    destination[index] = host === null ? 0 : (memory.bytes[host] ?? 0);
+    addBytes(cursor, cursor, ONE_BYTE);
   }
 };
 
@@ -54,18 +96,18 @@ const storeBytes = ({
   source,
   byteLength,
 }: {
-  memory: Uint8Array;
-  address: Uint8Array;
-  source: Uint8Array;
+  memory: Memory;
+  address: ReadonlyUint8Array;
+  source: ReadonlyUint8Array;
   byteLength: number;
 }): void => {
-  const guestAddress = bytesToBigInt(address);
-  if (guestAddress >= BigInt(memory.byteLength)) {
-    return;
-  }
-  const start = Number(guestAddress);
+  const cursor = copyBytes(new Uint8Array(8), address);
   for (let index = 0; index < byteLength; index += 1) {
-    memory[start + index] = source[index] ?? 0;
+    const host = hostIndex(memory, cursor);
+    if (host !== null) {
+      memory.bytes[host] = source[index] ?? 0;
+    }
+    addBytes(cursor, cursor, ONE_BYTE);
   }
 };
 

@@ -14,29 +14,26 @@
  * limitations under the License.
  */
 
-import { addBytes } from '#utils/bytes.js';
-import {
-  writeGeneralPurposeRegister,
-  readProgramCounter,
-  advanceProgramCounter,
-} from '#cpu/registers.js';
-import type { Registers } from '#cpu/types.js';
+import { createMemory } from '#memory.js';
+import { unsignedBigIntToBytes } from '#utils/bytes.js';
 import type { Memory, ReadonlyUint8Array } from '#types.js';
 
-type AuipcArgs = {
-  destinationRegister: number;
-  immediate: ReadonlyUint8Array;
-};
+/** Test map: RAM at guest PA 0, UART at `0x1000_0000`. */
+const RAM_BASE_ADDRESS = new Uint8Array(8) as ReadonlyUint8Array;
+const UART_BASE_ADDRESS = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  0x1000_0000n
+) as ReadonlyUint8Array;
 
-/** auipc: rd = pc + imm (U-type). */
-const auipc = (registers: Registers, _memory: Memory, args: AuipcArgs): void => {
-  writeGeneralPurposeRegister(
-    registers,
-    args.destinationRegister,
-    addBytes(new Uint8Array(8), readProgramCounter(registers), args.immediate)
-  );
-  advanceProgramCounter(registers);
-};
+const createTestMemory = (ramSize: bigint): Memory => ({
+  bytes: createMemory({
+    ramBaseAddress: RAM_BASE_ADDRESS,
+    ramSize,
+    uartBaseAddress: UART_BASE_ADDRESS,
+  }),
+  ramBaseAddress: RAM_BASE_ADDRESS,
+  ramSize,
+  uartBaseAddress: UART_BASE_ADDRESS,
+});
 
-export { auipc };
-export type { AuipcArgs };
+export default createTestMemory;

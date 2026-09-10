@@ -16,15 +16,15 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import fence from '#cpu/instructions/misc-mem.js';
-import { createMemory } from '#memory.js';
 import { createRegisters, readProgramCounter } from '#cpu/registers.js';
 import { bytesToNumber } from '#utils/bytes.js';
 
 describe('misc-mem', () => {
   it('fence advances pc', () => {
     const registers = createRegisters();
-    fence(registers, createMemory(256));
+    fence(registers, testMemory(256n));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 });

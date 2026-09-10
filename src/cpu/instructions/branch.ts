@@ -22,14 +22,15 @@ import {
   advanceProgramCounter,
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 
 type BranchArgs = {
   sourceRegister1: number;
   sourceRegister2: number;
-  immediate: Uint8Array;
+  immediate: ReadonlyUint8Array;
 };
 
-const takeBranch = (registers: Registers, immediate: Uint8Array): void => {
+const takeBranch = (registers: Registers, immediate: ReadonlyUint8Array): void => {
   setProgramCounter(
     registers,
     addBytes(new Uint8Array(8), readProgramCounter(registers), immediate)
@@ -37,7 +38,7 @@ const takeBranch = (registers: Registers, immediate: Uint8Array): void => {
 };
 
 /** beq: branch if rs1 == rs2. */
-const beq = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void => {
+const beq = (registers: Registers, _memory: Memory, args: BranchArgs): void => {
   if (
     compareUnsignedBytes(
       readGeneralPurposeRegister(registers, args.sourceRegister1),
@@ -51,7 +52,7 @@ const beq = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void 
 };
 
 /** bne: branch if rs1 != rs2. */
-const bne = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void => {
+const bne = (registers: Registers, _memory: Memory, args: BranchArgs): void => {
   if (
     compareUnsignedBytes(
       readGeneralPurposeRegister(registers, args.sourceRegister1),
@@ -65,7 +66,7 @@ const bne = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void 
 };
 
 /** blt: branch if rs1 < rs2 (signed). */
-const blt = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void => {
+const blt = (registers: Registers, _memory: Memory, args: BranchArgs): void => {
   if (
     compareSignedBytes(
       readGeneralPurposeRegister(registers, args.sourceRegister1),
@@ -79,7 +80,7 @@ const blt = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void 
 };
 
 /** bge: branch if rs1 >= rs2 (signed). */
-const bge = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void => {
+const bge = (registers: Registers, _memory: Memory, args: BranchArgs): void => {
   if (
     compareSignedBytes(
       readGeneralPurposeRegister(registers, args.sourceRegister1),
@@ -93,7 +94,7 @@ const bge = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void 
 };
 
 /** bltu: branch if rs1 < rs2 (unsigned). */
-const bltu = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void => {
+const bltu = (registers: Registers, _memory: Memory, args: BranchArgs): void => {
   if (
     compareUnsignedBytes(
       readGeneralPurposeRegister(registers, args.sourceRegister1),
@@ -107,7 +108,7 @@ const bltu = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void
 };
 
 /** bgeu: branch if rs1 >= rs2 (unsigned). */
-const bgeu = (registers: Registers, _memory: Uint8Array, args: BranchArgs): void => {
+const bgeu = (registers: Registers, _memory: Memory, args: BranchArgs): void => {
   if (
     compareUnsignedBytes(
       readGeneralPurposeRegister(registers, args.sourceRegister1),
