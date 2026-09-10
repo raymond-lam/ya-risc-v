@@ -19,6 +19,7 @@
 
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 import { lui } from '#cpu/instructions/lui.js';
 import { auipc } from '#cpu/instructions/auipc.js';
 import { jal } from '#cpu/instructions/jal.js';
@@ -115,7 +116,7 @@ const illegalInstruction = (registers: Registers, instructionWord: number): void
  *
  * Returns that signed 12-bit value as a 64-bit little-endian byte array.
  */
-const decodeITypeImmediate = (instructionWord: number): Uint8Array => {
+const decodeITypeImmediate = (instructionWord: number): ReadonlyUint8Array => {
   const imm11_0 = instructionWord >>> 20;
   return signedNumberToBytes(new Uint8Array(8), imm11_0, 12);
 };
@@ -129,7 +130,7 @@ const decodeITypeImmediate = (instructionWord: number): Uint8Array => {
  *
  * Returns that signed 12-bit value as a 64-bit little-endian byte array.
  */
-const decodeSTypeImmediate = (instructionWord: number): Uint8Array => {
+const decodeSTypeImmediate = (instructionWord: number): ReadonlyUint8Array => {
   const imm11_5 = (instructionWord >>> 25) & 0x7f;
   const imm4_0 = (instructionWord >>> 7) & 0x1f;
   const imm11_0 = (imm11_5 << 5) | imm4_0;
@@ -149,7 +150,7 @@ const decodeSTypeImmediate = (instructionWord: number): Uint8Array => {
  *
  * Returns that signed 13-bit value as a 64-bit little-endian byte array.
  */
-const decodeBTypeImmediate = (instructionWord: number): Uint8Array => {
+const decodeBTypeImmediate = (instructionWord: number): ReadonlyUint8Array => {
   const imm12 = (instructionWord >>> 31) & 0x1;
   const imm11 = (instructionWord >>> 7) & 0x1;
   const imm10_5 = (instructionWord >>> 25) & 0x3f;
@@ -167,7 +168,7 @@ const decodeBTypeImmediate = (instructionWord: number): Uint8Array => {
  * Bit 31 is then sign-extended into bits [63:32] of the 64-bit result
  * (RV64 treats the U-immediate as a signed 32-bit value in the low half).
  */
-const decodeUTypeImmediate = (instructionWord: number): Uint8Array => {
+const decodeUTypeImmediate = (instructionWord: number): ReadonlyUint8Array => {
   const imm31_12_placed = instructionWord & 0xfffff000;
   return signedNumberToBytes(new Uint8Array(8), imm31_12_placed, 32);
 };
@@ -185,7 +186,7 @@ const decodeUTypeImmediate = (instructionWord: number): Uint8Array => {
  *
  * Returns that signed 21-bit value as a 64-bit little-endian byte array.
  */
-const decodeJTypeImmediate = (instructionWord: number): Uint8Array => {
+const decodeJTypeImmediate = (instructionWord: number): ReadonlyUint8Array => {
   const imm20 = (instructionWord >>> 31) & 0x1;
   const imm19_12 = (instructionWord >>> 12) & 0xff;
   const imm11 = (instructionWord >>> 20) & 0x1;
@@ -207,8 +208,8 @@ const function7Of = (instructionWord: number): number => (instructionWord >>> 25
  * instruction functions under `src/cpu/instructions/`.
  */
 const decode = (
-  instructionWord: Uint8Array
-): ((registers: Registers, memory: Uint8Array) => void) => {
+  instructionWord: ReadonlyUint8Array
+): ((registers: Registers, memory: Memory) => void) => {
   const encodedInstructionWord = bytesToNumber(instructionWord);
   const opcode = encodedInstructionWord & 0x7f;
 
@@ -548,6 +549,7 @@ const decode = (
               destinationRegister,
               sourceRegister1,
               controlAndStatusRegister,
+              instructionWord: encodedInstructionWord,
             });
         case FUNCT3_CSRRS:
           return (registers, memory) =>
@@ -555,6 +557,7 @@ const decode = (
               destinationRegister,
               sourceRegister1,
               controlAndStatusRegister,
+              instructionWord: encodedInstructionWord,
             });
         case FUNCT3_CSRRC:
           return (registers, memory) =>
@@ -562,6 +565,7 @@ const decode = (
               destinationRegister,
               sourceRegister1,
               controlAndStatusRegister,
+              instructionWord: encodedInstructionWord,
             });
         case FUNCT3_CSRRWI:
           return (registers, memory) =>
@@ -569,6 +573,7 @@ const decode = (
               destinationRegister,
               immediate: signedNumberToBytes(new Uint8Array(8), sourceRegister1, 32),
               controlAndStatusRegister,
+              instructionWord: encodedInstructionWord,
             });
         case FUNCT3_CSRRSI:
           return (registers, memory) =>
@@ -576,6 +581,7 @@ const decode = (
               destinationRegister,
               immediate: signedNumberToBytes(new Uint8Array(8), sourceRegister1, 32),
               controlAndStatusRegister,
+              instructionWord: encodedInstructionWord,
             });
         case FUNCT3_CSRRCI:
           return (registers, memory) =>
@@ -583,6 +589,7 @@ const decode = (
               destinationRegister,
               immediate: signedNumberToBytes(new Uint8Array(8), sourceRegister1, 32),
               controlAndStatusRegister,
+              instructionWord: encodedInstructionWord,
             });
         default:
           return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
@@ -600,7 +607,7 @@ const thunkByInstructionWord = new Map<number, ReturnType<typeof decode>>();
  * Like {@link decode}, but memoizes thunks by the 32-bit instruction encoding.
  * Identical encodings share one thunk regardless of where they appear in memory.
  */
-const decodeWithCache = (instructionWord: Uint8Array): ReturnType<typeof decode> => {
+const decodeWithCache = (instructionWord: ReadonlyUint8Array): ReturnType<typeof decode> => {
   const key = bytesToNumber(instructionWord);
   if (thunkByInstructionWord.has(key)) {
     return thunkByInstructionWord.get(key)!;

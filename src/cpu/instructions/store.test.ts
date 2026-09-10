@@ -16,14 +16,14 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { sb, sw } from '#cpu/instructions/store.js';
-import { createMemory } from '#memory.js';
 import { createRegisters, writeGeneralPurposeRegister } from '#cpu/registers.js';
 import { signedNumberToBytes } from '#utils/bytes.js';
 
 describe('store', () => {
   it('sb stores the low byte', () => {
-    const guest = createMemory(256);
+    const guest = testMemory(256n);
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 0xab, 32));
     writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(new Uint8Array(8), 20, 32));
@@ -32,11 +32,11 @@ describe('store', () => {
       sourceRegister2: 3,
       immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
     });
-    assert.equal(guest[20], 0xab);
+    assert.equal(guest.bytes[20], 0xab);
   });
 
   it('sw stores a word', () => {
-    const guest = createMemory(256);
+    const guest = testMemory(256n);
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(new Uint8Array(8), 20, 32));
     writeGeneralPurposeRegister(
@@ -49,6 +49,6 @@ describe('store', () => {
       sourceRegister2: 5,
       immediate: signedNumberToBytes(new Uint8Array(8), 4, 32),
     });
-    assert.deepEqual(guest.subarray(24, 28), Uint8Array.of(0x11, 0x22, 0x33, 0x44));
+    assert.deepEqual(guest.bytes.subarray(24, 28), Uint8Array.of(0x11, 0x22, 0x33, 0x44));
   });
 });

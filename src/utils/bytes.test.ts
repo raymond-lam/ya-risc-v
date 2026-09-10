@@ -34,6 +34,7 @@ import {
   signExtendBytes,
   signedNumberToBytes,
   subtractBytes,
+  unsignedBigIntToBytes,
   unsignedNumberToBytes,
   xorBytes,
   zeroExtendBytes,
@@ -148,6 +149,21 @@ describe('utils/bytes', () => {
     assert.notDeepEqual(
       unsignedNumberToBytes(new Uint8Array(8), 0x80000000),
       signedNumberToBytes(new Uint8Array(8), 0x80000000, 32)
+    );
+  });
+
+  it('unsignedBigIntToBytes packs a full little-endian u64', () => {
+    assert.deepEqual(
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n),
+      new Uint8Array([0x00, 0x00, 0x00, 0x10, 0, 0, 0, 0])
+    );
+    assert.deepEqual(
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1_0000_0010n),
+      new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0])
+    );
+    assert.equal(
+      bytesToBigInt(unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000n)),
+      0x8000_0000n
     );
   });
 

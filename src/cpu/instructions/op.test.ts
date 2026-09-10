@@ -16,8 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { add, sub, slt, xor } from '#cpu/instructions/op.js';
-import { createMemory } from '#memory.js';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -31,7 +31,7 @@ describe('op', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 20, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
 
-    add(registers, createMemory(256), {
+    add(registers, testMemory(256n), {
       destinationRegister: 3,
       sourceRegister1: 1,
       sourceRegister2: 2,
@@ -41,7 +41,7 @@ describe('op', () => {
       signedNumberToBytes(new Uint8Array(8), 27, 32)
     );
 
-    sub(registers, createMemory(256), {
+    sub(registers, testMemory(256n), {
       destinationRegister: 4,
       sourceRegister1: 1,
       sourceRegister2: 2,
@@ -56,7 +56,7 @@ describe('op', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), -2, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
-    slt(registers, createMemory(256), {
+    slt(registers, testMemory(256n), {
       destinationRegister: 3,
       sourceRegister1: 1,
       sourceRegister2: 2,
@@ -71,7 +71,7 @@ describe('op', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0xaa, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x55, 32));
-    xor(registers, createMemory(256), {
+    xor(registers, testMemory(256n), {
       destinationRegister: 3,
       sourceRegister1: 1,
       sourceRegister2: 2,

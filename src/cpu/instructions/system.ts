@@ -17,6 +17,7 @@
 import { andBytes, isZeroBytes, orBytes, xorBytes } from '#utils/bytes.js';
 import {
   advanceProgramCounter,
+  isControlAndStatusRegisterAccessAllowed,
   readGeneralPurposeRegister,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
@@ -25,42 +26,55 @@ import {
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ECALL_FROM_M,
+  CAUSE_ILLEGAL_INSTRUCTION,
   enterTrap,
+  instructionWordTrapValue,
   returnFromMachineTrap,
 } from '#cpu/trap.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 
 type CsrRegisterArgs = {
   destinationRegister: number;
   sourceRegister1: number;
   controlAndStatusRegister: number;
+  instructionWord: number;
 };
 
 type CsrImmediateArgs = {
   destinationRegister: number;
-  immediate: Uint8Array;
+  immediate: ReadonlyUint8Array;
   controlAndStatusRegister: number;
+  instructionWord: number;
 };
 
-const ALL_ONES_BYTES = new Uint8Array(8).fill(0xff);
+const ALL_ONES_BYTES = new Uint8Array(8).fill(0xff) as ReadonlyUint8Array;
+
+const trapIllegalCsrAccess = (registers: Registers, instructionWord: number): void => {
+  enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(instructionWord));
+};
 
 /** ecall: environment call from M-mode (synchronous trap, cause 11). */
-const ecall = (registers: Registers, _memory: Uint8Array): void => {
+const ecall = (registers: Registers, _memory: Memory): void => {
   enterTrap(registers, CAUSE_ECALL_FROM_M);
 };
 
 /** ebreak: breakpoint (synchronous trap, cause 3). */
-const ebreak = (registers: Registers, _memory: Uint8Array): void => {
+const ebreak = (registers: Registers, _memory: Memory): void => {
   enterTrap(registers, CAUSE_BREAKPOINT);
 };
 
 /** mret: return from M-mode trap handler. */
-const mret = (registers: Registers, _memory: Uint8Array): void => {
+const mret = (registers: Registers, _memory: Memory): void => {
   returnFromMachineTrap(registers);
 };
 
 /** csrrw: rd = csr; csr = rs1. */
-const csrrw = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs): void => {
+const csrrw = (registers: Registers, _memory: Memory, args: CsrRegisterArgs): void => {
+  if (!isControlAndStatusRegisterAccessAllowed(args.controlAndStatusRegister, true)) {
+    trapIllegalCsrAccess(registers, args.instructionWord);
+    return;
+  }
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
   writeControlAndStatusRegister(
     registers,
@@ -72,9 +86,14 @@ const csrrw = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs)
 };
 
 /** csrrs: rd = csr; if rs1 ≠ x0, csr |= rs1. */
-const csrrs = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs): void => {
+const csrrs = (registers: Registers, _memory: Memory, args: CsrRegisterArgs): void => {
+  const writes = args.sourceRegister1 !== 0;
+  if (!isControlAndStatusRegisterAccessAllowed(args.controlAndStatusRegister, writes)) {
+    trapIllegalCsrAccess(registers, args.instructionWord);
+    return;
+  }
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
-  if (args.sourceRegister1 !== 0) {
+  if (writes) {
     writeControlAndStatusRegister(
       registers,
       args.controlAndStatusRegister,
@@ -90,9 +109,14 @@ const csrrs = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs)
 };
 
 /** csrrc: rd = csr; if rs1 ≠ x0, csr &= ~rs1. */
-const csrrc = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs): void => {
+const csrrc = (registers: Registers, _memory: Memory, args: CsrRegisterArgs): void => {
+  const writes = args.sourceRegister1 !== 0;
+  if (!isControlAndStatusRegisterAccessAllowed(args.controlAndStatusRegister, writes)) {
+    trapIllegalCsrAccess(registers, args.instructionWord);
+    return;
+  }
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
-  if (args.sourceRegister1 !== 0) {
+  if (writes) {
     writeControlAndStatusRegister(
       registers,
       args.controlAndStatusRegister,
@@ -112,7 +136,11 @@ const csrrc = (registers: Registers, _memory: Uint8Array, args: CsrRegisterArgs)
 };
 
 /** csrrwi: rd = csr; csr = zero-extended uimm. */
-const csrrwi = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArgs): void => {
+const csrrwi = (registers: Registers, _memory: Memory, args: CsrImmediateArgs): void => {
+  if (!isControlAndStatusRegisterAccessAllowed(args.controlAndStatusRegister, true)) {
+    trapIllegalCsrAccess(registers, args.instructionWord);
+    return;
+  }
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
   writeControlAndStatusRegister(registers, args.controlAndStatusRegister, args.immediate);
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
@@ -120,9 +148,14 @@ const csrrwi = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArg
 };
 
 /** csrrsi: rd = csr; if uimm ≠ 0, csr |= uimm. */
-const csrrsi = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArgs): void => {
+const csrrsi = (registers: Registers, _memory: Memory, args: CsrImmediateArgs): void => {
+  const writes = !isZeroBytes(args.immediate);
+  if (!isControlAndStatusRegisterAccessAllowed(args.controlAndStatusRegister, writes)) {
+    trapIllegalCsrAccess(registers, args.instructionWord);
+    return;
+  }
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
-  if (!isZeroBytes(args.immediate)) {
+  if (writes) {
     writeControlAndStatusRegister(
       registers,
       args.controlAndStatusRegister,
@@ -134,9 +167,14 @@ const csrrsi = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArg
 };
 
 /** csrrci: rd = csr; if uimm ≠ 0, csr &= ~uimm. */
-const csrrci = (registers: Registers, _memory: Uint8Array, args: CsrImmediateArgs): void => {
+const csrrci = (registers: Registers, _memory: Memory, args: CsrImmediateArgs): void => {
+  const writes = !isZeroBytes(args.immediate);
+  if (!isControlAndStatusRegisterAccessAllowed(args.controlAndStatusRegister, writes)) {
+    trapIllegalCsrAccess(registers, args.instructionWord);
+    return;
+  }
   const previous = snapshotControlAndStatusRegister(registers, args.controlAndStatusRegister);
-  if (!isZeroBytes(args.immediate)) {
+  if (writes) {
     writeControlAndStatusRegister(
       registers,
       args.controlAndStatusRegister,

@@ -30,6 +30,7 @@ import {
   advanceProgramCounter,
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory } from '#types.js';
 
 type Op32Args = {
   destinationRegister: number;
@@ -38,7 +39,7 @@ type Op32Args = {
 };
 
 /** addw: rd = sext32(rs1[31:0] + rs2[31:0]). */
-const addw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void => {
+const addw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -55,7 +56,7 @@ const addw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void =
 };
 
 /** subw: rd = sext32(rs1[31:0] - rs2[31:0]). */
-const subw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void => {
+const subw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -72,7 +73,7 @@ const subw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void =
 };
 
 /** sllw: rd = sext32(rs1[31:0] << rs2). */
-const sllw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void => {
+const sllw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -89,7 +90,7 @@ const sllw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void =
 };
 
 /** srlw: rd = sext32(rs1[31:0] >> rs2) (logical). */
-const srlw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void => {
+const srlw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -106,7 +107,7 @@ const srlw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void =
 };
 
 /** sraw: rd = sext32(rs1[31:0] >> rs2) (arithmetic). */
-const sraw = (registers: Registers, _memory: Uint8Array, args: Op32Args): void => {
+const sraw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,

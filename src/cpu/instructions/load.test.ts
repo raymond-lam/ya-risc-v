@@ -16,8 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { lb, lbu, lw } from '#cpu/instructions/load.js';
-import { createMemory } from '#memory.js';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -27,8 +27,8 @@ import { signedNumberToBytes } from '#utils/bytes.js';
 
 describe('load', () => {
   it('lb sign-extends and lbu zero-extends', () => {
-    const guest = createMemory(256);
-    guest[10] = 0x80;
+    const guest = testMemory(256n);
+    guest.bytes[10] = 0x80;
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 10, 32));
 
@@ -54,11 +54,11 @@ describe('load', () => {
   });
 
   it('lw loads a word', () => {
-    const guest = createMemory(256);
-    guest[8] = 0x78;
-    guest[9] = 0x56;
-    guest[10] = 0x34;
-    guest[11] = 0x12;
+    const guest = testMemory(256n);
+    guest.bytes[8] = 0x78;
+    guest.bytes[9] = 0x56;
+    guest.bytes[10] = 0x34;
+    guest.bytes[11] = 0x12;
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 8, 32));
 
@@ -74,8 +74,8 @@ describe('load', () => {
   });
 
   it('lb does not wrap a 2^32+offset address into low memory', () => {
-    const guest = createMemory(256);
-    guest[16] = 0x42;
+    const guest = testMemory(256n);
+    guest.bytes[16] = 0x42;
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 2, new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0]));
 

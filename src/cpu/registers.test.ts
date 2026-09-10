@@ -83,7 +83,7 @@ describe('registers', () => {
     );
   });
 
-  it('identity CSRs ignore writes at runtime', () => {
+  it('identity CSR helper ignores writes (guest path traps before write)', () => {
     const registers = createRegisters();
     writeControlAndStatusRegister(registers, 0xf14, signedNumberToBytes(new Uint8Array(8), 99, 32));
     assert.deepEqual(

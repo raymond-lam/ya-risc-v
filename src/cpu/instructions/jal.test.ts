@@ -16,8 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { jal } from '#cpu/instructions/jal.js';
-import { createMemory } from '#memory.js';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -30,7 +30,7 @@ describe('jal', () => {
   it('links and jumps', () => {
     const registers = createRegisters();
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
-    jal(registers, createMemory(256), {
+    jal(registers, testMemory(256n), {
       destinationRegister: 1,
       immediate: signedNumberToBytes(new Uint8Array(8), 12, 32),
     });

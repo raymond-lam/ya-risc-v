@@ -16,8 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { beq, bne, blt } from '#cpu/instructions/branch.js';
-import { createMemory } from '#memory.js';
 import {
   createRegisters,
   readProgramCounter,
@@ -32,7 +32,7 @@ describe('branch', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 5, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 5, 32));
-    beq(registers, createMemory(256), {
+    beq(registers, testMemory(256n), {
       sourceRegister1: 1,
       sourceRegister2: 2,
       immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
@@ -45,7 +45,7 @@ describe('branch', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 5, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 5, 32));
-    bne(registers, createMemory(256), {
+    bne(registers, testMemory(256n), {
       sourceRegister1: 1,
       sourceRegister2: 2,
       immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
@@ -58,7 +58,7 @@ describe('branch', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 200, 32));
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), -1, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0, 32));
-    blt(registers, createMemory(256), {
+    blt(registers, testMemory(256n), {
       sourceRegister1: 1,
       sourceRegister2: 2,
       immediate: signedNumberToBytes(new Uint8Array(8), 8, 32),

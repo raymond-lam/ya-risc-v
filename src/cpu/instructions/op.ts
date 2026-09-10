@@ -34,6 +34,7 @@ import {
   advanceProgramCounter,
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory } from '#types.js';
 
 type OpArgs = {
   destinationRegister: number;
@@ -42,7 +43,7 @@ type OpArgs = {
 };
 
 /** add: rd = rs1 + rs2. */
-const add = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const add = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -56,7 +57,7 @@ const add = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
 };
 
 /** sub: rd = rs1 - rs2. */
-const sub = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const sub = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -70,7 +71,7 @@ const sub = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
 };
 
 /** sll: rd = rs1 << rs2. */
-const sll = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const sll = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -84,7 +85,7 @@ const sll = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
 };
 
 /** slt: rd = (rs1 < rs2) ? 1 : 0 (signed). */
-const slt = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const slt = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   setBooleanGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -97,7 +98,7 @@ const slt = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
 };
 
 /** sltu: rd = (rs1 < rs2) ? 1 : 0 (unsigned). */
-const sltu = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const sltu = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   setBooleanGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -110,7 +111,7 @@ const sltu = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => 
 };
 
 /** xor: rd = rs1 ^ rs2. */
-const xor = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const xor = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -124,7 +125,7 @@ const xor = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
 };
 
 /** srl: rd = rs1 >> rs2 (logical). */
-const srl = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const srl = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -138,7 +139,7 @@ const srl = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
 };
 
 /** sra: rd = rs1 >> rs2 (arithmetic). */
-const sra = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const sra = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -152,7 +153,7 @@ const sra = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
 };
 
 /** or: rd = rs1 | rs2. */
-const or = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const or = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -166,7 +167,7 @@ const or = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
 };
 
 /** and: rd = rs1 & rs2. */
-const and = (registers: Registers, _memory: Uint8Array, args: OpArgs): void => {
+const and = (registers: Registers, _memory: Memory, args: OpArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,

@@ -16,14 +16,15 @@
 
 import { writeGeneralPurposeRegister, advanceProgramCounter } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 
 type LuiArgs = {
   destinationRegister: number;
-  immediate: Uint8Array;
+  immediate: ReadonlyUint8Array;
 };
 
 /** lui: rd = imm (U-type). */
-const lui = (registers: Registers, _memory: Uint8Array, args: LuiArgs): void => {
+const lui = (registers: Registers, _memory: Memory, args: LuiArgs): void => {
   writeGeneralPurposeRegister(registers, args.destinationRegister, args.immediate);
   advanceProgramCounter(registers);
 };

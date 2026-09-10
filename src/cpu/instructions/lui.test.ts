@@ -16,15 +16,15 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { lui } from '#cpu/instructions/lui.js';
-import { createMemory } from '#memory.js';
 import { createRegisters, readGeneralPurposeRegister, readProgramCounter } from '#cpu/registers.js';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
 
 describe('lui', () => {
   it('writes the immediate to rd and advances pc', () => {
     const registers = createRegisters();
-    lui(registers, createMemory(256), {
+    lui(registers, testMemory(256n), {
       destinationRegister: 1,
       immediate: signedNumberToBytes(new Uint8Array(8), 0x12345000, 32),
     });

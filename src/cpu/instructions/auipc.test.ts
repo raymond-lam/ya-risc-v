@@ -16,8 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#testing/guest-memory.js';
 import { auipc } from '#cpu/instructions/auipc.js';
-import { createMemory } from '#memory.js';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -30,7 +30,7 @@ describe('auipc', () => {
   it('adds the immediate to pc', () => {
     const registers = createRegisters();
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
-    auipc(registers, createMemory(256), {
+    auipc(registers, testMemory(256n), {
       destinationRegister: 1,
       immediate: signedNumberToBytes(new Uint8Array(8), 0x2000, 32),
     });

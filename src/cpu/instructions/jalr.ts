@@ -23,15 +23,16 @@ import {
   FOUR_BYTES,
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 
 type JalrArgs = {
   destinationRegister: number;
   sourceRegister1: number;
-  immediate: Uint8Array;
+  immediate: ReadonlyUint8Array;
 };
 
 /** jalr: rd = pc + 4; pc = (rs1 + imm) & ~1 (I-type). */
-const jalr = (registers: Registers, _memory: Uint8Array, args: JalrArgs): void => {
+const jalr = (registers: Registers, _memory: Memory, args: JalrArgs): void => {
   const target = addBytes(
     new Uint8Array(8),
     readGeneralPurposeRegister(registers, args.sourceRegister1),

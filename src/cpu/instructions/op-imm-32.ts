@@ -28,11 +28,12 @@ import {
   advanceProgramCounter,
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 
 type OpImm32Args = {
   destinationRegister: number;
   sourceRegister1: number;
-  immediate: Uint8Array;
+  immediate: ReadonlyUint8Array;
 };
 
 type ShiftImm32Args = {
@@ -42,7 +43,7 @@ type ShiftImm32Args = {
 };
 
 /** addiw: rd = sext32(rs1[31:0] + imm). */
-const addiw = (registers: Registers, _memory: Uint8Array, args: OpImm32Args): void => {
+const addiw = (registers: Registers, _memory: Memory, args: OpImm32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -59,7 +60,7 @@ const addiw = (registers: Registers, _memory: Uint8Array, args: OpImm32Args): vo
 };
 
 /** slliw: rd = sext32(rs1[31:0] << shamt). */
-const slliw = (registers: Registers, _memory: Uint8Array, args: ShiftImm32Args): void => {
+const slliw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -76,7 +77,7 @@ const slliw = (registers: Registers, _memory: Uint8Array, args: ShiftImm32Args):
 };
 
 /** srliw: rd = sext32(rs1[31:0] >> shamt) (logical). */
-const srliw = (registers: Registers, _memory: Uint8Array, args: ShiftImm32Args): void => {
+const srliw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -93,7 +94,7 @@ const srliw = (registers: Registers, _memory: Uint8Array, args: ShiftImm32Args):
 };
 
 /** sraiw: rd = sext32(rs1[31:0] >> shamt) (arithmetic). */
-const sraiw = (registers: Registers, _memory: Uint8Array, args: ShiftImm32Args): void => {
+const sraiw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,

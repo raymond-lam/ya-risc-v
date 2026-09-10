@@ -17,15 +17,16 @@
 import { addBytes } from '#utils/bytes.js';
 import { readGeneralPurposeRegister, advanceProgramCounter } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 import { storeBytes } from '#memory.js';
 
 type StoreArgs = {
   sourceRegister1: number;
   sourceRegister2: number;
-  immediate: Uint8Array;
+  immediate: ReadonlyUint8Array;
 };
 
-const storeEffectiveAddress = (registers: Registers, args: StoreArgs): Uint8Array =>
+const storeEffectiveAddress = (registers: Registers, args: StoreArgs): ReadonlyUint8Array =>
   addBytes(
     new Uint8Array(8),
     readGeneralPurposeRegister(registers, args.sourceRegister1),
@@ -33,7 +34,7 @@ const storeEffectiveAddress = (registers: Registers, args: StoreArgs): Uint8Arra
   );
 
 /** sb: mem[rs1+imm] = rs2[7:0]. */
-const sb = (registers: Registers, memory: Uint8Array, args: StoreArgs): void => {
+const sb = (registers: Registers, memory: Memory, args: StoreArgs): void => {
   storeBytes({
     memory,
     address: storeEffectiveAddress(registers, args),
@@ -44,7 +45,7 @@ const sb = (registers: Registers, memory: Uint8Array, args: StoreArgs): void => 
 };
 
 /** sh: mem[rs1+imm] = rs2[15:0]. */
-const sh = (registers: Registers, memory: Uint8Array, args: StoreArgs): void => {
+const sh = (registers: Registers, memory: Memory, args: StoreArgs): void => {
   storeBytes({
     memory,
     address: storeEffectiveAddress(registers, args),
@@ -55,7 +56,7 @@ const sh = (registers: Registers, memory: Uint8Array, args: StoreArgs): void => 
 };
 
 /** sw: mem[rs1+imm] = rs2[31:0]. */
-const sw = (registers: Registers, memory: Uint8Array, args: StoreArgs): void => {
+const sw = (registers: Registers, memory: Memory, args: StoreArgs): void => {
   storeBytes({
     memory,
     address: storeEffectiveAddress(registers, args),
@@ -66,7 +67,7 @@ const sw = (registers: Registers, memory: Uint8Array, args: StoreArgs): void => 
 };
 
 /** sd: mem[rs1+imm] = rs2. */
-const sd = (registers: Registers, memory: Uint8Array, args: StoreArgs): void => {
+const sd = (registers: Registers, memory: Memory, args: StoreArgs): void => {
   storeBytes({
     memory,
     address: storeEffectiveAddress(registers, args),

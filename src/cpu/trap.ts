@@ -20,15 +20,14 @@ import {
   writeControlAndStatusRegister,
   readProgramCounter,
   setProgramCounter,
+  MSTATUS,
+  MTVEC,
+  MEPC,
+  MCAUSE,
+  MTVAL,
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
-
-/** Machine-mode CSRs used by trap entry and `mret`. */
-const MSTATUS = 0x300;
-const MTVEC = 0x305;
-const MEPC = 0x341;
-const MCAUSE = 0x342;
-const MTVAL = 0x343;
+import type { ReadonlyUint8Array } from '#types.js';
 
 /** Synchronous exception codes (mcause with interrupt bit clear). */
 const CAUSE_ILLEGAL_INSTRUCTION = 2;
@@ -48,7 +47,7 @@ const MSTATUS_BYTE1_MPP_MASK = 0x18;
 const MSTATUS_BYTE1_MPP_MACHINE = 0x18;
 
 /** On trap entry: MPIE ← MIE, MIE ← 0, MPP ← M. */
-const applyTrapEntryToMstatus = (registers: Registers): Uint8Array => {
+const applyTrapEntryToMstatus = (registers: Registers): void => {
   // Snapshot first — the CSR slot is live and must not be mutated mid-update.
   const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
   // MIE ("machine interrupt enable") — were global M-mode interrupts on before this trap?
@@ -63,11 +62,11 @@ const applyTrapEntryToMstatus = (registers: Registers): Uint8Array => {
   mstatus[0]! &= ~MSTATUS_BYTE0_MIE;
   // MPP ← M: record that we were in machine mode when the trap occurred.
   mstatus[1] = (mstatus[1]! & ~MSTATUS_BYTE1_MPP_MASK) | MSTATUS_BYTE1_MPP_MACHINE;
-  return writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+  writeControlAndStatusRegister(registers, MSTATUS, mstatus);
 };
 
 /** On mret: MIE ← MPIE, MPIE ← 1, MPP ← M (M-mode-only hart). */
-const applyMachineReturnToMstatus = (registers: Registers): Uint8Array => {
+const applyMachineReturnToMstatus = (registers: Registers): void => {
   // Snapshot first — the CSR slot is live and must not be mutated mid-update.
   const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
   // MPIE ("machine previous interrupt enable") was set from MIE when the trap fired.
@@ -82,7 +81,7 @@ const applyMachineReturnToMstatus = (registers: Registers): Uint8Array => {
   mstatus[0]! |= MSTATUS_BYTE0_MPIE;
   // MPP ("machine previous privilege") ← M; this hart only runs in machine mode.
   mstatus[1] = (mstatus[1]! & ~MSTATUS_BYTE1_MPP_MASK) | MSTATUS_BYTE1_MPP_MACHINE;
-  return writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+  writeControlAndStatusRegister(registers, MSTATUS, mstatus);
 };
 
 /**
@@ -92,7 +91,7 @@ const applyMachineReturnToMstatus = (registers: Registers): Uint8Array => {
 const enterTrap = (
   registers: Registers,
   cause: number,
-  trapValue: Uint8Array = signedNumberToBytes(new Uint8Array(8), 0, 32)
+  trapValue: ReadonlyUint8Array = signedNumberToBytes(new Uint8Array(8), 0, 32)
 ): void => {
   // mepc ← PC: save where we were so mret can resume (usually the faulting instruction).
   writeControlAndStatusRegister(registers, MEPC, readProgramCounter(registers));
@@ -125,7 +124,7 @@ const returnFromMachineTrap = (registers: Registers): void => {
 };
 
 /** Zero-extend a 32-bit instruction encoding for mtval. */
-const instructionWordTrapValue = (instructionWord: number): Uint8Array =>
+const instructionWordTrapValue = (instructionWord: number): ReadonlyUint8Array =>
   unsignedNumberToBytes(new Uint8Array(8), instructionWord);
 
 export {

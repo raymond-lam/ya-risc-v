@@ -23,7 +23,8 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 ## Layout
 
-- `src/index.ts` — Commander CLI; creates memory, calls `run`, wires SIGINT/SIGTERM to `terminate`.
+- `src/index.ts` — Commander CLI; map options (`--ram-base`, `--uart-base`, `--reset-pc`),
+  creates memory, calls `run`, wires SIGINT/SIGTERM to `terminate`.
 - `src/cpu/index.ts` — host-side `run`, spawns the worker and returns an awaitable handle.
 - `src/cpu/run.ts` — worker entry; the fetch/decode/execute loop.
 - `src/cpu/decode.ts` — opcode/funct switch; returns an execute thunk, memoized by instruction word.
@@ -38,17 +39,23 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `#utils/bytes.js` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
   …), including CSR bitfield updates in `trap.ts`. Mutating helpers take a `destination`
   buffer and return it for chaining (`const x = addBytes(new Uint8Array(8), a, b)`). Guest
-  addresses stay as byte arrays through `loadBytes`/`storeBytes`, which convert via
-  `bytesToBigInt` and compare against the memory length before taking `Number` for the
-  TypedArray index. `bytesToNumber` reads u32 from architectural bytes. `signedNumberToBytes`,
-  `unsignedNumberToBytes`, and `low32Bytes` pack values into a caller-allocated buffer (same
-  destination/return convention).
+  addresses stay as byte arrays through `loadBytes`/`storeBytes` (and `hostIndex`). Map decode
+  uses `bytesToBigInt` only for range compares. Guest-mapped RAM size (`ramSize`) is `bigint`
+  (PA math); the UART window is a fixed 16550 register block (8 bytes). Transfer widths
+  (`byteLength` on load/store) and packed host indexes into `memory.bytes` are `number`.
+  `bytesToNumber` reads u32 from architectural bytes. `signedNumberToBytes`,
+  `unsignedNumberToBytes`, `unsignedBigIntToBytes`, and `low32Bytes` pack values into a
+  caller-allocated buffer (same destination/return convention).
 - **Instruction functions are `(registers, memory, args) => void`** and own the PC: call
   `advanceProgramCounter` on the fall-through path, or `setProgramCounter` when jumping/branching.
   Unused parameters are prefixed with `_`. Args go in a named type (`OpArgs`, `LoadArgs`) exported
   alongside the instructions; `decode.ts` extracts fields and closes over them in the thunk.
-- **`ReadonlyUint8Array` enforces hardwired registers** — x0 and the identity CSRs (`mvendorid`,
-  `marchid`, `mimpid`, `mhartid`) silently drop writes. Keep those slots readonly.
+- **Hardwired x0 drops writes in the register helpers.** Identity CSRs
+  (`mvendorid`, `marchid`, `mimpid`, `mhartid`) are typed as `ReadonlyUint8Array`; the write
+  helper still ignores stores to those slots as a safety net. Guest CSR instructions must not
+  reach that path for illegal cases (see Zicsr). Read-only byte buffers elsewhere (addresses,
+  immediates, arithmetic sources) use the same structural `ReadonlyUint8Array` type so plain
+  `Uint8Array` remains assignable.
 - **Guest memory is a `SharedArrayBuffer`** shared with the worker, accessed with plain byte reads
   and writes. The absence of `Atomics` is deliberate: unsynchronized hosts should race like real
   memory.
@@ -56,11 +63,13 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `trap.ts`: they write `mepc`/`mcause`/`mtval`, update `mstatus` (MPIE←MIE, MIE←0, MPP←M), and
   set the PC from `mtvec` (direct mode). `mret` restores that stack and returns to `mepc`. No
   U/S modes or interrupts yet.
-- **Zicsr is raw CSR access.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live in
-  `system.ts` (SYSTEM opcode group). They snapshot the CSR slot before writing `rd` (the file is
-  live). `csrrs`/`csrrc` omit the write when `rs1` is `x0`; `csrrsi`/`csrrci` omit it when the
-  immediate is zero. Do not add privilege checks or WARL masks until multi-mode support exists;
-  identity CSRs stay read-only via `ReadonlyUint8Array`.
+- **Zicsr checks CSR existence.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live in
+  `system.ts` (SYSTEM opcode group). Only the implemented set is accessible (`mstatus`, `mtvec`,
+  `mepc`, `mcause`, `mtval`, and the identity CSRs); any other index raises illegal-instruction.
+  Writes to read-only CSRs also illegal; `csrrs`/`csrrc` with `rs1` = `x0` and `csrrsi`/`csrrci`
+  with a zero immediate are read-only and may touch identity CSRs. They snapshot the CSR slot
+  before writing `rd` (the file is live). Do not add privilege checks or WARL masks until
+  multi-mode support exists.
 
 ## Adding instructions
 
@@ -88,4 +97,5 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 
 `node:test` with `describe`/`it` and `node:assert/strict`. Compare register state with
 `assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(10, 32))` rather than
-hand-written byte arrays, and start from `createRegisters()` / `createMemory(256)` in each test.
+hand-written byte arrays, and start from `createRegisters()` / `createTestMemory(256n)`
+(`#testing/guest-memory.js`) in each test.

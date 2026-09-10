@@ -22,14 +22,15 @@ import {
   FOUR_BYTES,
 } from '#cpu/registers.js';
 import type { Registers } from '#cpu/types.js';
+import type { Memory, ReadonlyUint8Array } from '#types.js';
 
 type JalArgs = {
   destinationRegister: number;
-  immediate: Uint8Array;
+  immediate: ReadonlyUint8Array;
 };
 
 /** jal: rd = pc + 4; pc = pc + imm (J-type). */
-const jal = (registers: Registers, _memory: Uint8Array, args: JalArgs): void => {
+const jal = (registers: Registers, _memory: Memory, args: JalArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
