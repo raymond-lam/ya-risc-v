@@ -8,20 +8,20 @@
     "node": ">=24"
   },
   "imports": {
-    "#cpu/run": {
-      "@ya-risc-v/source": "./src/cpu/run.ts",
-      "default": "./dist/cpu/run.js"
+    "#emulator/cpu/run": {
+      "@ya-risc-v/source": "./src/emulator/cpu/run.ts",
+      "default": "./dist/emulator/cpu/run.js"
     },
-    "#terminal/run": {
-      "@ya-risc-v/source": "./src/terminal/run.ts",
-      "default": "./dist/terminal/run.js"
+    "#emulator/terminal/run": {
+      "@ya-risc-v/source": "./src/emulator/terminal/run.ts",
+      "default": "./dist/emulator/terminal/run.js"
     }
   },
   "bin": {
     "ya-risc-v": "./dist/index.js"
   },
   "scripts": {
-    "build": "rimraf dist && esbuild src/index.ts src/cpu/run.ts src/terminal/run.ts --bundle --platform=node --format=esm --packages=external --external:#cpu/run --external:#terminal/run --jsx=automatic --outdir=dist --outbase=src",
+    "build": "rimraf dist && esbuild src/index.ts src/emulator/cpu/run.ts src/emulator/terminal/run.ts --bundle --platform=node --format=esm --packages=external --external:#emulator/cpu/run --external:#emulator/terminal/run --jsx=automatic --outdir=dist --outbase=src",
     "start": "node dist/index.js",
     "dev": "tsx --conditions @ya-risc-v/source src/index.ts",
     "test": "tsx --conditions @ya-risc-v/source --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
@@ -51,6 +51,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
+    "@xterm/headless": "^6.0.0",
     "commander": "^15.0.0",
     "ink": "^7.1.1",
     "react": "^19.3.0"

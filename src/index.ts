@@ -17,77 +17,37 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { Command, InvalidArgumentError } from 'commander';
-import { createMemory, type Memory, type ReadonlyUint8Array } from '#memory';
-import { run as runCpu } from '#cpu';
-import { run as runTerminal } from '#terminal';
-import startTui from '#tui';
-import { unsignedBigIntToBytes } from '#utils/bytes';
+import { PassThrough } from 'node:stream';
+import { Command } from 'commander';
+import { create as createEmulator } from '#emulator';
+import { create as createTui } from '#tui';
 
-const parseGuestAddress = (value: string): ReadonlyUint8Array => {
-  let parsed: bigint;
-  try {
-    parsed = BigInt(value);
-  } catch {
-    throw new InvalidArgumentError(`invalid guest address: ${value}`);
-  }
-  if (parsed < 0n || parsed > 0xffff_ffff_ffff_ffffn) {
-    throw new InvalidArgumentError(`guest address out of u64 range: ${value}`);
-  }
-  return unsignedBigIntToBytes(new Uint8Array(8), parsed) as ReadonlyUint8Array;
-};
-
-type RunGuestOptions = {
-  ramBase: ReadonlyUint8Array;
-  uartBase: ReadonlyUint8Array;
-  resetPc: ReadonlyUint8Array | undefined;
-};
-
-const runGuest = async (imagePath: string, options: RunGuestOptions): Promise<void> => {
+const main = async (imagePath: string): Promise<void> => {
   const image = await readFile(imagePath);
-  const ramSize = BigInt(image.byteLength);
-  const { ramBase, uartBase } = options;
-  const resetPc = options.resetPc ?? ramBase;
-  const memory: Memory = {
-    bytes: createMemory({
-      ramBaseAddress: ramBase,
-      ramSize,
-      uartBaseAddress: uartBase,
-    }),
-    ramBaseAddress: ramBase,
-    ramSize,
-    uartBaseAddress: uartBase,
-  };
-  memory.bytes.set(image);
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
 
-  const cpu = runCpu({
-    memory,
-    resetPc,
-  });
-
-  const tui = startTui(() => {
-    cpu.terminate();
-    terminal.terminate();
-  });
-
-  const terminal = runTerminal({
-    memory,
-    stdin: tui.stdin,
-    stdout: tui.stdout,
+  const emulator = createEmulator({ image, stdin, stdout });
+  const tui = createTui({
+    stdin,
+    stdout,
+    onShutdown: () => {
+      emulator.stop();
+    },
   });
 
   const shutdown = (): void => {
-    terminal.terminate();
-    cpu.terminate();
-    tui.unmount();
+    emulator.stop();
   };
 
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
 
-  await tui.waitUntilExit();
-  terminal.terminate();
-  cpu.terminate();
+  tui.start();
+  emulator.start();
+  await emulator;
+  tui.stop();
+  await tui;
 };
 
 const program = new Command();
@@ -96,25 +56,8 @@ program
   .name('ya-risc-v')
   .description('RISC-V emulator')
   .argument('<image>', 'path to a program image to load into guest memory')
-  .option(
-    '--ram-base <address>',
-    'guest physical address of the start of RAM (image load address)',
-    parseGuestAddress,
-    parseGuestAddress('0')
-  )
-  .option(
-    '--uart-base <address>',
-    'guest physical address of the UART MMIO window',
-    parseGuestAddress,
-    parseGuestAddress('0x10000000')
-  )
-  .option(
-    '--reset-pc <address>',
-    'reset program counter (defaults to --ram-base)',
-    parseGuestAddress
-  )
-  .action(async (image: string, options: RunGuestOptions) => {
-    await runGuest(image, options);
+  .action(async (image: string) => {
+    await main(image);
   });
 
 if (import.meta.main) {

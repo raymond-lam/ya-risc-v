@@ -14,43 +14,25 @@
  * limitations under the License.
  */
 
-import { createElement } from 'react';
-import { render } from 'ink';
-import App from '#tui/components/App';
-import type { Instance } from 'ink';
-import type { Readable, Writable } from 'node:stream';
-
-type TuiCreateOptions = {
-  /** Keystrokes from the focused terminal (write side). */
-  stdin: Writable;
-  /** Bytes painted in the terminal pane (read side). */
-  stdout: Readable;
-  /** Invoked when the user clicks Shutdown. */
-  onShutdown: () => void;
-};
-
-type TuiHandle = Promise<void> & {
-  /** Mount the Ink app. */
-  start: () => void;
-  /** Unmount the Ink app, or settle immediately if it never started. */
-  stop: () => void;
-};
+import { Worker } from 'node:worker_threads';
+import workerExecArgv from '#utils/worker-exec-argv';
+import type { CpuCreateOptions, CpuHandle, CpuWorkerData } from '#emulator/cpu/types';
 
 /* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
-class Tui implements TuiHandle {
+class Cpu implements CpuHandle {
   readonly [Symbol.toStringTag] = 'Promise';
 
   readonly #lifetime = Promise.withResolvers<void>();
 
-  readonly #options: TuiCreateOptions;
+  readonly #options: CpuCreateOptions;
 
-  #instance: Instance | undefined;
+  #worker: Worker | undefined;
 
   #started = false;
 
   #stopped = false;
 
-  constructor(options: TuiCreateOptions) {
+  constructor(options: CpuCreateOptions) {
     this.#options = options;
   }
 
@@ -59,15 +41,21 @@ class Tui implements TuiHandle {
       return;
     }
     this.#started = true;
-    const { stdin, stdout, onShutdown } = this.#options;
-    const instance = render(createElement(App, { stdin, stdout, onShutdown }), {
-      alternateScreen: true,
+    const workerData = {
+      memory: this.#options.memory,
+      resetPc: this.#options.resetPc,
+    } satisfies CpuWorkerData;
+    const worker = new Worker(new URL(import.meta.resolve('#emulator/cpu/run')), {
+      execArgv: workerExecArgv(),
+      workerData,
     });
-    this.#instance = instance;
-    void (async () => {
-      await instance.waitUntilExit();
+    this.#worker = worker;
+    worker.once('error', (error) => {
+      this.#lifetime.reject(error);
+    });
+    worker.once('exit', () => {
       this.#lifetime.resolve();
-    })();
+    });
   };
 
   stop = (): void => {
@@ -75,8 +63,8 @@ class Tui implements TuiHandle {
       return;
     }
     this.#stopped = true;
-    if (this.#instance !== undefined) {
-      this.#instance.unmount();
+    if (this.#worker !== undefined) {
+      void this.#worker.terminate();
       return;
     }
     this.#lifetime.resolve();
@@ -100,7 +88,7 @@ class Tui implements TuiHandle {
   }
 }
 
-const create = (options: TuiCreateOptions): TuiHandle => new Tui(options);
+const create = (options: CpuCreateOptions): CpuHandle => new Cpu(options);
 
 export { create };
-export type { TuiCreateOptions, TuiHandle };
+export type { CpuCreateOptions, CpuHandle, Registers } from '#emulator/cpu/types';

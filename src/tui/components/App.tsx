@@ -14,38 +14,45 @@
  * limitations under the License.
  */
 
-import { useRef } from 'react';
-import { Box, Text, useApp, useWindowSize } from 'ink';
-import useClick from '#tui/hooks/use-click';
+import { useRef, useState } from 'react';
+import { Box, Text, useWindowSize } from 'ink';
+import useMouseLeftClick from '#tui/hooks/use-mouse-left-click';
 import Terminal from '#tui/components/Terminal';
 import type { DOMElement } from 'ink';
 import type { Readable, Writable } from 'node:stream';
 
 type AppProps = {
-  onQuit: () => void;
   /** Keystrokes from the focused terminal. */
   stdin: Writable;
   /** Bytes painted in the terminal pane. */
   stdout: Readable;
+  /** Invoked when the user clicks Shutdown. */
+  onShutdown: () => void;
 };
 
-const App = ({ onQuit, stdin, stdout }: AppProps) => {
-  const { exit } = useApp();
+const App = ({ stdin, stdout, onShutdown }: AppProps) => {
   const { columns, rows } = useWindowSize();
-  const quitRef = useRef<DOMElement>(null);
-  const quit = (): void => {
-    onQuit();
-    exit();
-  };
-  useClick(quitRef, quit);
+  const terminalRef = useRef<DOMElement>(null);
+  const shutdownRef = useRef<DOMElement>(null);
+  const [terminalFocused, setTerminalFocused] = useState(true);
+
+  useMouseLeftClick(
+    [
+      { target: shutdownRef, onClick: onShutdown },
+      { target: terminalRef, onClick: () => setTerminalFocused(true) },
+    ],
+    () => {
+      setTerminalFocused(false);
+    }
+  );
 
   return (
     <Box flexDirection="column" width={columns} height={rows}>
-      <Terminal stdin={stdin} stdout={stdout} />
+      <Terminal stdin={stdin} stdout={stdout} focused={terminalFocused} boxRef={terminalRef} />
       <Box width="100%" backgroundColor="blue">
-        <Box ref={quitRef} paddingX={1}>
+        <Box ref={shutdownRef} paddingX={1}>
           <Text color="white" backgroundColor="blue">
-            Quit
+            Shutdown
           </Text>
         </Box>
       </Box>

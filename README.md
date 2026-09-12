@@ -65,11 +65,11 @@ npm run dev path/to/image.bin
 ```
 
 `npm run dev` runs straight from TypeScript sources via `tsx`. The image is treated as a flat binary:
-it is copied into guest RAM (default base `0`) and the program counter resets to `--ram-base`
-(override with `--reset-pc`). UART MMIO defaults to base `0x10000000` (fixed 8-byte 16550 window).
+it is copied into guest RAM at base `0` (reset PC matches). UART MMIO is at `0x10000000` (fixed
+8-byte 16550 window).
 
 ```bash
-npm run dev -- path/to/image.bin --ram-base 0x80000000 --uart-base 0x10000000
+npm run dev -- path/to/image.bin
 ```
 
 Because traps vector to `mtvec`, a program that executes `ecall`, `ebreak`, or an unrecognized
@@ -104,26 +104,30 @@ and `tsc` over `src/`.
 
 ```
 src/
-  index.ts              CLI: image + map options, create memory, start the CPU
-  memory/
-    index.ts            Public API: createMemory, loadBytes, storeBytes, Memory, …
-    types.ts            Memory type (private; re-exported from index)
-    ram.ts              RAM host mapping and byte access (private)
-    uart.ts             16550 window, RX/TX queues (private)
-  cpu/
-    index.ts            Host-side run(); spawns the worker, returns an awaitable handle
-    run.ts              Worker entry point and the fetch/decode/execute loop
-    decode.ts           Instruction decode into memoized execute thunks
-    trap.ts             M-mode synchronous trap entry and mret
-    registers.ts        Register file: x0–x31, the program counter, and CSRs
-    types.ts            Architectural state types (re-exported from index)
-    instructions/       One file per opcode group (op-imm.ts, load.ts, branch.ts, …)
-  terminal/
-    index.ts            Host-side UART↔stream bridge worker
-    run.ts              Worker entry
-    types.ts            Worker payload types (re-exported from index)
+  index.ts                CLI: create emulator + TUI, start both, await emulator then TUI
+  emulator/
+    index.ts              Host-side create(); start()/stop() forward to CPU + terminal
+    types.ts              EmulatorCreateOptions / handle (private; re-exported)
+    memory/
+      index.ts            Public API: createMemory, loadBytes, storeBytes, Memory, …
+      types.ts            Memory type (private; re-exported from index)
+      ram.ts              RAM host mapping and byte access (private)
+      uart.ts             16550 window, RX/TX queues (private)
+    cpu/
+      index.ts            Host-side create()/start()/stop(); awaitable handle
+      run.ts              Worker entry point and the fetch/decode/execute loop
+      decode.ts           Instruction decode into memoized execute thunks
+      trap.ts             M-mode synchronous trap entry and mret
+      registers.ts        Register file: x0–x31, the program counter, and CSRs
+      types.ts            Architectural state types (re-exported from index)
+      instructions/       One file per opcode group (op-imm.ts, load.ts, branch.ts, …)
+    terminal/
+      index.ts            Host-side create()/start()/stop(); UART↔stream bridge
+      run.ts              Worker entry
+      types.ts            Worker payload types (private to the package)
+  tui/                    Ink host UI (create()/start()/stop())
   utils/
-    bytes.ts            64-bit LE byte-array arithmetic + ReadonlyUint8Array
+    bytes.ts              64-bit LE byte-array arithmetic + ReadonlyUint8Array
 ```
 
 ## Design notes
