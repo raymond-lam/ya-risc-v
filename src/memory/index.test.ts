@@ -16,11 +16,17 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createMemory, loadBytes, storeBytes } from '#memory/index.js';
-import { popTransmit, pushReceive } from '#memory/uart.js';
-import createTestMemory from '#testing/guest-memory.js';
-import { signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+import {
+  createMemory,
+  loadBytes,
+  popTransmit,
+  pushReceive,
+  storeBytes,
+  type Memory,
+  type ReadonlyUint8Array,
+} from '#memory';
+import createTestMemory from '#test/guest-memory';
+import { signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 /** LSR bits — local to tests (not part of the public UART surface). */
 const LSR_DR = 0x01;

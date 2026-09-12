@@ -24,15 +24,15 @@ import {
   shiftLeftBytes,
   shiftRightLogicalBytes,
   shiftRightArithmeticBytes,
-} from '#utils/bytes.js';
+} from '#utils/bytes';
 import {
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
   setBooleanGeneralPurposeRegister,
   advanceProgramCounter,
-} from '#cpu/registers.js';
-import type { Registers } from '#cpu/types.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+} from '#cpu/registers';
+import type { Registers } from '#cpu/types';
+import type { Memory, ReadonlyUint8Array } from '#memory';
 
 type OpImmArgs = {
   destinationRegister: number;

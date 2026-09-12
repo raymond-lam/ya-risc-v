@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-import { addBytes, compareSignedBytes, compareUnsignedBytes } from '#utils/bytes.js';
+import { addBytes, compareSignedBytes, compareUnsignedBytes } from '#utils/bytes';
 import {
   readGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
   advanceProgramCounter,
-} from '#cpu/registers.js';
-import type { Registers } from '#cpu/types.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+} from '#cpu/registers';
+import type { Registers } from '#cpu/types';
+import type { Memory, ReadonlyUint8Array } from '#memory';
 
 type BranchArgs = {
   sourceRegister1: number;

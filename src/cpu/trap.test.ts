@@ -28,15 +28,15 @@ import {
   enterTrap,
   instructionWordTrapValue,
   returnFromMachineTrap,
-} from '#cpu/trap.js';
+} from '#cpu/trap';
 import {
   createRegisters,
   readControlAndStatusRegister,
   readProgramCounter,
   setProgramCounter,
   writeControlAndStatusRegister,
-} from '#cpu/registers.js';
-import { bytesToNumber, signedNumberToBytes, unsignedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { bytesToNumber, signedNumberToBytes, unsignedNumberToBytes } from '#utils/bytes';
 
 describe('trap', () => {
   it('enterTrap saves mepc/mcause/mtval, updates mstatus, and jumps to mtvec', () => {

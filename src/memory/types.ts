@@ -14,15 +14,8 @@
  * limitations under the License.
  */
 
-/**
- * Byte buffer used only for reading. Plain `Uint8Array` values are assignable;
- * writes through this type are a type error. Type-level only — no runtime Proxy.
- */
-type ReadonlyUint8Array = {
-  readonly length: number;
-  readonly [index: number]: number;
-  [Symbol.iterator](): IterableIterator<number>;
-};
+/* eslint-disable import/prefer-default-export -- Memory is the package's type module surface */
+import type { ReadonlyUint8Array } from '#utils/bytes';
 
 /**
  * Guest address space: RAM and a 16550 UART register window, with RX/TX queues packed
@@ -52,4 +45,4 @@ type Memory = {
   uartBaseAddress: ReadonlyUint8Array;
 };
 
-export type { Memory, ReadonlyUint8Array };
+export type { Memory };

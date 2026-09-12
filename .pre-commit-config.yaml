@@ -12,7 +12,7 @@ repos:
             npx prettier --write "$@"
           - bash
         language: system
-        files: ^src/.*\.(ts|json|md)$
+        files: ^(src/.*\.(ts|tsx|json|md)|test/.*\.ts)$
         stages: [pre-commit]
       - id: eslint
         name: eslint
@@ -25,12 +25,12 @@ repos:
             npx eslint --fix "$@"
           - bash
         language: system
-        files: ^src/.*\.ts$
+        files: ^(src/.*\.(ts|tsx)|test/.*\.ts)$
         stages: [pre-commit]
       - id: tsc
         name: tsc
         entry: npm run type-check
         language: system
-        files: ^src/
+        files: ^(src|test)/
         pass_filenames: false
         stages: [pre-commit]

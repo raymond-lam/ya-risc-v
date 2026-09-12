@@ -16,14 +16,14 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { lb, lbu, lw } from '#cpu/instructions/load.js';
+import testMemory from '#test/guest-memory';
+import { lb, lbu, lw } from '#cpu/instructions/load';
 import {
   createRegisters,
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
-import { signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { signedNumberToBytes } from '#utils/bytes';
 
 describe('load', () => {
   it('lb sign-extends and lbu zero-extends', () => {

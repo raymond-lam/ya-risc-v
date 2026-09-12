@@ -18,10 +18,11 @@
 
 import { readFile } from 'node:fs/promises';
 import { Command, InvalidArgumentError } from 'commander';
-import { createMemory } from '#memory/index.js';
-import { run } from '#cpu/index.js';
-import { unsignedBigIntToBytes } from '#utils/bytes.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+import { createMemory, type Memory, type ReadonlyUint8Array } from '#memory';
+import { run as runCpu } from '#cpu';
+import { run as runTerminal } from '#terminal';
+import startTui from '#tui';
+import { unsignedBigIntToBytes } from '#utils/bytes';
 
 const parseGuestAddress = (value: string): ReadonlyUint8Array => {
   let parsed: bigint;
@@ -59,19 +60,34 @@ const runGuest = async (imagePath: string, options: RunGuestOptions): Promise<vo
   };
   memory.bytes.set(image);
 
-  const cpu = run({
+  const cpu = runCpu({
     memory,
     resetPc,
   });
 
-  const shutdown = (): void => {
+  const tui = startTui(() => {
     cpu.terminate();
+    terminal.terminate();
+  });
+
+  const terminal = runTerminal({
+    memory,
+    stdin: tui.stdin,
+    stdout: tui.stdout,
+  });
+
+  const shutdown = (): void => {
+    terminal.terminate();
+    cpu.terminate();
+    tui.unmount();
   };
 
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
 
-  await cpu;
+  await tui.waitUntilExit();
+  terminal.terminate();
+  cpu.terminate();
 };
 
 const program = new Command();

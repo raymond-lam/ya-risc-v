@@ -3,22 +3,22 @@
     "target": "ES2022",
     "lib": ["ES2022"],
     "types": ["node"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "customConditions": ["@ya-risc-v/source"],
-    "rootDir": "src",
-    "outDir": "dist",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "#test/*": ["./test/*"],
+      "#*": ["./src/*"]
+    },
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "noEmit": true,
     "forceConsistentCasingInFileNames": true,
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts"],
+  "exclude": ["node_modules"]
 }

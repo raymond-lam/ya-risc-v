@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-import { addBytes, signExtendBytes, zeroExtendBytes } from '#utils/bytes.js';
+import { addBytes, signExtendBytes, zeroExtendBytes } from '#utils/bytes';
 import {
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
   advanceProgramCounter,
-} from '#cpu/registers.js';
-import type { Registers } from '#cpu/types.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
-import { loadBytes } from '#memory/index.js';
+} from '#cpu/registers';
+import type { Registers } from '#cpu/types';
+import type { Memory, ReadonlyUint8Array } from '#memory';
+import { loadBytes } from '#memory';
 
 type LoadArgs = {
   destinationRegister: number;

@@ -15,7 +15,7 @@
  */
 
 /* eslint-disable import/prefer-default-export -- CPU architectural state types */
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+import type { Memory, ReadonlyUint8Array } from '#memory';
 
 type Registers = {
   /** Integer GPRs: x0–x31. x0 is hardwired zero (read-only). */

@@ -16,14 +16,14 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { add, sub, slt, xor } from '#cpu/instructions/op.js';
+import testMemory from '#test/guest-memory';
+import { add, sub, slt, xor } from '#cpu/instructions/op';
 import {
   createRegisters,
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
-import { signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { signedNumberToBytes } from '#utils/bytes';
 
 describe('op', () => {
   it('add and sub combine two registers', () => {

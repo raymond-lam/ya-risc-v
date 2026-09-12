@@ -16,15 +16,15 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { jal } from '#cpu/instructions/jal.js';
+import testMemory from '#test/guest-memory';
+import { jal } from '#cpu/instructions/jal';
 import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
-} from '#cpu/registers.js';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('jal', () => {
   it('links and jumps', () => {

@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-import { createMemory } from '#memory/index.js';
-import { unsignedBigIntToBytes } from '#utils/bytes.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+import { createMemory, type Memory, type ReadonlyUint8Array } from '#memory';
+import { unsignedBigIntToBytes } from '#utils/bytes';
 
 /** Test map: RAM at guest PA 0, UART at `0x1000_0000`. */
 const RAM_BASE_ADDRESS = new Uint8Array(8) as ReadonlyUint8Array;

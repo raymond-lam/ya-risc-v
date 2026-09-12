@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { signedNumberToBytes, unsignedNumberToBytes } from '#utils/bytes.js';
+import { signedNumberToBytes, unsignedNumberToBytes } from '#utils/bytes';
 import {
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
@@ -25,9 +25,9 @@ import {
   MEPC,
   MCAUSE,
   MTVAL,
-} from '#cpu/registers.js';
-import type { Registers } from '#cpu/types.js';
-import type { ReadonlyUint8Array } from '#types.js';
+} from '#cpu/registers';
+import type { Registers } from '#cpu/types';
+import type { ReadonlyUint8Array } from '#memory';
 
 /** Synchronous exception codes (mcause with interrupt bit clear). */
 const CAUSE_ILLEGAL_INSTRUCTION = 2;

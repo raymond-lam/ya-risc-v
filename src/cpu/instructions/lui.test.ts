@@ -16,10 +16,10 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { lui } from '#cpu/instructions/lui.js';
-import { createRegisters, readGeneralPurposeRegister, readProgramCounter } from '#cpu/registers.js';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+import testMemory from '#test/guest-memory';
+import { lui } from '#cpu/instructions/lui';
+import { createRegisters, readGeneralPurposeRegister, readProgramCounter } from '#cpu/registers';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('lui', () => {
   it('writes the immediate to rd and advances pc', () => {

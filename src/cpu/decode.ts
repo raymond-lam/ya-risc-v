@@ -17,21 +17,21 @@
 /* eslint-disable complexity, sonarjs/cognitive-complexity, max-lines --
    intentional nested switch/case decode; RISC-V encoding is dense by nature. */
 
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
-import type { Registers } from '#cpu/types.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
-import { lui } from '#cpu/instructions/lui.js';
-import { auipc } from '#cpu/instructions/auipc.js';
-import { jal } from '#cpu/instructions/jal.js';
-import { jalr } from '#cpu/instructions/jalr.js';
-import { beq, bne, blt, bge, bltu, bgeu } from '#cpu/instructions/branch.js';
-import { lb, lh, lw, ld, lbu, lhu, lwu } from '#cpu/instructions/load.js';
-import { sb, sh, sw, sd } from '#cpu/instructions/store.js';
-import { addi, slti, sltiu, xori, ori, andi, slli, srli, srai } from '#cpu/instructions/op-imm.js';
-import { add, sub, sll, slt, sltu, xor, srl, sra, or, and } from '#cpu/instructions/op.js';
-import { addiw, slliw, srliw, sraiw } from '#cpu/instructions/op-imm-32.js';
-import { addw, subw, sllw, srlw, sraw } from '#cpu/instructions/op-32.js';
-import fence from '#cpu/instructions/misc-mem.js';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+import type { Registers } from '#cpu/types';
+import type { Memory, ReadonlyUint8Array } from '#memory';
+import { lui } from '#cpu/instructions/lui';
+import { auipc } from '#cpu/instructions/auipc';
+import { jal } from '#cpu/instructions/jal';
+import { jalr } from '#cpu/instructions/jalr';
+import { beq, bne, blt, bge, bltu, bgeu } from '#cpu/instructions/branch';
+import { lb, lh, lw, ld, lbu, lhu, lwu } from '#cpu/instructions/load';
+import { sb, sh, sw, sd } from '#cpu/instructions/store';
+import { addi, slti, sltiu, xori, ori, andi, slli, srli, srai } from '#cpu/instructions/op-imm';
+import { add, sub, sll, slt, sltu, xor, srl, sra, or, and } from '#cpu/instructions/op';
+import { addiw, slliw, srliw, sraiw } from '#cpu/instructions/op-imm-32';
+import { addw, subw, sllw, srlw, sraw } from '#cpu/instructions/op-32';
+import fence from '#cpu/instructions/misc-mem';
 import {
   ecall,
   ebreak,
@@ -42,8 +42,8 @@ import {
   csrrwi,
   csrrsi,
   csrrci,
-} from '#cpu/instructions/system.js';
-import { CAUSE_ILLEGAL_INSTRUCTION, enterTrap, instructionWordTrapValue } from '#cpu/trap.js';
+} from '#cpu/instructions/system';
+import { CAUSE_ILLEGAL_INSTRUCTION, enterTrap, instructionWordTrapValue } from '#cpu/trap';
 
 const OPCODE_LOAD = 0x03; // loads: lb/lh/lw/ld/lbu/lhu/lwu
 const OPCODE_MISC_MEM = 0x0f; // fence (memory ordering)

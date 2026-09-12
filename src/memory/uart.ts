@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { bytesToBigInt } from '#utils/bytes.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+import { bytesToBigInt } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#utils/bytes';
+import type { Memory } from '#memory/types';
 
 /** Guest-visible 16550 register window size (RBR/THR … SCR). */
 const UART_REGISTER_WINDOW = 8;

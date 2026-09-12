@@ -14,30 +14,35 @@ today's ISA is all there will ever be.
 | Command               | Purpose                                                      |
 | --------------------- | ------------------------------------------------------------ |
 | `npm run dev <image>` | Run from source via `tsx`                                    |
-| `npm test`            | `node:test` runner over `src/**/*.test.ts`                   |
+| `npm test`            | `node:test` runner over `src/**/*.test.ts` and `*.test.tsx`  |
 | `npm run check`       | format check + lint + type-check + tests (run before done)   |
 | `npm run fix`         | Prettier write + `eslint --fix`                              |
-| `npm run build`       | Emit to `dist/` (generated, gitignored — never edit by hand) |
+| `npm run build`       | Bundle to `dist/` (generated, gitignored — never edit by hand) |
 
 Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 ## Layout
 
 - `src/index.ts` — Commander CLI; map options (`--ram-base`, `--uart-base`, `--reset-pc`),
-  creates memory, calls `run`, wires SIGINT/SIGTERM to `terminate`.
+  creates memory, calls `run`, mounts the Ink TUI, wires SIGINT/SIGTERM to `terminate`.
+- `src/tui/` — host Ink UI (`components/`, `hooks/use-click`); terminal pane stdin/stdout streams.
 - `src/cpu/index.ts` — host-side `run`, spawns the worker and returns an awaitable handle.
 - `src/cpu/run.ts` — worker entry; the fetch/decode/execute loop.
+- `src/terminal/index.ts` — host-side `run`, spawns the UART bridge worker (stdin↔RX, TX↔stdout).
+- `src/terminal/run.ts` — worker entry; pumps TUI streams through the UART rings in shared memory.
 - `src/cpu/decode.ts` — opcode/funct switch; returns an execute thunk, memoized by instruction word.
 - `src/cpu/trap.ts` — M-mode synchronous trap entry and `mret` (`mstatus`/`mepc`/`mcause`/`mtval`/`mtvec`).
 - `src/cpu/instructions/` — one file per opcode group, named after the RISC-V opcode (`op-imm-32.ts`).
-- `src/cpu/registers.ts`, `src/memory/` (`index` / `ram` / `uart`), `src/utils/bytes.ts` —
-  architectural state and byte helpers.
+- `src/cpu/registers.ts`, `src/memory/` (`index` public API; private `types` / `ram` / `uart`),
+  `src/utils/bytes.ts` — architectural state and byte helpers (`ReadonlyUint8Array` lives on
+  `#utils/bytes`, re-exported from `#memory` with `Memory`).
+- `test/` — shared test helpers (`guest-memory.ts`). Unit tests stay colocated as `*.test.ts`.
 
 ## Core invariants
 
 - **Every architectural value is an 8-byte little-endian `Uint8Array`.** Registers, the PC, CSRs,
   and immediates never become `number` or `bigint`. Do arithmetic with the helpers in
-  `#utils/bytes.js` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
+  `#utils/bytes` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
   …), including CSR bitfield updates in `trap.ts`. Mutating helpers take a `destination`
   buffer and return it for chaining (`const x = addBytes(new Uint8Array(8), a, b)`). Guest
   addresses stay as byte arrays through `loadBytes`/`storeBytes`. Map decode
@@ -87,9 +92,16 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space indent):
 
-- Import with `#` subpath specifiers and a `.js` extension
-  (`import { loadBytes } from '#memory/index.js'`).
-  Relative imports are a lint error. The `@ya-risc-v/source` condition maps `#*` to `src/*`.
+- Import with `#` subpath specifiers and no file extension
+  (`import { loadBytes } from '#memory'`). `tsconfig` `paths` maps `#*` to `src/*` and
+  `#test/*` to `test/*`; bundler resolution fills in `index` and `.ts`/`.tsx`. The worker
+  entries `#cpu/run` and `#terminal/run` are also `package.json` `"imports"` targets
+  (`src` vs `dist`). Relative imports are a lint error.
+- **Package boundary:** a directory with `index.ts` is a package. Sibling modules
+  (`memory/uart.ts`, `cpu/types.ts`, …) are private; outside that directory import only
+  from the package root (`#memory`, `#cpu`, `#terminal`, `#tui`), which re-exports the
+  public values and types. Inside the package, siblings may import each other via `#pkg/…`
+  (and workers may use `#cpu/run` / `#terminal/run`).
 - Arrow functions only — no `function` expressions or declarations, and no `export default function`.
 - Modules with a single export use `export default`; otherwise list named exports in one block at the
   bottom of the file, with `export type { … }` after it.
@@ -103,4 +115,4 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 `node:test` with `describe`/`it` and `node:assert/strict`. Compare register state with
 `assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(10, 32))` rather than
 hand-written byte arrays, and start from `createRegisters()` / `createTestMemory(256n)`
-(`#testing/guest-memory.js`) in each test.
+  (`#test/guest-memory`) in each test. Helpers live in `test/`, not `src/`.

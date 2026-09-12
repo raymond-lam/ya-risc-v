@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { andBytes, isZeroBytes, orBytes, xorBytes } from '#utils/bytes.js';
+import { andBytes, isZeroBytes, orBytes, xorBytes } from '#utils/bytes';
 import {
   advanceProgramCounter,
   isControlAndStatusRegisterAccessAllowed,
@@ -22,7 +22,7 @@ import {
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
+} from '#cpu/registers';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ECALL_FROM_M,
@@ -30,9 +30,9 @@ import {
   enterTrap,
   instructionWordTrapValue,
   returnFromMachineTrap,
-} from '#cpu/trap.js';
-import type { Registers } from '#cpu/types.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+} from '#cpu/trap';
+import type { Registers } from '#cpu/types';
+import type { Memory, ReadonlyUint8Array } from '#memory';
 
 type CsrRegisterArgs = {
   destinationRegister: number;

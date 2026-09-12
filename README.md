@@ -77,7 +77,7 @@ encoding continues at the handler if one is installed; with `mtvec` left at 0 th
 from address 0. Running off the end of the image still reads zeros, which decode as illegal
 instructions and trap repeatedly unless a handler advances past them.
 
-To build and run the compiled output instead:
+To build and run the compiled output instead (no `tsx` required):
 
 ```bash
 npm run build
@@ -95,7 +95,7 @@ npm start path/to/image.bin
 | `npm run type-check` | `tsc --noEmit`                                            |
 | `npm run check`      | Format check, lint, type-check, and tests — the full gate |
 | `npm run fix`        | Prettier write plus `eslint --fix`                        |
-| `npm run build`      | Compile to `dist/`                                        |
+| `npm run build`      | Bundle to `dist/`                                         |
 
 Optional [pre-commit](https://pre-commit.com) hooks are configured to run Prettier, `eslint --fix`,
 and `tsc` over `src/`.
@@ -106,20 +106,24 @@ and `tsc` over `src/`.
 src/
   index.ts              CLI: image + map options, create memory, start the CPU
   memory/
-    index.ts            Guest memory: createMemory, loadBytes, storeBytes
-    ram.ts              RAM host mapping and byte access
-    uart.ts             16550 window, RX/TX queues, host push/pop helpers
-  ReadonlyUint8Array    Structural type for read-only byte buffers (no runtime Proxy)
+    index.ts            Public API: createMemory, loadBytes, storeBytes, Memory, …
+    types.ts            Memory type (private; re-exported from index)
+    ram.ts              RAM host mapping and byte access (private)
+    uart.ts             16550 window, RX/TX queues (private)
   cpu/
     index.ts            Host-side run(); spawns the worker, returns an awaitable handle
     run.ts              Worker entry point and the fetch/decode/execute loop
     decode.ts           Instruction decode into memoized execute thunks
     trap.ts             M-mode synchronous trap entry and mret
     registers.ts        Register file: x0–x31, the program counter, and CSRs
-    types.ts            Architectural state types
+    types.ts            Architectural state types (re-exported from index)
     instructions/       One file per opcode group (op-imm.ts, load.ts, branch.ts, …)
+  terminal/
+    index.ts            Host-side UART↔stream bridge worker
+    run.ts              Worker entry
+    types.ts            Worker payload types (re-exported from index)
   utils/
-    bytes.ts            64-bit little-endian byte-array arithmetic
+    bytes.ts            64-bit LE byte-array arithmetic + ReadonlyUint8Array
 ```
 
 ## Design notes

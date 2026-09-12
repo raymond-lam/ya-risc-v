@@ -16,10 +16,10 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import fence from '#cpu/instructions/misc-mem.js';
-import { createRegisters, readProgramCounter } from '#cpu/registers.js';
-import { bytesToNumber } from '#utils/bytes.js';
+import testMemory from '#test/guest-memory';
+import fence from '#cpu/instructions/misc-mem';
+import { createRegisters, readProgramCounter } from '#cpu/registers';
+import { bytesToNumber } from '#utils/bytes';
 
 describe('misc-mem', () => {
   it('fence advances pc', () => {

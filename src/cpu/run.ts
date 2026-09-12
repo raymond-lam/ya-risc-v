@@ -15,10 +15,10 @@
  */
 
 import { parentPort, workerData } from 'node:worker_threads';
-import decode from '#cpu/decode.js';
-import { loadBytes } from '#memory/index.js';
-import { createRegisters, readProgramCounter, setProgramCounter } from '#cpu/registers.js';
-import type { CpuWorkerData } from '#cpu/types.js';
+import decode from '#cpu/decode';
+import { loadBytes } from '#memory';
+import { createRegisters, readProgramCounter, setProgramCounter } from '#cpu/registers';
+import type { CpuWorkerData } from '#cpu/types';
 
 const main = (): void => {
   const { memory, resetPc } = workerData as CpuWorkerData;

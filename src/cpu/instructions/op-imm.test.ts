@@ -16,15 +16,15 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { addi, slti, sltiu, xori } from '#cpu/instructions/op-imm.js';
+import testMemory from '#test/guest-memory';
+import { addi, slti, sltiu, xori } from '#cpu/instructions/op-imm';
 import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('op-imm', () => {
   it('addi writes rs1 + imm and advances pc', () => {

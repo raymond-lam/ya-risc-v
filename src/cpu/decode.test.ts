@@ -16,9 +16,9 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import decode from '#cpu/decode.js';
-import { loadBytes, storeBytes } from '#memory/index.js';
-import testMemory from '#testing/guest-memory.js';
+import decode from '#cpu/decode';
+import { loadBytes, storeBytes } from '#memory';
+import testMemory from '#test/guest-memory';
 import {
   createRegisters,
   readControlAndStatusRegister,
@@ -27,8 +27,8 @@ import {
   setProgramCounter,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 /** Pack a 32-bit instruction encoding as little-endian bytes. */
 const instructionBytes = (encoding: number): Uint8Array => {

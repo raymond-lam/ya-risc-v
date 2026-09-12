@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
+import { Readable, Writable } from 'node:stream';
 import { Worker } from 'node:worker_threads';
 import workerExecArgv from '#utils/worker-exec-argv';
-import type { CpuWorkerData } from '#cpu/types';
+import type { TerminalRunOptions, TerminalWorkerData } from '#terminal/types';
 
-type CpuRunHandle = Promise<void> & {
+type TerminalRunHandle = Promise<void> & {
   terminate: () => void;
 };
 
 /* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
-class CpuRun implements CpuRunHandle {
+class TerminalRun implements TerminalRunHandle {
   readonly [Symbol.toStringTag] = 'Promise';
 
   readonly #done: Promise<void>;
@@ -60,14 +61,18 @@ class CpuRun implements CpuRunHandle {
   }
 }
 
-const run = ({ memory, resetPc }: CpuWorkerData): CpuRunHandle => {
-  const worker = new Worker(new URL(import.meta.resolve('#cpu/run')), {
+const run = ({ memory, stdin, stdout }: TerminalRunOptions): TerminalRunHandle => {
+  const stdinWeb = Readable.toWeb(stdin);
+  const stdoutWeb = Writable.toWeb(stdout);
+  const workerData = { memory, stdin: stdinWeb, stdout: stdoutWeb } satisfies TerminalWorkerData;
+  const worker = new Worker(new URL(import.meta.resolve('#terminal/run')), {
     execArgv: workerExecArgv(),
-    workerData: { memory, resetPc } satisfies CpuWorkerData,
+    workerData,
+    transferList: [stdinWeb, stdoutWeb],
   });
 
-  return new CpuRun(worker);
+  return new TerminalRun(worker);
 };
 
 export { run };
-export type { CpuWorkerData, Registers } from '#cpu/types';
+export type { TerminalRunOptions, TerminalWorkerData } from '#terminal/types';

@@ -26,8 +26,8 @@ import {
   setProgramCounter,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('registers', () => {
   it('x0 reads as zero on reset', () => {

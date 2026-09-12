@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-import { addBytes } from '#utils/bytes.js';
+import { addBytes } from '#utils/bytes';
 import {
   writeGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
   FOUR_BYTES,
-} from '#cpu/registers.js';
-import type { Registers } from '#cpu/types.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+} from '#cpu/registers';
+import type { Registers } from '#cpu/types';
+import type { Memory, ReadonlyUint8Array } from '#memory';
 
 type JalArgs = {
   destinationRegister: number;

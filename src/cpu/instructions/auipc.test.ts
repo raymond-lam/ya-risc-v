@@ -16,15 +16,15 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { auipc } from '#cpu/instructions/auipc.js';
+import testMemory from '#test/guest-memory';
+import { auipc } from '#cpu/instructions/auipc';
 import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
-} from '#cpu/registers.js';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('auipc', () => {
   it('adds the immediate to pc', () => {

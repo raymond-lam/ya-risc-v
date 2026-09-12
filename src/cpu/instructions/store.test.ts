@@ -16,10 +16,10 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { sb, sw } from '#cpu/instructions/store.js';
-import { createRegisters, writeGeneralPurposeRegister } from '#cpu/registers.js';
-import { signedNumberToBytes } from '#utils/bytes.js';
+import testMemory from '#test/guest-memory';
+import { sb, sw } from '#cpu/instructions/store';
+import { createRegisters, writeGeneralPurposeRegister } from '#cpu/registers';
+import { signedNumberToBytes } from '#utils/bytes';
 
 describe('store', () => {
   it('sb stores the low byte', () => {

@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-import type { Registers } from '#cpu/types.js';
-import { addBytes, copyBytes, signedNumberToBytes } from '#utils/bytes.js';
-import type { ReadonlyUint8Array } from '#types.js';
+import type { Registers } from '#cpu/types';
+import { addBytes, copyBytes, signedNumberToBytes } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#memory';
 
 /** Number of integer general-purpose registers (x0–x31). */
 const GENERAL_PURPOSE_REGISTER_COUNT = 32;

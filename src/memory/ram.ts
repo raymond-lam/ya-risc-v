@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { bytesToBigInt } from '#utils/bytes.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+import { bytesToBigInt } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#utils/bytes';
+import type { Memory } from '#memory/types';
 
 /**
  * Map a guest RAM address to a host index into `memory.bytes`, or `null` if the address

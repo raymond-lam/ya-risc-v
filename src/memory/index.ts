@@ -14,16 +14,19 @@
  * limitations under the License.
  */
 
-import { addBytes, copyBytes, signedNumberToBytes } from '#utils/bytes.js';
-import { loadRamByte, ramAddressToHostIndex, storeRamByte } from '#memory/ram.js';
+import { addBytes, copyBytes, signedNumberToBytes } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#utils/bytes';
+import { loadRamByte, ramAddressToHostIndex, storeRamByte } from '#memory/ram';
 import {
   loadUartRegister,
+  popTransmit,
+  pushReceive,
   storeUartRegister,
   uartAddressToRegisterIndex,
   uartOverlapsRam,
   uartPackedByteLength,
-} from '#memory/uart.js';
-import type { Memory, ReadonlyUint8Array } from '#types.js';
+} from '#memory/uart';
+import type { Memory } from '#memory/types';
 
 const ONE_BYTE = signedNumberToBytes(new Uint8Array(8), 1, 32) as ReadonlyUint8Array;
 
@@ -103,4 +106,6 @@ const storeBytes = ({
   }
 };
 
-export { createMemory, loadBytes, storeBytes };
+export { createMemory, loadBytes, popTransmit, pushReceive, storeBytes };
+export type { Memory } from '#memory/types';
+export type { ReadonlyUint8Array } from '#utils/bytes';

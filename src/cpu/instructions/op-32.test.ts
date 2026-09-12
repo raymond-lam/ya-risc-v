@@ -16,14 +16,14 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { addw } from '#cpu/instructions/op-32.js';
+import testMemory from '#test/guest-memory';
+import { addw } from '#cpu/instructions/op-32';
 import {
   createRegisters,
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
-import { signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { signedNumberToBytes } from '#utils/bytes';
 
 describe('op-32', () => {
   it('addw wraps and sign-extends within 32 bits', () => {

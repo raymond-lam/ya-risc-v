@@ -16,16 +16,16 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
-import { jalr } from '#cpu/instructions/jalr.js';
+import testMemory from '#test/guest-memory';
+import { jalr } from '#cpu/instructions/jalr';
 import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/registers';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('jalr', () => {
   it('links and clears the target least-significant bit', () => {

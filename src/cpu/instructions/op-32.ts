@@ -23,14 +23,14 @@ import {
   shiftRightLogicalBytes,
   shiftRightArithmeticBytes,
   signExtendBytes,
-} from '#utils/bytes.js';
+} from '#utils/bytes';
 import {
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
   advanceProgramCounter,
-} from '#cpu/registers.js';
-import type { Registers } from '#cpu/types.js';
-import type { Memory } from '#types.js';
+} from '#cpu/registers';
+import type { Registers } from '#cpu/types';
+import type { Memory } from '#memory';
 
 type Op32Args = {
   destinationRegister: number;

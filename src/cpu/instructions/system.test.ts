@@ -16,7 +16,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import testMemory from '#testing/guest-memory.js';
+import testMemory from '#test/guest-memory';
 import {
   csrrc,
   csrrci,
@@ -27,7 +27,7 @@ import {
   ebreak,
   ecall,
   mret,
-} from '#cpu/instructions/system.js';
+} from '#cpu/instructions/system';
 import {
   createRegisters,
   readControlAndStatusRegister,
@@ -36,7 +36,7 @@ import {
   setProgramCounter,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
-} from '#cpu/registers.js';
+} from '#cpu/registers';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ECALL_FROM_M,
@@ -46,8 +46,8 @@ import {
   MSTATUS,
   MTVAL,
   MTVEC,
-} from '#cpu/trap.js';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes.js';
+} from '#cpu/trap';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 const MHARTID = 0xf14;
 /** Unimplemented CSR address used in illegal-access tests. */
