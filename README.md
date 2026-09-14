@@ -5,10 +5,11 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 > [!WARNING]
 > **This is a work in progress and nowhere near finished.** RV64I and Zicsr execute and are covered
 > by tests. M-mode synchronous traps vector `ecall`/`ebreak`/illegal encodings through `mtvec` and
-> return via `mret`, but there is no multi-mode privilege, no interrupt delivery, no further
-> extensions, and no operating-system or device support. It cannot boot anything real yet. Anything
-> listed under [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate
-> limit on scope — the goal is a much more complete machine than what is here today.
+> return via `mret`. A polled 16550 UART plus an Ink TUI console path exist, but there is no
+> multi-mode privilege, no interrupt delivery, no timer (CLINT), no further ISA extensions, and no
+> OS boot path. It cannot run Linux yet. Anything listed under
+> [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate limit on
+> scope — the goal is a much more complete machine than what is here today.
 
 ## Status
 
@@ -30,8 +31,13 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   hardwired read-only.
 - A fetch/decode/execute loop running on a worker thread against shared guest memory, with decoded
   instructions memoized by their 32-bit encoding.
-- Unit tests over the decoder, the instructions, traps, the register file, memory, and the byte
-  helpers.
+- **Guest memory map:** RAM sized to the loaded image at base `0`, plus a fixed 8-byte **16550 UART**
+  window at `0x10000000` (RBR/THR queues and LSR DR/THRE/TEMT). Guest I/O is polled; there is no
+  UART interrupt line yet.
+- **Host console:** a terminal worker bridges UART RX/TX to streams, and an Ink TUI paints guest
+  output with a headless VT100 emulator (`@xterm/headless`), with click-to-focus and Shutdown.
+- Unit tests over the decoder, instructions, traps, registers, memory (including UART queues), the
+  terminal worker, byte helpers, and VT100 encoding/viewport helpers.
 
 ### Not yet implemented
 
@@ -42,11 +48,13 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **Virtual memory.** No paging (`satp` / Sv39).
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
-- **A real address space.** Guest memory is sized to exactly the image length, so there is no room
-  for a stack or heap beyond the program image. Architectural addresses are full 64-bit values;
-  accesses outside the image read as zero / are ignored rather than wrapping into low memory.
+- **A real address space.** Guest RAM is sized to exactly the image length, so there is no room for
+  a stack or heap beyond the program image. Architectural addresses are full 64-bit values;
+  accesses outside mapped RAM read as zero / are ignored rather than wrapping into low memory
+  (the UART window is the only other mapping).
 - **Program loading.** Images are flat binaries copied to address 0; there is no ELF loader.
-- **Devices and console I/O.** Nothing is memory-mapped, so a guest has no way to talk to the host.
+- **Richer devices.** No CLINT, PLIC, virtio, or a fuller 16550 (IER/IIR/FCR, baud divisors, IRQs).
+  Console works via polling only.
 
 ## Requirements
 
@@ -86,16 +94,16 @@ npm start path/to/image.bin
 
 ## Development
 
-| Command              | What it does                                              |
-| -------------------- | --------------------------------------------------------- |
-| `npm run dev`        | Run the CLI from source via `tsx`                         |
-| `npm test`           | Run the `node:test` suite over `src/**/*.test.ts`         |
-| `npm run lint`       | ESLint                                                    |
-| `npm run format`     | Prettier, writing changes                                 |
-| `npm run type-check` | `tsc --noEmit`                                            |
-| `npm run check`      | Format check, lint, type-check, and tests — the full gate |
-| `npm run fix`        | Prettier write plus `eslint --fix`                        |
-| `npm run build`      | Bundle to `dist/`                                         |
+| Command              | What it does                                                             |
+| -------------------- | ------------------------------------------------------------------------ |
+| `npm run dev`        | Run the CLI from source via `tsx`                                        |
+| `npm test`           | Run the `node:test` suite over `src/**/*.test.ts` and `src/**/*.test.tsx` |
+| `npm run lint`       | ESLint                                                                   |
+| `npm run format`     | Prettier, writing changes                                                |
+| `npm run type-check` | `tsc --noEmit`                                                           |
+| `npm run check`      | Format check, lint, type-check, and tests — the full gate                |
+| `npm run fix`        | Prettier write plus `eslint --fix`                                       |
+| `npm run build`      | Bundle to `dist/`                                                        |
 
 Optional [pre-commit](https://pre-commit.com) hooks are configured to run Prettier, `eslint --fix`,
 and `tsc` over `src/`.
@@ -128,6 +136,7 @@ src/
   tui/                    Ink host UI (create()/start()/stop())
   utils/
     bytes.ts              64-bit LE byte-array arithmetic + ReadonlyUint8Array
+    tty.ts                VT100 encode/paint helpers for the TUI terminal pane
 ```
 
 ## Design notes
@@ -146,9 +155,10 @@ instruction word, so a hot loop decodes each distinct encoding once.
 each instruction either advances the program counter or writes a jump or branch target, which mirrors
 how the ISA actually specifies control flow.
 
-**The CPU runs on a worker thread** over memory backed by a `SharedArrayBuffer`. Loads and stores are
-plain byte accesses rather than `Atomics`, so an unsynchronized host racing the guest behaves like
-unsynchronized access to real memory.
+**The CPU runs on a worker thread** over memory backed by a `SharedArrayBuffer`. Guest RAM loads and
+stores are plain byte accesses rather than `Atomics`, so an unsynchronized host racing the guest
+behaves like unsynchronized access to real memory. UART RX/TX queue metadata is an exception: the
+host terminal worker and guest-facing UART side effects coordinate those rings with `Atomics`.
 
 If you are pointing a coding agent at this repository, see [AGENTS.md](AGENTS.md) for the conventions
 it should follow.
