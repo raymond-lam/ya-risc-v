@@ -18,16 +18,31 @@
 
 import { readFile } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { create as createEmulator } from '#emulator';
 import { create as createTui } from '#tui';
 
-const main = async (imagePath: string): Promise<void> => {
+const parseRamSize = (value: string): bigint => {
+  try {
+    const ramSize = BigInt(value);
+    if (ramSize < 0n) {
+      throw new InvalidArgumentError('ram size must be non-negative');
+    }
+    return ramSize;
+  } catch (error) {
+    if (error instanceof InvalidArgumentError) {
+      throw error;
+    }
+    throw new InvalidArgumentError('ram size must be an integer (decimal or 0x… hex)');
+  }
+};
+
+const main = async (imagePath: string, ramSize: bigint): Promise<void> => {
   const image = await readFile(imagePath);
   const stdin = new PassThrough();
   const stdout = new PassThrough();
 
-  const emulator = createEmulator({ image, stdin, stdout });
+  const emulator = createEmulator({ image, stdin, stdout, ramSize });
   const tui = createTui({
     stdin,
     stdout,
@@ -56,8 +71,13 @@ program
   .name('ya-risc-v')
   .description('RISC-V emulator')
   .argument('<image>', 'path to a program image to load into guest memory')
-  .action(async (image: string) => {
-    await main(image);
+  .requiredOption(
+    '--ram-size <bytes>',
+    'guest DRAM size in bytes (decimal or 0x… hex); must fit the image',
+    parseRamSize
+  )
+  .action(async (image: string, options: { ramSize: bigint }) => {
+    await main(image, options.ramSize);
   });
 
 if (import.meta.main) {

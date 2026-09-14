@@ -35,7 +35,7 @@ const LSR_TEMT = 0x40;
 
 const RAM_BASE = new Uint8Array(8) as ReadonlyUint8Array;
 const UART_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n) as ReadonlyUint8Array;
-const VIRT_RAM_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000n) as ReadonlyUint8Array;
+const HIGH_RAM_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000n) as ReadonlyUint8Array;
 
 const uartAddress = (registerIndex: number): ReadonlyUint8Array => {
   const address = new Uint8Array(UART_BASE);
@@ -107,17 +107,17 @@ describe('memory', () => {
     const ramSize = 64n;
     const memory: Memory = {
       bytes: createMemory({
-        ramBaseAddress: VIRT_RAM_BASE,
+        ramBaseAddress: HIGH_RAM_BASE,
         ramSize,
         uartBaseAddress: UART_BASE,
       }),
-      ramBaseAddress: VIRT_RAM_BASE,
+      ramBaseAddress: HIGH_RAM_BASE,
       ramSize,
       uartBaseAddress: UART_BASE,
     };
 
     // Guest PA 0x8000_0000 + 4 → host index 4
-    const ramAddress = new Uint8Array(VIRT_RAM_BASE);
+    const ramAddress = new Uint8Array(HIGH_RAM_BASE);
     ramAddress[0] = 4;
     storeBytes({
       memory,
@@ -150,9 +150,9 @@ describe('memory', () => {
     );
   });
 
-  it('allows large RAM when UART sits below a virt-style RAM base', () => {
+  it('allows large RAM when UART sits below a high RAM base', () => {
     const bytes = createMemory({
-      ramBaseAddress: VIRT_RAM_BASE,
+      ramBaseAddress: HIGH_RAM_BASE,
       ramSize: 0x1000_0000n + 1n,
       uartBaseAddress: UART_BASE,
     });
