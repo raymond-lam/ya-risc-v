@@ -19,15 +19,20 @@ import type { Readable, Writable } from 'node:stream';
 
 /**
  * Host arguments to create the emulator (CPU + UART terminal workers).
- * RAM / UART bases and reset PC use the built-in defaults.
+ * DRAM base is `0x8000_0000`; UART is at `0x1000_0000`. `ramSize` is required.
  */
 type EmulatorCreateOptions = {
-  /** Flat program image copied into guest RAM at the default RAM base. */
+  /** Flat program image copied into guest RAM at the RAM base. */
   image: Uint8Array;
   /** Keystrokes into the guest (UART RX). */
   stdin: Readable;
   /** Bytes out of the guest (UART TX) for the host display. */
   stdout: Writable;
+  /**
+   * Guest DRAM size in bytes. Must be at least `image.byteLength` and must not
+   * overlap the UART window.
+   */
+  ramSize: bigint;
 };
 
 type EmulatorHandle = Promise<void> & {

@@ -13,7 +13,7 @@ today's ISA is all there will ever be.
 
 | Command               | Purpose                                                      |
 | --------------------- | ------------------------------------------------------------ |
-| `npm run dev <image>` | Run from source via `tsx`                                    |
+| `npm run dev <image>` | Run from source via `tsx` (pass `--ram-size`)                |
 | `npm test`            | `node:test` runner over `src/**/*.test.ts` and `*.test.tsx`  |
 | `npm run check`       | format check + lint + type-check + tests (run before done)   |
 | `npm run fix`         | Prettier write + `eslint --fix`                              |
@@ -28,8 +28,9 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   stops and awaits the TUI.
 - `src/tui/` — host Ink UI (`create` / `start` / `stop`; `components/`, `hooks/use-mouse-left-click`);
   terminal pane over caller streams.
-- `src/emulator/index.ts` — host-side `create`; maps the image, creates CPU + terminal handles,
-  returns an awaitable. `start` / `stop` forward to both; awaiting joins both.
+- `src/emulator/index.ts` — host-side `create` (requires `ramSize`); maps the image into DRAM at
+  `0x8000_0000` (UART at `0x1000_0000`), creates CPU + terminal handles, returns an awaitable.
+  `start` / `stop` forward to both; awaiting joins both.
 - `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, decode,
   trap, registers, instructions (one file per opcode group).
 - `src/emulator/memory/` — guest memory package (`index` public API; private `types` / `ram` /

@@ -20,7 +20,13 @@ import { create as createTerminal, type TerminalHandle } from '#emulator/termina
 import { unsignedBigIntToBytes } from '#utils/bytes';
 import type { EmulatorCreateOptions, EmulatorHandle } from '#emulator/types';
 
-const DEFAULT_RAM_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0n) as ReadonlyUint8Array;
+/** Default guest DRAM base address. */
+const DEFAULT_RAM_BASE = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  0x8000_0000n
+) as ReadonlyUint8Array;
+
+/** Fixed 16550 UART MMIO base. */
 const DEFAULT_UART_BASE = unsignedBigIntToBytes(
   new Uint8Array(8),
   0x1000_0000n
@@ -36,10 +42,15 @@ class Emulator implements EmulatorHandle {
 
   readonly #done: Promise<void>;
 
-  constructor({ image, stdin, stdout }: EmulatorCreateOptions) {
+  constructor({ image, stdin, stdout, ramSize }: EmulatorCreateOptions) {
+    if (ramSize < BigInt(image.byteLength)) {
+      throw new RangeError(
+        `image (${image.byteLength} bytes) does not fit in ramSize (${ramSize} bytes)`
+      );
+    }
+
     const ramBaseAddress = DEFAULT_RAM_BASE;
     const uartBaseAddress = DEFAULT_UART_BASE;
-    const ramSize = BigInt(image.byteLength);
     const memory = {
       bytes: createMemory({
         ramBaseAddress,
@@ -50,6 +61,7 @@ class Emulator implements EmulatorHandle {
       ramSize,
       uartBaseAddress,
     };
+    // Host index 0 is guest PA ramBase; copy the flat image to the start of DRAM.
     memory.bytes.set(image);
 
     const cpu = createCpu({

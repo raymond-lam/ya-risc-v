@@ -31,9 +31,10 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   hardwired read-only.
 - A fetch/decode/execute loop running on a worker thread against shared guest memory, with decoded
   instructions memoized by their 32-bit encoding.
-- **Guest memory map:** RAM sized to the loaded image at base `0`, plus a fixed 8-byte **16550 UART**
-  window at `0x10000000` (RBR/THR queues and LSR DR/THRE/TEMT). Guest I/O is polled; there is no
-  UART interrupt line yet.
+- **Guest memory map:** DRAM at `0x80000000` (size set by the caller / `--ram-size`), plus a fixed
+  8-byte **16550 UART** window at `0x10000000` (RBR/THR queues and LSR DR/THRE/TEMT). Flat images
+  are copied to the RAM base (reset PC matches). Guest I/O is polled; there is no UART interrupt
+  line yet.
 - **Host console:** a terminal worker bridges UART RX/TX to streams, and an Ink TUI paints guest
   output with a headless VT100 emulator (`@xterm/headless`), with click-to-focus and Shutdown.
 - Unit tests over the decoder, instructions, traps, registers, memory (including UART queues), the
@@ -48,13 +49,10 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **Virtual memory.** No paging (`satp` / Sv39).
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
-- **A real address space.** Guest RAM is sized to exactly the image length, so there is no room for
-  a stack or heap beyond the program image. Architectural addresses are full 64-bit values;
-  accesses outside mapped RAM read as zero / are ignored rather than wrapping into low memory
-  (the UART window is the only other mapping).
-- **Program loading.** Images are flat binaries copied to address 0; there is no ELF loader.
-- **Richer devices.** No CLINT, PLIC, virtio, or a fuller 16550 (IER/IIR/FCR, baud divisors, IRQs).
-  Console works via polling only.
+- **Program loading.** Images are flat binaries copied to the RAM base (`0x80000000`); there is no
+  ELF loader, DTB, or multi-payload boot (OpenSBI + kernel).
+- **Richer devices.** No CLINT, PLIC, or a fuller 16550 (IER/IIR/FCR, baud divisors, IRQs).
+  Console works via polling only. Low guest PAs below the RAM base are unmapped.
 
 ## Requirements
 
@@ -69,34 +67,36 @@ For now, clone the repository and run it from source.
 
 ```bash
 npm install
-npm run dev path/to/image.bin
+npm run dev -- --ram-size 0x8000000 path/to/image.bin
 ```
 
 `npm run dev` runs straight from TypeScript sources via `tsx`. The image is treated as a flat binary:
-it is copied into guest RAM at base `0` (reset PC matches). UART MMIO is at `0x10000000` (fixed
-8-byte 16550 window).
+it is copied into guest DRAM at base `0x80000000` (reset PC matches). `--ram-size` is required
+(decimal or `0x…` hex) and must be large enough for the image. UART MMIO is at `0x10000000`
+(fixed 8-byte 16550 window).
 
 ```bash
-npm run dev -- path/to/image.bin
+npm run dev -- --ram-size 134217728 path/to/image.bin
 ```
 
 Because traps vector to `mtvec`, a program that executes `ecall`, `ebreak`, or an unrecognized
 encoding continues at the handler if one is installed; with `mtvec` left at 0 the hart re-fetches
-from address 0. Running off the end of the image still reads zeros, which decode as illegal
-instructions and trap repeatedly unless a handler advances past them.
+from address 0 (unmapped — typically a repeated illegal-instruction trap unless a handler
+advances). Images must be linked for the `0x80000000` RAM base; zeros past the image in DRAM
+still decode as illegal instructions if execution falls through.
 
 To build and run the compiled output instead (no `tsx` required):
 
 ```bash
 npm run build
-npm start path/to/image.bin
+npm start -- --ram-size 0x8000000 path/to/image.bin
 ```
 
 ## Development
 
 | Command              | What it does                                                             |
 | -------------------- | ------------------------------------------------------------------------ |
-| `npm run dev`        | Run the CLI from source via `tsx`                                        |
+| `npm run dev`        | Run the CLI from source via `tsx` (requires `--ram-size`)                |
 | `npm test`           | Run the `node:test` suite over `src/**/*.test.ts` and `src/**/*.test.tsx` |
 | `npm run lint`       | ESLint                                                                   |
 | `npm run format`     | Prettier, writing changes                                                |
