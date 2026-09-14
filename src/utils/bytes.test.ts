@@ -21,6 +21,7 @@ import {
   andBytes,
   byte0ToNumber,
   bytesToBigInt,
+  signedBytesToBigInt,
   bytesToNumber,
   compareSignedBytes,
   compareUnsignedBytes,
@@ -171,6 +172,14 @@ describe('utils/bytes', () => {
     assert.equal(bytesToBigInt(signedNumberToBytes(new Uint8Array(8), 16, 32)), 16n);
     // 2^32 + 16
     assert.equal(bytesToBigInt(new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0])), 0x1_0000_0010n);
+  });
+
+  it('signedBytesToBigInt reads two’s-complement i64', () => {
+    assert.equal(signedBytesToBigInt(signedNumberToBytes(new Uint8Array(8), -1, 32)), -1n);
+    assert.equal(
+      signedBytesToBigInt(unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_0000n)),
+      -0x8000_0000_0000_0000n
+    );
   });
 
   it('low32Bytes clears the high half', () => {

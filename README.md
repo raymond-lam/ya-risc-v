@@ -3,11 +3,11 @@
 Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 > [!WARNING]
-> **This is a work in progress and nowhere near finished.** RV64I and Zicsr execute and are covered
-> by tests. M-mode synchronous traps vector `ecall`/`ebreak`/illegal encodings through `mtvec` and
-> return via `mret`. A polled 16550 UART plus an Ink TUI console path exist, but there is no
-> multi-mode privilege, no interrupt delivery, no timer (CLINT), no further ISA extensions, and no
-> OS boot path. It cannot run Linux yet. Anything listed under
+> **This is a work in progress and nowhere near finished.** RV64I, RV64M, and Zicsr execute and are
+> covered by tests. M-mode synchronous traps vector `ecall`/`ebreak`/illegal encodings through
+> `mtvec` and return via `mret`. A polled 16550 UART plus an Ink TUI console path exist, but there
+> is no multi-mode privilege, no interrupt delivery, no timer (CLINT), no further ISA extensions,
+> and no OS boot path. It cannot run Linux yet. Anything listed under
 > [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate limit on
 > scope — the goal is a much more complete machine than what is here today.
 
@@ -18,6 +18,8 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - The full **RV64I** base integer instruction set: `lui`, `auipc`, `jal`, `jalr`, the six branches,
   all seven loads, all four stores, the register–immediate and register–register integer ops, and
   the RV64-specific 32-bit forms (`addiw`, `sllw`, `sraw`, …).
+- **RV64M** multiply/divide: `mul`/`mulh`/`mulhsu`/`mulhu`, `div`/`divu`, `rem`/`remu`, and the
+  32-bit forms `mulw`, `divw`/`divuw`, `remw`/`remuw` (including the ÷0 and signed-overflow cases).
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
   Only implemented CSRs are accessible (`mstatus`, `mtvec`, `mepc`, `mcause`, `mtval`, identity);
   other indices and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the
@@ -45,7 +47,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **Interrupts and multi-mode privilege.** No U/S modes, no interrupt delivery (`mie`/`mip`/PLIC),
   no timer (CLINT). Trap CSRs used by M-mode exceptions/`mret` have real semantics; other standard
   CSRs are not implemented (access raises illegal-instruction).
-- **Extensions.** No M (multiply/divide), A (atomics), F/D (floating point), or C (compressed).
+- **Extensions.** No A (atomics), F/D (floating point), or C (compressed).
 - **Virtual memory.** No paging (`satp` / Sv39).
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
