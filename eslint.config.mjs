@@ -7,7 +7,7 @@ import typescriptEslintParser from '@typescript-eslint/parser';
 
 const eslintConfig = [
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'test/**/*.ts'],
     languageOptions: {
       parser: typescriptEslintParser,
       parserOptions: {
@@ -25,8 +25,6 @@ const eslintConfig = [
       'import/resolver': {
         typescript: {
           project: ['./tsconfig.json'],
-          // Match tsconfig customConditions / tsx so #* maps to src/, not a stale dist/.
-          conditionNames: ['@ya-risc-v/source', 'types', 'import', 'node', 'default'],
         },
         node: true,
       },
@@ -45,6 +43,10 @@ const eslintConfig = [
             {
               group: ['./*', '../*', '../**', './**'],
               message: 'Use # package imports (see package.json "imports"), not relative paths.',
+            },
+            {
+              group: ['#*.js', '#*/*.js', '#*/*/*.js', '#*/*/*/*.js'],
+              message: 'Omit the file extension; #specifiers resolve like a bundler.',
             },
           ],
         },
@@ -92,7 +94,7 @@ const eslintConfig = [
     },
   },
   {
-    files: ['src/**/*.test.ts'],
+    files: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     rules: {
       /** Table-driven tests repeat literals on purpose; extracting them hurts readability. */
       'sonarjs/no-duplicate-string': 'off',

@@ -1,7 +1,7 @@
 # ya-risc-v
 
 A RISC-V emulator written in TypeScript for Node (>= 24, ESM only). The CLI (`src/index.ts`)
-reads a raw program image, maps it into shared guest memory, and runs the CPU in a worker thread.
+reads a raw program image, starts the emulator and Ink TUI, and wires them over streams.
 
 **Work in progress.** RV64I, Zicsr, and M-mode synchronous traps (`ecall`/`ebreak`/illegal →
 `mtvec`, plus `mret`) are implemented; further extensions and privilege levels are still to come.
@@ -14,30 +14,36 @@ today's ISA is all there will ever be.
 | Command               | Purpose                                                      |
 | --------------------- | ------------------------------------------------------------ |
 | `npm run dev <image>` | Run from source via `tsx`                                    |
-| `npm test`            | `node:test` runner over `src/**/*.test.ts`                   |
+| `npm test`            | `node:test` runner over `src/**/*.test.ts` and `*.test.tsx`  |
 | `npm run check`       | format check + lint + type-check + tests (run before done)   |
 | `npm run fix`         | Prettier write + `eslint --fix`                              |
-| `npm run build`       | Emit to `dist/` (generated, gitignored — never edit by hand) |
+| `npm run build`       | Bundle to `dist/` (generated, gitignored — never edit by hand) |
 
 Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 ## Layout
 
-- `src/index.ts` — Commander CLI; map options (`--ram-base`, `--uart-base`, `--reset-pc`),
-  creates memory, calls `run`, wires SIGINT/SIGTERM to `terminate`.
-- `src/cpu/index.ts` — host-side `run`, spawns the worker and returns an awaitable handle.
-- `src/cpu/run.ts` — worker entry; the fetch/decode/execute loop.
-- `src/cpu/decode.ts` — opcode/funct switch; returns an execute thunk, memoized by instruction word.
-- `src/cpu/trap.ts` — M-mode synchronous trap entry and `mret` (`mstatus`/`mepc`/`mcause`/`mtval`/`mtvec`).
-- `src/cpu/instructions/` — one file per opcode group, named after the RISC-V opcode (`op-imm-32.ts`).
-- `src/cpu/registers.ts`, `src/memory/` (`index` / `ram` / `uart`), `src/utils/bytes.ts` —
-  architectural state and byte helpers.
+- `src/index.ts` — Commander CLI; loads the image, `create`s the emulator and TUI, starts the TUI
+  then the emulator (`onShutdown` / signals call `emulator.stop()`), awaits the emulator, then
+  stops and awaits the TUI.
+- `src/tui/` — host Ink UI (`create` / `start` / `stop`; `components/`, `hooks/use-mouse-left-click`);
+  terminal pane over caller streams.
+- `src/emulator/index.ts` — host-side `create`; maps the image, creates CPU + terminal handles,
+  returns an awaitable. `start` / `stop` forward to both; awaiting joins both.
+- `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, decode,
+  trap, registers, instructions (one file per opcode group).
+- `src/emulator/memory/` — guest memory package (`index` public API; private `types` / `ram` /
+  `uart`).
+- `src/emulator/terminal/` — UART↔stream bridge: host `create` / `start` / `stop`, worker `run.ts`.
+- `src/utils/bytes.ts` — architectural byte helpers (`ReadonlyUint8Array` lives here, re-exported
+  from `#emulator/memory` with `Memory`).
+- `test/` — shared test helpers (`guest-memory.ts`). Unit tests stay colocated as `*.test.ts`.
 
 ## Core invariants
 
 - **Every architectural value is an 8-byte little-endian `Uint8Array`.** Registers, the PC, CSRs,
   and immediates never become `number` or `bigint`. Do arithmetic with the helpers in
-  `#utils/bytes.js` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
+  `#utils/bytes` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
   …), including CSR bitfield updates in `trap.ts`. Mutating helpers take a `destination`
   buffer and return it for chaining (`const x = addBytes(new Uint8Array(8), a, b)`). Guest
   addresses stay as byte arrays through `loadBytes`/`storeBytes`. Map decode
@@ -77,8 +83,9 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 ## Adding instructions
 
-1. Add or extend a file in `src/cpu/instructions/`, keeping the `/** mnemonic: rd = … */` doc comment.
-   A new extension gets its own files under the same one-file-per-opcode-group convention.
+1. Add or extend a file in `src/emulator/cpu/instructions/`, keeping the `/** mnemonic: rd = … */`
+   doc comment. A new extension gets its own files under the same one-file-per-opcode-group
+   convention.
 2. Add the opcode/funct3/funct7 constants to `decode.ts` (with a trailing comment) and wire the case,
    falling through to `illegalInstruction` for unmatched encodings.
 3. Add a colocated `*.test.ts` covering the value written _and_ the resulting PC.
@@ -87,9 +94,17 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space indent):
 
-- Import with `#` subpath specifiers and a `.js` extension
-  (`import { loadBytes } from '#memory/index.js'`).
-  Relative imports are a lint error. The `@ya-risc-v/source` condition maps `#*` to `src/*`.
+- Import with `#` subpath specifiers and no file extension
+  (`import { loadBytes } from '#emulator/memory'`). `tsconfig` `paths` maps `#*` to `src/*` and
+  `#test/*` to `test/*`; bundler resolution fills in `index` and `.ts`/`.tsx`. The worker
+  entries `#emulator/cpu/run` and `#emulator/terminal/run` are also `package.json` `"imports"`
+  targets (`src` vs `dist`). Relative imports are a lint error.
+- **Package boundary:** a directory with `index.ts` is a package. Sibling modules
+  (`memory/uart.ts`, `cpu/types.ts`, …) are private; outside that directory import only from the
+  package root. Host code uses `#emulator` and `#tui`. Inside `emulator/`, subpackages import each
+  other via `#emulator/cpu`, `#emulator/memory`, `#emulator/terminal` (workers use
+  `#emulator/cpu/run` / `#emulator/terminal/run`). Unit tests may import instruction modules
+  directly for coverage.
 - Arrow functions only — no `function` expressions or declarations, and no `export default function`.
 - Modules with a single export use `export default`; otherwise list named exports in one block at the
   bottom of the file, with `export type { … }` after it.
@@ -103,4 +118,4 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 `node:test` with `describe`/`it` and `node:assert/strict`. Compare register state with
 `assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(10, 32))` rather than
 hand-written byte arrays, and start from `createRegisters()` / `createTestMemory(256n)`
-(`#testing/guest-memory.js`) in each test.
+  (`#test/guest-memory`) in each test. Helpers live in `test/`, not `src/`.

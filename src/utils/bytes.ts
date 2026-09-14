@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
-import type { ReadonlyUint8Array } from '#types.js';
+/**
+ * Byte buffer used only for reading. Plain `Uint8Array` values are assignable;
+ * writes through this type are a type error. Type-level only — no runtime Proxy.
+ */
+type ReadonlyUint8Array = {
+  readonly length: number;
+  readonly [index: number]: number;
+  [Symbol.iterator](): IterableIterator<number>;
+};
 
 /** Copy `source` into `destination` (same length assumed). Returns `destination`. */
 const copyBytes = (destination: Uint8Array, source: ReadonlyUint8Array): Uint8Array => {
@@ -313,3 +321,4 @@ export {
   signExtendBytes,
   zeroExtendBytes,
 };
+export type { ReadonlyUint8Array };

@@ -38,7 +38,7 @@ import {
   unsignedNumberToBytes,
   xorBytes,
   zeroExtendBytes,
-} from '#utils/bytes.js';
+} from '#utils/bytes';
 
 describe('utils/bytes', () => {
   it('copyBytes copies source into destination and returns it', () => {
