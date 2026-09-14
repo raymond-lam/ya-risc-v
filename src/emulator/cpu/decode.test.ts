@@ -101,6 +101,34 @@ describe('decode + execute', () => {
     );
   });
 
+  it('executes mul x3, x1, x2 and advances pc', () => {
+    const registers = createRegisters();
+    const memory = testMemory(64n);
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 6, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
+    // mul x3, x1, x2
+    decode(instructionBytes(0x022081b3))(registers, memory);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 42, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('executes mulw x3, x1, x2 and advances pc', () => {
+    const registers = createRegisters();
+    const memory = testMemory(64n);
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 6, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
+    // mulw x3, x1, x2
+    decode(instructionBytes(0x022081bb))(registers, memory);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 42, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
   it('executes sw then lw round-trip', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);

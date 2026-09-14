@@ -3,7 +3,7 @@
 A RISC-V emulator written in TypeScript for Node (>= 24, ESM only). The CLI (`src/index.ts`)
 reads a raw program image, starts the emulator and Ink TUI, and wires them over streams.
 
-**Work in progress.** RV64I, Zicsr, and M-mode synchronous traps (`ecall`/`ebreak`/illegal →
+**Work in progress.** RV64I, RV64M, Zicsr, and M-mode synchronous traps (`ecall`/`ebreak`/illegal →
 `mtvec`, plus `mret`) are implemented; further extensions and privilege levels are still to come.
 Missing instructions and features are unfinished work, not deliberate scope — don't treat the
 current opcode coverage in `decode.ts` as the intended ceiling, and don't add code that assumes

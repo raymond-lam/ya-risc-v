@@ -39,8 +39,10 @@ import {
   srai,
 } from '#emulator/cpu/instructions/op-imm';
 import { add, sub, sll, slt, sltu, xor, srl, sra, or, and } from '#emulator/cpu/instructions/op';
+import { mul, mulh, mulhsu, mulhu, div, divu, rem, remu } from '#emulator/cpu/instructions/op-m';
 import { addiw, slliw, srliw, sraiw } from '#emulator/cpu/instructions/op-imm-32';
 import { addw, subw, sllw, srlw, sraw } from '#emulator/cpu/instructions/op-32';
+import { mulw, divw, divuw, remw, remuw } from '#emulator/cpu/instructions/op-32-m';
 import fence from '#emulator/cpu/instructions/misc-mem';
 import {
   ecall,
@@ -111,6 +113,7 @@ const FUNCT3_CSRRCI = 0x7; // atomic CSR read and clear immediate
 const FUNCT12_MRET = 0x302;
 
 const FUNCT7_NORMAL = 0x00; // default funct7: add/sll/srl/…
+const FUNCT7_MUL_DIV = 0x01; // M extension: mul/div/rem (and *w forms on OP-32)
 const FUNCT7_SUB_SRA = 0x20; // alternate funct7: sub/sra (and sraw/sraiw)
 
 /** Illegal encoding: synchronous trap with cause 2; mtval holds the instruction word. */
@@ -212,7 +215,7 @@ const function3Of = (instructionWord: number): number => (instructionWord >>> 12
 const function7Of = (instructionWord: number): number => (instructionWord >>> 25) & 0x7f;
 
 /**
- * Decode one RV64I instruction into an execute thunk.
+ * Decode one RV64I/M instruction into an execute thunk.
  *
  * Only the matched opcode's fields are extracted; execution is delegated to the
  * instruction functions under `src/cpu/instructions/`.
@@ -396,12 +399,42 @@ const decode = (
 
     case OPCODE_OP: {
       const function7 = function7Of(encodedInstructionWord);
-      if (function7 !== FUNCT7_NORMAL && function7 !== FUNCT7_SUB_SRA) {
-        return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
-      }
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const sourceRegister1 = sourceRegister1Of(encodedInstructionWord);
       const sourceRegister2 = sourceRegister2Of(encodedInstructionWord);
+      if (function7 === FUNCT7_MUL_DIV) {
+        switch (function3Of(encodedInstructionWord)) {
+          case FUNCT3_ADD_SUB:
+            return (registers, memory) =>
+              mul(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_SLL:
+            return (registers, memory) =>
+              mulh(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_SLT:
+            return (registers, memory) =>
+              mulhsu(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_SLTU:
+            return (registers, memory) =>
+              mulhu(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_XOR:
+            return (registers, memory) =>
+              div(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_SRL_SRA:
+            return (registers, memory) =>
+              divu(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_OR:
+            return (registers, memory) =>
+              rem(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_AND:
+            return (registers, memory) =>
+              remu(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          default:
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+        }
+      }
+      if (function7 !== FUNCT7_NORMAL && function7 !== FUNCT7_SUB_SRA) {
+        return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+      }
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_ADD_SUB:
           if (function7 === FUNCT7_NORMAL) {
@@ -495,12 +528,33 @@ const decode = (
 
     case OPCODE_OP_32: {
       const function7 = function7Of(encodedInstructionWord);
-      if (function7 !== FUNCT7_NORMAL && function7 !== FUNCT7_SUB_SRA) {
-        return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
-      }
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const sourceRegister1 = sourceRegister1Of(encodedInstructionWord);
       const sourceRegister2 = sourceRegister2Of(encodedInstructionWord);
+      if (function7 === FUNCT7_MUL_DIV) {
+        switch (function3Of(encodedInstructionWord)) {
+          case FUNCT3_ADD_SUB:
+            return (registers, memory) =>
+              mulw(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_XOR:
+            return (registers, memory) =>
+              divw(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_SRL_SRA:
+            return (registers, memory) =>
+              divuw(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_OR:
+            return (registers, memory) =>
+              remw(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          case FUNCT3_AND:
+            return (registers, memory) =>
+              remuw(registers, memory, { destinationRegister, sourceRegister1, sourceRegister2 });
+          default:
+            return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+        }
+      }
+      if (function7 !== FUNCT7_NORMAL && function7 !== FUNCT7_SUB_SRA) {
+        return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+      }
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_ADD_SUB:
           if (function7 === FUNCT7_NORMAL) {

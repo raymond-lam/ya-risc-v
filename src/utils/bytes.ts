@@ -225,6 +225,14 @@ const bytesToBigInt = (bytes: ReadonlyUint8Array): bigint => {
   return value;
 };
 
+/** Read 8 little-endian bytes as a signed 64-bit `bigint` (two's complement). */
+const signedBytesToBigInt = (bytes: ReadonlyUint8Array): bigint => {
+  const unsigned = bytesToBigInt(bytes);
+  return (unsigned & 0x8000_0000_0000_0000n) !== 0n
+    ? unsigned - 0x1_0000_0000_0000_0000n
+    : unsigned;
+};
+
 /** `bytes[0] & mask` as a number. */
 const byte0ToNumber = (bytes: ReadonlyUint8Array, mask: number): number => (bytes[0] ?? 0) & mask;
 
@@ -314,6 +322,7 @@ export {
   low32Bytes,
   bytesToNumber,
   bytesToBigInt,
+  signedBytesToBigInt,
   byte0ToNumber,
   signedNumberToBytes,
   unsignedNumberToBytes,
