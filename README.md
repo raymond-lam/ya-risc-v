@@ -4,12 +4,12 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 > [!WARNING]
 > **This is a work in progress and nowhere near finished.** RV64I, RV64M, and Zicsr execute and are
-> covered by tests. M-mode synchronous traps vector `ecall`/`ebreak`/illegal encodings through
-> `mtvec` and return via `mret`. A polled 16550 UART plus an Ink TUI console path exist, but there
-> is no multi-mode privilege, no interrupt delivery, no timer (CLINT), no further ISA extensions,
-> and no OS boot path. It cannot run Linux yet. Anything listed under
-> [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate limit on
-> scope — the goal is a much more complete machine than what is here today.
+> covered by tests. U/S/M privilege modes, `mret`/`sret`, `sstatus`/`medeleg`/S-mode trap CSRs, and
+> M-mode synchronous traps (`ecall`/`ebreak`/illegal → `mtvec`/`stvec` with delegation) are in place.
+> A polled 16550 UART plus an Ink TUI console path exist, but there is no interrupt delivery, no
+> timer (CLINT), no further ISA extensions, and no OS boot path. It cannot run Linux yet. Anything
+> listed under [Not yet implemented](#not-yet-implemented) is unfinished work rather than a
+> deliberate limit on scope — the goal is a much more complete machine than what is here today.
 
 ## Status
 
@@ -21,12 +21,16 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **RV64M** multiply/divide: `mul`/`mulh`/`mulhsu`/`mulhu`, `div`/`divu`, `rem`/`remu`, and the
   32-bit forms `mulw`, `divw`/`divuw`, `remw`/`remuw` (including the ÷0 and signed-overflow cases).
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
-  Only implemented CSRs are accessible (`mstatus`, `mtvec`, `mepc`, `mcause`, `mtval`, identity);
-  other indices and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the
-  write when the source is zero. There is no privilege check and no WARL/side-effect behavior yet.
-- **M-mode synchronous traps:** `ecall`, `ebreak`, and illegal encodings write `mepc` / `mcause` /
-  `mtval`, update `mstatus` (MPIE←MIE, MIE←0, MPP←M), and jump to `mtvec` (direct mode). `mret`
-  restores that stack and returns to `mepc`.
+  Only implemented CSRs are accessible (`mstatus`/`sstatus`, `medeleg`, `mtvec`/`stvec`,
+  `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, identity); other indices, insufficient
+  privilege, and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the
+  write when the source is zero. `sstatus` is a masked view of `mstatus`. No interrupt CSRs or
+  WARL beyond MPP legalization yet.
+- **Privilege modes:** the hart tracks U/S/M (reset = M). Traps record `MPP`/`SPP`, switch mode,
+  and vector through `mtvec` or `stvec` when `medeleg` delegates. `mret`/`sret` restore the
+  previous mode; `ecall` uses causes 8/9/11 by mode. `mret` is M-only; `sret` is illegal in U.
+- **M-mode synchronous traps:** `ecall`, `ebreak`, and illegal encodings write `xepc` / `xcause` /
+  `xtval`, update status enable stacks, and jump to the chosen `xtvec` (direct mode).
 - `fence`, decoded and executed as a no-op, which is architecturally legal for this emulator.
 - Integer registers x0–x31, the program counter, and a dense 4096-entry CSR file backing the
   implemented set, with x0 and the identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`)
@@ -44,9 +48,9 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 ### Not yet implemented
 
-- **Interrupts and multi-mode privilege.** No U/S modes, no interrupt delivery (`mie`/`mip`/PLIC),
-  no timer (CLINT). Trap CSRs used by M-mode exceptions/`mret` have real semantics; other standard
-  CSRs are not implemented (access raises illegal-instruction).
+- **Interrupts.** No interrupt delivery (`mie`/`mip`/`sie`/`sip`/PLIC), no timer (CLINT). Trap CSRs
+  used by exceptions/`mret`/`sret` and `medeleg` have real semantics; other standard CSRs are not
+  implemented (access raises illegal-instruction).
 - **Extensions.** No A (atomics), F/D (floating point), or C (compressed).
 - **Virtual memory.** No paging (`satp` / Sv39).
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read

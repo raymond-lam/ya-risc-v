@@ -26,7 +26,8 @@ type Registers = {
   programCounter: Uint8Array;
   /**
    * Dense CSR file keyed by 12-bit index. Only the implemented set is guest-accessible;
-   * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only.
+   * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only. `sstatus` is an
+   * alias of `mstatus` (handled in the register helpers, not a separate slot).
    */
   controlAndStatus: readonly Uint8Array[] & {
     readonly 0xf11: ReadonlyUint8Array; // mvendorid
@@ -34,6 +35,11 @@ type Registers = {
     readonly 0xf13: ReadonlyUint8Array; // mimpid
     readonly 0xf14: ReadonlyUint8Array; // mhartid
   };
+  /**
+   * Current privilege mode as an 8-byte little-endian value (U=0, S=1, M=3).
+   * Internal hart state, not a CSR; reset = M.
+   */
+  privilegeMode: Uint8Array;
 };
 
 /**

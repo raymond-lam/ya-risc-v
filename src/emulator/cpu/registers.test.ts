@@ -17,10 +17,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  PRIVILEGE_MACHINE,
   advanceProgramCounter,
   createRegisters,
   readControlAndStatusRegister,
   readGeneralPurposeRegister,
+  readPrivilegeMode,
   readProgramCounter,
   setBooleanGeneralPurposeRegister,
   setProgramCounter,
@@ -30,6 +32,10 @@ import {
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('registers', () => {
+  it('resets in machine mode', () => {
+    assert.deepEqual(readPrivilegeMode(createRegisters()), PRIVILEGE_MACHINE);
+  });
+
   it('x0 reads as zero on reset', () => {
     const registers = createRegisters();
     assert.deepEqual(
@@ -70,8 +76,8 @@ describe('registers', () => {
   it('writes and reads a control-and-status register', () => {
     const registers = createRegisters();
     const value = signedNumberToBytes(new Uint8Array(8), 0x1234, 32);
-    writeControlAndStatusRegister(registers, 0x300, value);
-    assert.deepEqual(readControlAndStatusRegister(registers, 0x300), value);
+    writeControlAndStatusRegister(registers, 0x305, value);
+    assert.deepEqual(readControlAndStatusRegister(registers, 0x305), value);
   });
 
   it('x0 ignores writes at runtime', () => {
@@ -89,6 +95,20 @@ describe('registers', () => {
     assert.deepEqual(
       [...readControlAndStatusRegister(registers, 0xf14)],
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
+    );
+  });
+
+  it('mstatus WARL forces reserved MPP to U', () => {
+    const registers = createRegisters();
+    // bits 12:11 = 10 (reserved)
+    writeControlAndStatusRegister(
+      registers,
+      0x300,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, 0x300),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
     );
   });
 });
