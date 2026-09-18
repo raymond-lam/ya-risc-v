@@ -224,6 +224,19 @@ describe('decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x20);
   });
 
+  it('executes sret after seeding sepc', () => {
+    const registers = createRegisters();
+    const memory = testMemory(64n);
+    writeControlAndStatusRegister(
+      registers,
+      0x141,
+      signedNumberToBytes(new Uint8Array(8), 0x30, 32)
+    );
+    // sret (legal in M-mode)
+    decode(instructionBytes(0x10200073))(registers, memory);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x30);
+  });
+
   it('traps on an illegal encoding and records mtval', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);

@@ -19,20 +19,31 @@ import { describe, it } from 'node:test';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ECALL_FROM_M,
+  CAUSE_ECALL_FROM_U,
   CAUSE_ILLEGAL_INSTRUCTION,
   MCAUSE,
+  MEDELEG,
   MEPC,
   MSTATUS,
   MTVAL,
   MTVEC,
+  SCAUSE,
+  SEPC,
+  STVEC,
   enterTrap,
   instructionWordTrapValue,
   returnFromMachineTrap,
+  returnFromSupervisorTrap,
 } from '#emulator/cpu/trap';
 import {
+  PRIVILEGE_MACHINE,
+  PRIVILEGE_SUPERVISOR,
+  PRIVILEGE_USER,
   createRegisters,
   readControlAndStatusRegister,
+  readPrivilegeMode,
   readProgramCounter,
+  setPrivilegeMode,
   setProgramCounter,
   writeControlAndStatusRegister,
 } from '#emulator/cpu/registers';
@@ -73,11 +84,31 @@ describe('trap', () => {
       readControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x1880, 32)
     );
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
     // Direct mode: low 2 bits of mtvec cleared.
     assert.deepEqual(
       readProgramCounter(registers),
       signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
     );
+  });
+
+  it('enterTrap records MPP from the prior privilege mode', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x400, 32)
+    );
+
+    enterTrap(registers, CAUSE_BREAKPOINT);
+
+    // MPIE clear, MIE clear, MPP = S → 0x0800.
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(new Uint8Array(8), 0x0800, 32)
+    );
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
   });
 
   it('enterTrap clears MPIE when MIE was clear', () => {
@@ -124,27 +155,67 @@ describe('trap', () => {
     assert.equal(bytesToNumber(readControlAndStatusRegister(registers, MTVAL)), word);
   });
 
-  it('returnFromMachineTrap restores MIE from MPIE and jumps to mepc', () => {
+  it('enterTrap delegates to S when medeleg allows and privilege is below M', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x50, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MEDELEG,
+      signedNumberToBytes(new Uint8Array(8), 1 << CAUSE_ECALL_FROM_U, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      STVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x3000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x02, 32)
+    );
+
+    enterTrap(registers, CAUSE_ECALL_FROM_U);
+
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, SEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x50, 32)
+    );
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, SCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ECALL_FROM_U, 32)
+    );
+    // SPIE set, SIE clear, SPP = U → 0x20.
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(new Uint8Array(8), 0x20, 32)
+    );
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x3000);
+  });
+
+  it('returnFromMachineTrap restores MIE from MPIE, privilege from MPP, and sets MPP to U', () => {
     const registers = createRegisters();
     writeControlAndStatusRegister(
       registers,
       MEPC,
       signedNumberToBytes(new Uint8Array(8), 0x120, 32)
     );
-    // MPIE set, MIE clear → after mret, MIE set and MPIE set.
+    // MPIE set, MIE clear, MPP = S.
     writeControlAndStatusRegister(
       registers,
       MSTATUS,
-      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0880, 32)
     );
 
     returnFromMachineTrap(registers);
 
-    // MIE set, MPIE set, MPP = M → 0x1888.
+    // MIE set, MPIE set, MPP = U → 0x0088.
     assert.deepEqual(
       readControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x1888, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0088, 32)
     );
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
     assert.deepEqual(
       readProgramCounter(registers),
       signedNumberToBytes(new Uint8Array(8), 0x120, 32)
@@ -166,10 +237,37 @@ describe('trap', () => {
 
     returnFromMachineTrap(registers);
 
-    // MIE clear, MPIE set, MPP = M → 0x1880.
+    // MIE clear, MPIE set, MPP = U → 0x0080.
     assert.deepEqual(
       readControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x1880, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0080, 32)
     );
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_USER);
+  });
+
+  it('returnFromSupervisorTrap restores SIE from SPIE and privilege from SPP', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    writeControlAndStatusRegister(
+      registers,
+      SEPC,
+      signedNumberToBytes(new Uint8Array(8), 0x60, 32)
+    );
+    // SPIE set, SIE clear, SPP = U.
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x20, 32)
+    );
+
+    returnFromSupervisorTrap(registers);
+
+    // SIE set, SPIE set, SPP = U → 0x22.
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(new Uint8Array(8), 0x22, 32)
+    );
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_USER);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x60);
   });
 });

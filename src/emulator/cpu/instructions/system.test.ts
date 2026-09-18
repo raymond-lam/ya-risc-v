@@ -27,12 +27,18 @@ import {
   ebreak,
   ecall,
   mret,
+  sret,
 } from '#emulator/cpu/instructions/system';
 import {
+  PRIVILEGE_MACHINE,
+  PRIVILEGE_SUPERVISOR,
+  PRIVILEGE_USER,
   createRegisters,
   readControlAndStatusRegister,
   readGeneralPurposeRegister,
+  readPrivilegeMode,
   readProgramCounter,
+  setPrivilegeMode,
   setProgramCounter,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
@@ -40,12 +46,16 @@ import {
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ECALL_FROM_M,
+  CAUSE_ECALL_FROM_S,
+  CAUSE_ECALL_FROM_U,
   CAUSE_ILLEGAL_INSTRUCTION,
   MCAUSE,
   MEPC,
   MSTATUS,
   MTVAL,
   MTVEC,
+  SEPC,
+  SSTATUS,
 } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
@@ -110,7 +120,7 @@ describe('system', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
   });
 
-  it('mret returns to mepc and restores MIE from MPIE', () => {
+  it('mret returns to mepc, restores MIE from MPIE, and drops to MPP', () => {
     const registers = createRegisters();
     const guest = testMemory(256n);
     writeControlAndStatusRegister(
@@ -118,19 +128,128 @@ describe('system', () => {
       MEPC,
       signedNumberToBytes(new Uint8Array(8), 0x44, 32)
     );
+    // MPIE set, MPP = M.
     writeControlAndStatusRegister(
       registers,
       MSTATUS,
-      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x1880, 32)
     );
 
     mret(registers, guest);
 
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
-    // MIE set, MPIE set, MPP = M → 0x1888.
+    // MIE set, MPIE set, MPP = U → 0x0088.
     assert.deepEqual(
       readControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x1888, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0088, 32)
+    );
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
+  });
+
+  it('mret is illegal outside M-mode', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    mret(registers, testMemory(256n));
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+  });
+
+  it('sret returns to sepc and restores SIE from SPIE', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    writeControlAndStatusRegister(
+      registers,
+      SEPC,
+      signedNumberToBytes(new Uint8Array(8), 0x88, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x120, 32)
+    );
+    sret(registers, testMemory(256n));
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x88);
+    // SIE set, SPIE set, SPP cleared → 0x22 (SPP was set → return to S).
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(new Uint8Array(8), 0x22, 32)
+    );
+  });
+
+  it('ecall from U and S use causes 8 and 9', () => {
+    const registers = createRegisters();
+    const guest = testMemory(256n);
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    ecall(registers, guest);
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ECALL_FROM_U, 32)
+    );
+
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x10, 32));
+    ecall(registers, guest);
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ECALL_FROM_S, 32)
+    );
+  });
+
+  it('sstatus reads and writes the supervisor view of mstatus', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x188a, 32)
+    );
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, SSTATUS),
+      signedNumberToBytes(new Uint8Array(8), 0x0002, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      SSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x20, 32)
+    );
+    // SIE cleared, SPIE set; MIE/MPIE/MPP preserved → 0x18a8.
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MSTATUS),
+      signedNumberToBytes(new Uint8Array(8), 0x18a8, 32)
+    );
+  });
+
+  it('CSR access from U to an M-mode CSR is illegal', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    csrrs(registers, testMemory(256n), {
+      destinationRegister: 1,
+      sourceRegister1: 0,
+      controlAndStatusRegister: MSTATUS,
+      instructionWord: 0x300020f3,
+    });
+    assert.deepEqual(
+      readControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
     );
   });
 

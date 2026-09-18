@@ -3,8 +3,9 @@
 A RISC-V emulator written in TypeScript for Node (>= 24, ESM only). The CLI (`src/index.ts`)
 reads a raw program image, starts the emulator and Ink TUI, and wires them over streams.
 
-**Work in progress.** RV64I, RV64M, Zicsr, and M-mode synchronous traps (`ecall`/`ebreak`/illegal →
-`mtvec`, plus `mret`) are implemented; further extensions and privilege levels are still to come.
+**Work in progress.** RV64I, RV64M, Zicsr, U/S/M privilege (`mret`/`sret`, `medeleg`, S-mode trap
+CSRs), and synchronous traps (`ecall`/`ebreak`/illegal → `mtvec`/`stvec`) are implemented; further
+extensions, interrupts, and virtual memory are still to come.
 Missing instructions and features are unfinished work, not deliberate scope — don't treat the
 current opcode coverage in `decode.ts` as the intended ceiling, and don't add code that assumes
 today's ISA is all there will ever be.
@@ -70,17 +71,20 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - **Guest memory is a `SharedArrayBuffer`** shared with the worker, accessed with plain byte reads
   and writes. The absence of `Atomics` is deliberate: unsynchronized hosts should race like real
   memory.
-- **M-mode synchronous traps.** `ecall`, `ebreak`, and illegal encodings call `enterTrap` in
-  `trap.ts`: they write `mepc`/`mcause`/`mtval`, update `mstatus` (MPIE←MIE, MIE←0, MPP←M), and
-  set the PC from `mtvec` (direct mode). `mret` restores that stack and returns to `mepc`. No
-  U/S modes or interrupts yet.
-- **Zicsr checks CSR existence.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live in
-  `system.ts` (SYSTEM opcode group). Only the implemented set is accessible (`mstatus`, `mtvec`,
-  `mepc`, `mcause`, `mtval`, and the identity CSRs); any other index raises illegal-instruction.
-  Writes to read-only CSRs also illegal; `csrrs`/`csrrc` with `rs1` = `x0` and `csrrsi`/`csrrci`
-  with a zero immediate are read-only and may touch identity CSRs. They snapshot the CSR slot
-  before writing `rd` (the file is live). Do not add privilege checks or WARL masks until
-  multi-mode support exists.
+- **Privilege modes and synchronous traps.** The hart tracks U/S/M in `registers.privilegeMode`
+  (8-byte little-endian; reset = M). `ecall`, `ebreak`, and illegal encodings call `enterTrap` in `trap.ts`: they write
+  `xepc`/`xcause`/`xtval`, update enable stacks (`MPIE`/`MIE`/`MPP` or `SPIE`/`SIE`/`SPP`), set
+  privilege to M or S (when `medeleg` delegates and the hart is below M), and set the PC from
+  `mtvec`/`stvec` (direct mode). `mret`/`sret` restore that stack and return to `mepc`/`sepc`.
+  `ecall` cause is 8/9/11 by mode. No interrupt delivery yet.
+- **Zicsr checks CSR existence and privilege.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live
+  in `system.ts` (SYSTEM opcode group). Only the implemented set is accessible (`mstatus`/
+  `sstatus`, `medeleg`, `mtvec`/`stvec`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, and the
+  identity CSRs); any other index or an access above the current privilege raises
+  illegal-instruction. Writes to read-only CSRs also illegal; `csrrs`/`csrrc` with `rs1` = `x0` and
+  `csrrsi`/`csrrci` with a zero immediate are read-only and may touch identity CSRs. `sstatus` is a
+  masked alias of `mstatus`; `mstatus` MPP is WARL (reserved → U). They snapshot the CSR slot
+  before writing `rd` (the file is live).
 
 ## Adding instructions
 
