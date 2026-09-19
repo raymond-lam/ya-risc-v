@@ -17,22 +17,23 @@
 import { createMemory, type Memory, type ReadonlyUint8Array } from '#emulator/memory';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
-/** Test map: RAM at guest PA 0, UART at `0x1000_0000`. */
+/** Test map: RAM at guest physical address 0, UART at `0x1000_0000`, CLINT at `0x0200_0000`. */
 const RAM_BASE_ADDRESS = new Uint8Array(8) as ReadonlyUint8Array;
 const UART_BASE_ADDRESS = unsignedBigIntToBytes(
   new Uint8Array(8),
   0x1000_0000n
 ) as ReadonlyUint8Array;
+const CLINT_BASE_ADDRESS = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  0x0200_0000n
+) as ReadonlyUint8Array;
 
-const createTestMemory = (ramSize: bigint): Memory => ({
-  bytes: createMemory({
+const createTestMemory = (ramSize: bigint): Memory =>
+  createMemory({
     ramBaseAddress: RAM_BASE_ADDRESS,
     ramSize,
     uartBaseAddress: UART_BASE_ADDRESS,
-  }),
-  ramBaseAddress: RAM_BASE_ADDRESS,
-  ramSize,
-  uartBaseAddress: UART_BASE_ADDRESS,
-});
+    clintBaseAddress: CLINT_BASE_ADDRESS,
+  });
 
 export default createTestMemory;

@@ -26,8 +26,8 @@ type Registers = {
   programCounter: Uint8Array;
   /**
    * Dense CSR file keyed by 12-bit index. Only the implemented set is guest-accessible;
-   * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only. `sstatus` is an
-   * alias of `mstatus` (handled in the register helpers, not a separate slot).
+   * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only. `sstatus`/`sie`/`sip`
+   * are aliases of `mstatus`/`mie`/`mip` (handled in the register helpers, not separate slots).
    */
   controlAndStatus: readonly Uint8Array[] & {
     readonly 0xf11: ReadonlyUint8Array; // mvendorid
@@ -56,9 +56,9 @@ type CpuCreateOptions = {
 type CpuWorkerData = CpuCreateOptions;
 
 type CpuHandle = Promise<void> & {
-  /** Spawn the CPU worker. */
+  /** Spawn the CPU worker. Throws if already started or already stopped. */
   start: () => void;
-  /** Stop the worker, or settle immediately if it never started. */
+  /** Stop the worker. Throws if not started; idempotent after the first stop. */
   stop: () => void;
 };
 

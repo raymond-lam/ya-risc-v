@@ -16,13 +16,13 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
 import {
   createMemory,
   loadBytes,
   popTransmit,
   pushReceive,
   storeBytes,
-  type Memory,
   type ReadonlyUint8Array,
 } from '#emulator/memory';
 import createTestMemory from '#test/guest-memory';
@@ -33,8 +33,13 @@ const LSR_DR = 0x01;
 const LSR_THRE = 0x20;
 const LSR_TEMT = 0x40;
 
+/** CLINT register offsets relative to base — local to tests. */
+const CLINT_MTIMECMP_OFFSET = 0x4000n;
+const CLINT_MTIME_OFFSET = 0xbff8n;
+
 const RAM_BASE = new Uint8Array(8) as ReadonlyUint8Array;
 const UART_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n) as ReadonlyUint8Array;
+const CLINT_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n) as ReadonlyUint8Array;
 const HIGH_RAM_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000n) as ReadonlyUint8Array;
 
 const uartAddress = (registerIndex: number): ReadonlyUint8Array => {
@@ -103,20 +108,16 @@ describe('memory', () => {
     assert.equal(memory.bytes[16], 0x42);
   });
 
-  it('maps RAM at a non-zero base without allocating the guest PA hole', () => {
+  it('maps RAM at a non-zero base without allocating the guest physical-address hole', () => {
     const ramSize = 64n;
-    const memory: Memory = {
-      bytes: createMemory({
-        ramBaseAddress: HIGH_RAM_BASE,
-        ramSize,
-        uartBaseAddress: UART_BASE,
-      }),
+    const memory = createMemory({
       ramBaseAddress: HIGH_RAM_BASE,
       ramSize,
       uartBaseAddress: UART_BASE,
-    };
+      clintBaseAddress: CLINT_BASE,
+    });
 
-    // Guest PA 0x8000_0000 + 4 → host index 4
+    // Guest physical address 0x8000_0000 + 4 → host index 4
     const ramAddress = new Uint8Array(HIGH_RAM_BASE);
     ramAddress[0] = 4;
     storeBytes({
@@ -127,7 +128,7 @@ describe('memory', () => {
     });
     assert.equal(memory.bytes[4], 0x5a);
 
-    // Low guest PA 4 is unmapped when RAM base is 0x8000_0000
+    // Low guest physical address 4 is unmapped when RAM base is 0x8000_0000
     const low = new Uint8Array(8);
     loadBytes({
       destination: low,
@@ -145,18 +146,33 @@ describe('memory', () => {
           ramBaseAddress: RAM_BASE,
           ramSize: 0x1000_0000n + 1n,
           uartBaseAddress: UART_BASE,
+          clintBaseAddress: CLINT_BASE,
         }),
       /overlaps RAM/
     );
   });
 
   it('allows large RAM when UART sits below a high RAM base', () => {
-    const bytes = createMemory({
+    const memory = createMemory({
       ramBaseAddress: HIGH_RAM_BASE,
       ramSize: 0x1000_0000n + 1n,
       uartBaseAddress: UART_BASE,
+      clintBaseAddress: CLINT_BASE,
     });
-    assert.ok(bytes.byteLength > Number(0x1000_0000n + 1n));
+    assert.ok(memory.bytes.byteLength > Number(0x1000_0000n + 1n));
+  });
+
+  it('rejects a CLINT window that overlaps RAM', () => {
+    assert.throws(
+      () =>
+        createMemory({
+          ramBaseAddress: CLINT_BASE,
+          ramSize: 0xc000n,
+          uartBaseAddress: UART_BASE,
+          clintBaseAddress: CLINT_BASE,
+        }),
+      /CLINT window overlaps RAM/
+    );
   });
 });
 
@@ -274,5 +290,84 @@ describe('uart queues', () => {
     const lsr = new Uint8Array(8);
     loadBytes({ destination: lsr, memory, address: uartAddress(5), byteLength: 1 });
     assert.equal(lsr[0], LSR_THRE | LSR_TEMT);
+  });
+});
+
+describe('clint', () => {
+  const clintAddress = (offset: bigint): ReadonlyUint8Array =>
+    unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n + offset);
+
+  it('resets with mtimecmp all-ones so the timer is not pending', () => {
+    const memory = createTestMemory(64n);
+    assert.equal(isClintMachineTimerPending(memory), false);
+  });
+
+  it('msip bit 0 drives the software IRQ wire', () => {
+    const memory = createTestMemory(64n);
+    assert.equal(isClintMachineSoftwarePending(memory), false);
+
+    storeBytes({
+      memory,
+      address: clintAddress(0n),
+      source: new Uint8Array([1, 0, 0, 0]),
+      byteLength: 4,
+    });
+    assert.equal(isClintMachineSoftwarePending(memory), true);
+
+    const msip = new Uint8Array(8);
+    loadBytes({ destination: msip, memory, address: clintAddress(0n), byteLength: 4 });
+    assert.deepEqual(msip.subarray(0, 4), new Uint8Array([1, 0, 0, 0]));
+
+    storeBytes({
+      memory,
+      address: clintAddress(0n),
+      source: new Uint8Array([0, 0, 0, 0]),
+      byteLength: 4,
+    });
+    assert.equal(isClintMachineSoftwarePending(memory), false);
+  });
+
+  it('asserts pending when mtime is written at or above mtimecmp', () => {
+    const memory = createTestMemory(64n);
+    storeBytes({
+      memory,
+      address: clintAddress(CLINT_MTIMECMP_OFFSET),
+      source: unsignedBigIntToBytes(new Uint8Array(8), 100n),
+      byteLength: 8,
+    });
+    storeBytes({
+      memory,
+      address: clintAddress(CLINT_MTIME_OFFSET),
+      source: unsignedBigIntToBytes(new Uint8Array(8), 100n),
+      byteLength: 8,
+    });
+    assert.equal(isClintMachineTimerPending(memory), true);
+
+    storeBytes({
+      memory,
+      address: clintAddress(CLINT_MTIMECMP_OFFSET),
+      source: unsignedBigIntToBytes(new Uint8Array(8), 10_000n),
+      byteLength: 8,
+    });
+    assert.equal(isClintMachineTimerPending(memory), false);
+  });
+
+  it('round-trips mtimecmp through loadBytes/storeBytes', () => {
+    const memory = createTestMemory(64n);
+    const value = unsignedBigIntToBytes(new Uint8Array(8), 0x0123_4567_89ab_cdefn);
+    storeBytes({
+      memory,
+      address: clintAddress(CLINT_MTIMECMP_OFFSET),
+      source: value,
+      byteLength: 8,
+    });
+    const destination = new Uint8Array(8);
+    loadBytes({
+      destination,
+      memory,
+      address: clintAddress(CLINT_MTIMECMP_OFFSET),
+      byteLength: 8,
+    });
+    assert.deepEqual(destination, value);
   });
 });

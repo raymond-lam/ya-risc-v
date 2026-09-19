@@ -26,14 +26,14 @@ const parseRamSize = (value: string): bigint => {
   try {
     const ramSize = BigInt(value);
     if (ramSize < 0n) {
-      throw new InvalidArgumentError('ram size must be non-negative');
+      throw new InvalidArgumentError('ram size must be non-negative.');
     }
     return ramSize;
   } catch (error) {
     if (error instanceof InvalidArgumentError) {
       throw error;
     }
-    throw new InvalidArgumentError('ram size must be an integer (decimal or 0x… hex)');
+    throw new InvalidArgumentError('ram size must be an integer (decimal or 0x… hex).');
   }
 };
 

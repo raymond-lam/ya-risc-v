@@ -21,7 +21,7 @@ import { loadBytes, storeBytes } from '#emulator/memory';
 import testMemory from '#test/guest-memory';
 import {
   createRegisters,
-  readControlAndStatusRegister,
+  snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
@@ -69,7 +69,7 @@ describe('decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x11, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, 0x300),
+      snapshotControlAndStatusRegister(registers, 0x300),
       signedNumberToBytes(new Uint8Array(8), 0x22, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
@@ -85,7 +85,7 @@ describe('decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, 0x300),
+      snapshotControlAndStatusRegister(registers, 0x300),
       signedNumberToBytes(new Uint8Array(8), 31, 32)
     );
   });
@@ -250,13 +250,13 @@ describe('decode + execute', () => {
     decode(instructionBytes(0xffff_ffff))(registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
     assert.deepEqual(
-      readControlAndStatusRegister(registers, 0x341),
+      snapshotControlAndStatusRegister(registers, 0x341),
       signedNumberToBytes(new Uint8Array(8), 0x40, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, 0x342),
+      snapshotControlAndStatusRegister(registers, 0x342),
       signedNumberToBytes(new Uint8Array(8), 2, 32)
     );
-    assert.equal(bytesToNumber(readControlAndStatusRegister(registers, 0x343)), 0xffff_ffff);
+    assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, 0x343)), 0xffff_ffff);
   });
 });

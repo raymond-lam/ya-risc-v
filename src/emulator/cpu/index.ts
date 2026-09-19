@@ -37,8 +37,11 @@ class Cpu implements CpuHandle {
   }
 
   start = (): void => {
-    if (this.#started || this.#stopped) {
-      return;
+    if (this.#stopped) {
+      throw new Error('Already stopped.');
+    }
+    if (this.#started) {
+      throw new Error('Already started.');
     }
     this.#started = true;
     const workerData = {
@@ -59,6 +62,9 @@ class Cpu implements CpuHandle {
   };
 
   stop = (): void => {
+    if (!this.#started) {
+      throw new Error('Not started.');
+    }
     if (this.#stopped) {
       return;
     }

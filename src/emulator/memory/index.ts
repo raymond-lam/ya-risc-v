@@ -16,6 +16,15 @@
 
 import { addBytes, copyBytes, signedNumberToBytes } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#utils/bytes';
+import {
+  CLINT_HOST_SIZE,
+  clintAddressToRegister,
+  clintOverlapsRam,
+  clintOverlapsUart,
+  initializeClint,
+  loadClintByte,
+  storeClintByte,
+} from '#emulator/memory/clint';
 import { loadRamByte, ramAddressToHostIndex, storeRamByte } from '#emulator/memory/ram';
 import {
   loadUartRegister,
@@ -30,26 +39,66 @@ import type { Memory } from '#emulator/memory/types';
 
 const ONE_BYTE = signedNumberToBytes(new Uint8Array(8), 1, 32) as ReadonlyUint8Array;
 
+const locationFromGuestAddress = (
+  memory: Memory,
+  address: ReadonlyUint8Array
+):
+  | { region: 'uart'; registerIndex: number }
+  | { region: 'clint'; register: 'msip' | 'mtime' | 'mtimecmp'; byteOffset: number }
+  | { region: 'ram' }
+  | { region: 'unmapped' } => {
+  const uartRegisterIndex = uartAddressToRegisterIndex(memory, address);
+  if (uartRegisterIndex !== null) {
+    return { region: 'uart', registerIndex: uartRegisterIndex };
+  }
+  const clint = clintAddressToRegister(memory, address);
+  if (clint !== null) {
+    return { region: 'clint', register: clint.register, byteOffset: clint.byteOffset };
+  }
+  if (ramAddressToHostIndex(memory, address) !== null) {
+    return { region: 'ram' };
+  }
+  return { region: 'unmapped' };
+};
+
 /**
- * Allocate a SharedArrayBuffer for RAM, the UART register shadow, and RX/TX rings.
- * Returns only the byte view; the caller builds a `Memory` record around it.
+ * Allocate guest memory (RAM + UART queues + CLINT shadows in one SharedArrayBuffer)
+ * and initialize the CLINT timebase (`mtime` = 0, `mtimecmp` = all-ones).
  */
 const createMemory = ({
   ramBaseAddress,
   ramSize,
   uartBaseAddress,
+  clintBaseAddress,
 }: {
   ramBaseAddress: ReadonlyUint8Array;
   ramSize: bigint;
   uartBaseAddress: ReadonlyUint8Array;
-}): Uint8Array => {
+  clintBaseAddress: ReadonlyUint8Array;
+}): Memory => {
   if (ramSize < 0n) {
-    throw new RangeError('ramSize must be non-negative');
+    throw new RangeError('ramSize must be non-negative.');
   }
   if (uartOverlapsRam({ ramBaseAddress, ramSize, uartBaseAddress })) {
-    throw new RangeError('UART window overlaps RAM');
+    throw new RangeError('UART window overlaps RAM.');
   }
-  return new Uint8Array(new SharedArrayBuffer(uartPackedByteLength(ramSize)));
+  if (clintOverlapsRam({ ramBaseAddress, ramSize, clintBaseAddress })) {
+    throw new RangeError('CLINT window overlaps RAM.');
+  }
+  if (clintOverlapsUart({ uartBaseAddress, clintBaseAddress })) {
+    throw new RangeError('CLINT window overlaps UART.');
+  }
+  const clintHostBaseIndex = uartPackedByteLength(ramSize);
+  const memory: Memory = {
+    bytes: new Uint8Array(new SharedArrayBuffer(clintHostBaseIndex + CLINT_HOST_SIZE)),
+    ramBaseAddress,
+    ramSize,
+    uartBaseAddress,
+    clintBaseAddress,
+    clintHostBaseIndex,
+  };
+  initializeClint(memory);
+  return memory;
 };
 
 /** Copy `byteLength` bytes from `memory` at guest `address` into `destination` (high bytes cleared). */
@@ -67,12 +116,22 @@ const loadBytes = ({
   destination.fill(0);
   const addressCursor = copyBytes(new Uint8Array(8), address);
   for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
-    const registerIndex = uartAddressToRegisterIndex(memory, addressCursor);
-    if (registerIndex !== null) {
-      destination[byteIndex] = loadUartRegister(memory, registerIndex);
-    } else {
-      const hostIndex = ramAddressToHostIndex(memory, addressCursor);
-      destination[byteIndex] = hostIndex === null ? 0 : loadRamByte(memory, hostIndex);
+    const location = locationFromGuestAddress(memory, addressCursor);
+    switch (location.region) {
+      case 'uart':
+        destination[byteIndex] = loadUartRegister(memory, location.registerIndex);
+        break;
+      case 'clint':
+        destination[byteIndex] = loadClintByte(memory, location.register, location.byteOffset);
+        break;
+      case 'ram': {
+        const hostIndex = ramAddressToHostIndex(memory, addressCursor);
+        destination[byteIndex] = hostIndex === null ? 0 : loadRamByte(memory, hostIndex);
+        break;
+      }
+      case 'unmapped':
+        destination[byteIndex] = 0;
+        break;
     }
     addBytes(addressCursor, addressCursor, ONE_BYTE);
   }
@@ -93,19 +152,29 @@ const storeBytes = ({
   const addressCursor = copyBytes(new Uint8Array(8), address);
   for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
     const value = source[byteIndex] ?? 0;
-    const registerIndex = uartAddressToRegisterIndex(memory, addressCursor);
-    if (registerIndex !== null) {
-      storeUartRegister(memory, registerIndex, value);
-    } else {
-      const hostIndex = ramAddressToHostIndex(memory, addressCursor);
-      if (hostIndex !== null) {
-        storeRamByte(memory, hostIndex, value);
+    const location = locationFromGuestAddress(memory, addressCursor);
+    switch (location.region) {
+      case 'uart':
+        storeUartRegister(memory, location.registerIndex, value);
+        break;
+      case 'clint':
+        storeClintByte(memory, location.register, location.byteOffset, value);
+        break;
+      case 'ram': {
+        const hostIndex = ramAddressToHostIndex(memory, addressCursor);
+        if (hostIndex !== null) {
+          storeRamByte(memory, hostIndex, value);
+        }
+        break;
       }
+      case 'unmapped':
+        break;
     }
     addBytes(addressCursor, addressCursor, ONE_BYTE);
   }
 };
 
-export { createMemory, loadBytes, popTransmit, pushReceive, storeBytes };
+export { createMemory, loadBytes, popTransmit, pushReceive, storeBytes, ramAddressToHostIndex };
+export { tickClint } from '#emulator/memory/clint';
 export type { Memory } from '#emulator/memory/types';
 export type { ReadonlyUint8Array } from '#utils/bytes';
