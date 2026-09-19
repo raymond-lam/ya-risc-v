@@ -39,9 +39,9 @@ type TerminalWorkerData = {
 };
 
 type TerminalHandle = Promise<void> & {
-  /** Spawn the terminal worker. */
+  /** Spawn the terminal worker. Throws if already started or already stopped. */
   start: () => void;
-  /** Stop the worker, or settle immediately if it never started. */
+  /** Stop the worker. Throws if not started; idempotent after the first stop. */
   stop: () => void;
 };
 

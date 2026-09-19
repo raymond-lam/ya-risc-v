@@ -17,19 +17,26 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  MIDELEG,
+  MIE,
+  MIP,
   PRIVILEGE_MACHINE,
   advanceProgramCounter,
   createRegisters,
-  readControlAndStatusRegister,
+  snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
   readPrivilegeMode,
   readProgramCounter,
   setBooleanGeneralPurposeRegister,
+  setMachineTimerInterruptPending,
   setProgramCounter,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+
+const SIE = 0x104;
+const SIP = 0x144;
 
 describe('registers', () => {
   it('resets in machine mode', () => {
@@ -77,7 +84,7 @@ describe('registers', () => {
     const registers = createRegisters();
     const value = signedNumberToBytes(new Uint8Array(8), 0x1234, 32);
     writeControlAndStatusRegister(registers, 0x305, value);
-    assert.deepEqual(readControlAndStatusRegister(registers, 0x305), value);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, 0x305), value);
   });
 
   it('x0 ignores writes at runtime', () => {
@@ -93,7 +100,7 @@ describe('registers', () => {
     const registers = createRegisters();
     writeControlAndStatusRegister(registers, 0xf14, signedNumberToBytes(new Uint8Array(8), 99, 32));
     assert.deepEqual(
-      [...readControlAndStatusRegister(registers, 0xf14)],
+      [...snapshotControlAndStatusRegister(registers, 0xf14)],
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
   });
@@ -107,8 +114,96 @@ describe('registers', () => {
       signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, 0x300),
+      snapshotControlAndStatusRegister(registers, 0x300),
       signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+  });
+
+  it('mie WARL keeps implemented enables; mip CSR writes leave MSIP/MTIP alone', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), 0xffff, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MIP,
+      signedNumberToBytes(new Uint8Array(8), 0xffff, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIE),
+      signedNumberToBytes(new Uint8Array(8), 0x0aaa, 32)
+    );
+    // Writable pending bits only (no MSIP/MTIP from CSR).
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      signedNumberToBytes(new Uint8Array(8), 0x0a22, 32)
+    );
+
+    setMachineTimerInterruptPending(registers, true);
+    writeControlAndStatusRegister(registers, MIP, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    // MTIP survives a software clear of mip.
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
+  });
+
+  it('mideleg WARL keeps only supervisor interrupt causes', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MIDELEG,
+      signedNumberToBytes(new Uint8Array(8), 0xffff, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIDELEG),
+      signedNumberToBytes(new Uint8Array(8), 0x0222, 32)
+    );
+  });
+
+  it('sie/sip are masked views of mie/mip', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), 0x0aaa, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MIP,
+      signedNumberToBytes(new Uint8Array(8), 0x0a22, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SIE),
+      signedNumberToBytes(new Uint8Array(8), 0x0222, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SIP),
+      signedNumberToBytes(new Uint8Array(8), 0x0222, 32)
+    );
+
+    writeControlAndStatusRegister(registers, SIE, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    // M bits preserved; S bits cleared.
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIE),
+      signedNumberToBytes(new Uint8Array(8), 0x0888, 32)
+    );
+
+    writeControlAndStatusRegister(
+      registers,
+      SIP,
+      signedNumberToBytes(new Uint8Array(8), 1 << 5, 32)
+    );
+    // STIP via sip; SSIP/SEIP cleared; MEIP from earlier mip write preserved.
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      signedNumberToBytes(new Uint8Array(8), 0x0820, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SIP),
+      signedNumberToBytes(new Uint8Array(8), 0x0020, 32)
     );
   });
 });

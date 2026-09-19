@@ -16,8 +16,16 @@
 
 import { parentPort, workerData } from 'node:worker_threads';
 import decode from '#emulator/cpu/decode';
+import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
 import { loadBytes } from '#emulator/memory';
-import { createRegisters, readProgramCounter, setProgramCounter } from '#emulator/cpu/registers';
+import {
+  createRegisters,
+  readProgramCounter,
+  setMachineSoftwareInterruptPending,
+  setMachineTimerInterruptPending,
+  setProgramCounter,
+} from '#emulator/cpu/registers';
+import { takeInterruptIfAny } from '#emulator/cpu/trap';
 import type { CpuWorkerData } from '#emulator/cpu/types';
 
 const main = (): void => {
@@ -28,6 +36,11 @@ const main = (): void => {
 
   // No exit condition: the hart runs until the host terminates us.
   for (;;) {
+    setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
+    setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));
+    if (takeInterruptIfAny(registers)) {
+      continue;
+    }
     loadBytes({
       destination: instructionWord,
       memory,

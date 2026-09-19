@@ -14,22 +14,17 @@
  * limitations under the License.
  */
 
-import { Readable, Writable } from 'node:stream';
 import { Worker } from 'node:worker_threads';
 import workerExecArgv from '#utils/worker-exec-argv';
-import type {
-  TerminalCreateOptions,
-  TerminalHandle,
-  TerminalWorkerData,
-} from '#emulator/terminal/types';
+import type { ClintCreateOptions, ClintHandle, ClintWorkerData } from '#emulator/clint/types';
 
 /* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
-class Terminal implements TerminalHandle {
+class Clint implements ClintHandle {
   readonly [Symbol.toStringTag] = 'Promise';
 
   readonly #lifetime = Promise.withResolvers<void>();
 
-  readonly #options: TerminalCreateOptions;
+  readonly #options: ClintCreateOptions;
 
   #worker: Worker | undefined;
 
@@ -37,7 +32,7 @@ class Terminal implements TerminalHandle {
 
   #stopped = false;
 
-  constructor(options: TerminalCreateOptions) {
+  constructor(options: ClintCreateOptions) {
     this.#options = options;
   }
 
@@ -49,17 +44,12 @@ class Terminal implements TerminalHandle {
       throw new Error('Already started.');
     }
     this.#started = true;
-    const stdinWeb = Readable.toWeb(this.#options.stdin);
-    const stdoutWeb = Writable.toWeb(this.#options.stdout);
     const workerData = {
       memory: this.#options.memory,
-      stdin: stdinWeb,
-      stdout: stdoutWeb,
-    } satisfies TerminalWorkerData;
-    const worker = new Worker(new URL(import.meta.resolve('#emulator/terminal/run')), {
+    } satisfies ClintWorkerData;
+    const worker = new Worker(new URL(import.meta.resolve('#emulator/clint/run')), {
       execArgv: workerExecArgv(),
       workerData,
-      transferList: [stdinWeb, stdoutWeb],
     });
     this.#worker = worker;
     worker.once('error', (error) => {
@@ -103,7 +93,9 @@ class Terminal implements TerminalHandle {
   }
 }
 
-const create = (options: TerminalCreateOptions): TerminalHandle => new Terminal(options);
+const create = (options: ClintCreateOptions): ClintHandle => new Clint(options);
 
 export { create };
-export type { TerminalCreateOptions, TerminalHandle } from '#emulator/terminal/types';
+/** Re-export so unused host `create`/`Worker` can tree-shake out of workers. */
+export { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint/wire';
+export type { ClintCreateOptions, ClintHandle } from '#emulator/clint/types';

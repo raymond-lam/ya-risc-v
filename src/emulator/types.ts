@@ -19,7 +19,8 @@ import type { Readable, Writable } from 'node:stream';
 
 /**
  * Host arguments to create the emulator (CPU + UART terminal workers).
- * DRAM base is `0x8000_0000`; UART is at `0x1000_0000`. `ramSize` is required.
+ * DRAM base is `0x8000_0000`; UART is at `0x1000_0000`; CLINT is at `0x0200_0000`.
+ * `ramSize` is required.
  */
 type EmulatorCreateOptions = {
   /** Flat program image copied into guest RAM at the RAM base. */
@@ -30,15 +31,15 @@ type EmulatorCreateOptions = {
   stdout: Writable;
   /**
    * Guest DRAM size in bytes. Must be at least `image.byteLength` and must not
-   * overlap the UART window.
+   * overlap the UART or CLINT windows.
    */
   ramSize: bigint;
 };
 
 type EmulatorHandle = Promise<void> & {
-  /** Start the CPU and UART terminal workers. */
+  /** Start the CPU, CLINT, and UART terminal workers. Throws if already started or already stopped. */
   start: () => void;
-  /** Stop both workers. */
+  /** Stop all workers. Throws if not started; idempotent after the first stop. */
   stop: () => void;
 };
 

@@ -4,12 +4,13 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 > [!WARNING]
 > **This is a work in progress and nowhere near finished.** RV64I, RV64M, and Zicsr execute and are
-> covered by tests. U/S/M privilege modes, `mret`/`sret`, `sstatus`/`medeleg`/S-mode trap CSRs, and
-> M-mode synchronous traps (`ecall`/`ebreak`/illegal → `mtvec`/`stvec` with delegation) are in place.
-> A polled 16550 UART plus an Ink TUI console path exist, but there is no interrupt delivery, no
-> timer (CLINT), no further ISA extensions, and no OS boot path. It cannot run Linux yet. Anything
-> listed under [Not yet implemented](#not-yet-implemented) is unfinished work rather than a
-> deliberate limit on scope — the goal is a much more complete machine than what is here today.
+> covered by tests. U/S/M privilege modes, `mret`/`sret`, trap CSRs, synchronous traps, interrupt
+> delivery, and a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`) are in
+> place. A polled 16550
+> UART plus an Ink TUI console path exist, but there is no PLIC, no further ISA extensions, and no
+> OS boot path. It cannot run Linux yet. Anything listed under
+> [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate limit on
+> scope — the goal is a much more complete machine than what is here today.
 
 ## Status
 
@@ -21,44 +22,54 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **RV64M** multiply/divide: `mul`/`mulh`/`mulhsu`/`mulhu`, `div`/`divu`, `rem`/`remu`, and the
   32-bit forms `mulw`, `divw`/`divuw`, `remw`/`remuw` (including the ÷0 and signed-overflow cases).
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
-  Only implemented CSRs are accessible (`mstatus`/`sstatus`, `medeleg`, `mtvec`/`stvec`,
-  `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, identity); other indices, insufficient
-  privilege, and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the
-  write when the source is zero. `sstatus` is a masked view of `mstatus`. No interrupt CSRs or
-  WARL beyond MPP legalization yet.
+  Only implemented CSRs are accessible (`mstatus`/`sstatus`, `medeleg`/`mideleg`, `mie`/`mip`,
+  `sie`/`sip`, `mtvec`/`stvec`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, identity);
+  other indices, insufficient privilege, and writes to read-only CSRs raise illegal-instruction.
+  `csrrs`/`csrrc` skip the write when the source is zero. `sstatus`/`sie`/`sip` are masked views
+  of `mstatus`/`mie`/`mip`. WARL: MPP legalization; `mie`/`mideleg` to implemented IRQ bits;
+  `mip` preserves hardware `MSIP`/`MTIP`.
 - **Privilege modes:** the hart tracks U/S/M (reset = M). Traps record `MPP`/`SPP`, switch mode,
-  and vector through `mtvec` or `stvec` when `medeleg` delegates. `mret`/`sret` restore the
-  previous mode; `ecall` uses causes 8/9/11 by mode. `mret` is M-only; `sret` is illegal in U.
-- **M-mode synchronous traps:** `ecall`, `ebreak`, and illegal encodings write `xepc` / `xcause` /
+  and vector through `mtvec` or `stvec` when `medeleg`/`mideleg` delegates. `mret`/`sret` restore
+  the previous mode; `ecall` uses causes 8/9/11 by mode. `mret` is M-only; `sret` is illegal in U.
+- **Synchronous traps:** `ecall`, `ebreak`, and illegal encodings write `xepc` / `xcause` /
   `xtval`, update status enable stacks, and jump to the chosen `xtvec` (direct mode).
+- **Interrupts:** the CLINT tick worker advances `mtime` and drives a timer IRQ wire; guest `msip`
+  stores drive a software IRQ wire; the CPU run loop samples both into `mip.MTIP` / `mip.MSIP`,
+  then calls `takeInterruptIfAny` before each fetch. Pending∧enabled local interrupts vector with
+  the `xcause` interrupt bit set; global `MIE`/`SIE` and privilege rules apply; `mideleg` sends
+  supervisor causes to S. `mip.MSIP` and `mip.MTIP` are CLINT-driven (not CSR-writable).
+- **CLINT:** MMIO at `0x02000000` — `msip` at `+0x0000` (bit 0), `mtimecmp` at
+  `+0x4000`, `mtime` at `+0xbff8`, 10 MHz timebase from `process.hrtime` on its own worker. Reset:
+  `mtime` = 0, `mtimecmp` = all-ones, `msip` clear. Guest may write `mtime` (reseats the epoch) or
+  `mtimecmp` to arm/clear the timer; write `msip` bit 0 to assert/clear the software interrupt.
 - `fence`, decoded and executed as a no-op, which is architecturally legal for this emulator.
 - Integer registers x0–x31, the program counter, and a dense 4096-entry CSR file backing the
   implemented set, with x0 and the identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`)
   hardwired read-only.
 - A fetch/decode/execute loop running on a worker thread against shared guest memory, with decoded
   instructions memoized by their 32-bit encoding.
-- **Guest memory map:** DRAM at `0x80000000` (size set by the caller / `--ram-size`), plus a fixed
-  8-byte **16550 UART** window at `0x10000000` (RBR/THR queues and LSR DR/THRE/TEMT). Flat images
-  are copied to the RAM base (reset PC matches). Guest I/O is polled; there is no UART interrupt
-  line yet.
+- **Guest memory map:** DRAM at `0x80000000` (size set by the caller / `--ram-size`), a fixed
+  8-byte **16550 UART** window at `0x10000000` (RBR/THR queues and LSR DR/THRE/TEMT), and a
+  **CLINT** at `0x02000000` (`msip` / `mtimecmp` / `mtime`). Flat images are copied to the RAM base (reset
+  PC matches). Guest I/O is polled; there is no UART interrupt line yet.
 - **Host console:** a terminal worker bridges UART RX/TX to streams, and an Ink TUI paints guest
   output with a headless VT100 emulator (`@xterm/headless`), with click-to-focus and Shutdown.
-- Unit tests over the decoder, instructions, traps, registers, memory (including UART queues), the
-  terminal worker, byte helpers, and VT100 encoding/viewport helpers.
+- Unit tests over the decoder, instructions, traps, registers, memory (including UART queues and
+  CLINT), the CLINT and terminal workers, byte helpers, and VT100 encoding/viewport helpers.
 
 ### Not yet implemented
 
-- **Interrupts.** No interrupt delivery (`mie`/`mip`/`sie`/`sip`/PLIC), no timer (CLINT). Trap CSRs
-  used by exceptions/`mret`/`sret` and `medeleg` have real semantics; other standard CSRs are not
-  implemented (access raises illegal-instruction).
+- **External IRQs.** Interrupt CSRs, run-loop delivery, and the CLINT timer exist, but there is no
+  PLIC or UART IRQ line. Other standard CSRs are not implemented (access raises illegal-instruction).
 - **Extensions.** No A (atomics), F/D (floating point), or C (compressed).
 - **Virtual memory.** No paging (`satp` / Sv39).
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
 - **Program loading.** Images are flat binaries copied to the RAM base (`0x80000000`); there is no
   ELF loader, DTB, or multi-payload boot (OpenSBI + kernel).
-- **Richer devices.** No CLINT, PLIC, or a fuller 16550 (IER/IIR/FCR, baud divisors, IRQs).
-  Console works via polling only. Low guest PAs below the RAM base are unmapped.
+- **Richer devices.** No PLIC or a fuller 16550 (IER/IIR/FCR, baud divisors, IRQs). Console works
+  via polling only. Low guest physical addresses below the RAM base are unmapped (aside from
+  UART/CLINT).
 
 ## Requirements
 
@@ -120,21 +131,27 @@ and `tsc` over `src/`.
 src/
   index.ts                CLI: create emulator + TUI, start both, await emulator then TUI
   emulator/
-    index.ts              Host-side create(); start()/stop() forward to CPU + terminal
+    index.ts              Host-side create(); start()/stop() forward to CPU + CLINT + terminal
     types.ts              EmulatorCreateOptions / handle (private; re-exported)
     memory/
       index.ts            Public API: createMemory, loadBytes, storeBytes, Memory, …
       types.ts            Memory type (private; re-exported from index)
       ram.ts              RAM host mapping and byte access (private)
       uart.ts             16550 window, RX/TX queues (private)
+      clint.ts            Guest physical-address decode, shadow R/W, init, MMIO side effects (private)
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
-      run.ts              Worker entry point and the fetch/decode/execute loop
+      run.ts              Worker entry: sample CLINT wire, take IRQ, fetch/decode/execute
       decode.ts           Instruction decode into memoized execute thunks
-      trap.ts             M-mode synchronous trap entry and mret
+      trap.ts             Trap/interrupt entry and mret/sret
       registers.ts        Register file: x0–x31, the program counter, and CSRs
       types.ts            Architectural state types (re-exported from index)
       instructions/       One file per opcode group (op-imm.ts, load.ts, branch.ts, …)
+    clint/
+      index.ts            Host-side create()/start()/stop(); isClintMachineTimerPending
+      run.ts              Worker: timebase tick loop (calls tickClint)
+      wire.ts             Drive + sample timer IRQ wire
+      types.ts            Worker payload types (private to the package)
     terminal/
       index.ts            Host-side create()/start()/stop(); UART↔stream bridge
       run.ts              Worker entry

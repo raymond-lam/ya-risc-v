@@ -16,6 +16,7 @@
 
 import { bytesToBigInt } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#utils/bytes';
+import { rangesOverlap } from '#utils/ranges';
 import type { Memory } from '#emulator/memory/types';
 
 /** Guest-visible 16550 register window size (RBR/THR … SCR). */
@@ -81,15 +82,13 @@ const uartOverlapsRam = ({
   ramBaseAddress: ReadonlyUint8Array;
   ramSize: bigint;
   uartBaseAddress: ReadonlyUint8Array;
-}): boolean => {
-  if (ramSize === 0n) {
-    return false;
-  }
-  const ramBase = bytesToBigInt(ramBaseAddress);
-  const uartBase = bytesToBigInt(uartBaseAddress);
-  const uartEnd = uartBase + BigInt(UART_REGISTER_WINDOW);
-  return ramBase < uartEnd && uartBase < ramBase + ramSize;
-};
+}): boolean =>
+  rangesOverlap(
+    bytesToBigInt(ramBaseAddress),
+    ramSize,
+    bytesToBigInt(uartBaseAddress),
+    BigInt(UART_REGISTER_WINDOW)
+  );
 
 /**
  * Map a guest UART address to a register index within the 8-byte window (0..7),

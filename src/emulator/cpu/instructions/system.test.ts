@@ -30,11 +30,17 @@ import {
   sret,
 } from '#emulator/cpu/instructions/system';
 import {
+  MCAUSE,
+  MEPC,
+  MSTATUS,
+  MTVAL,
+  MTVEC,
   PRIVILEGE_MACHINE,
   PRIVILEGE_SUPERVISOR,
   PRIVILEGE_USER,
+  SEPC,
   createRegisters,
-  readControlAndStatusRegister,
+  snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
   readPrivilegeMode,
   readProgramCounter,
@@ -43,23 +49,15 @@ import {
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
-import {
-  CAUSE_BREAKPOINT,
-  CAUSE_ECALL_FROM_M,
-  CAUSE_ECALL_FROM_S,
-  CAUSE_ECALL_FROM_U,
-  CAUSE_ILLEGAL_INSTRUCTION,
-  MCAUSE,
-  MEPC,
-  MSTATUS,
-  MTVAL,
-  MTVEC,
-  SEPC,
-  SSTATUS,
-} from '#emulator/cpu/trap';
+import { CAUSE_BREAKPOINT, CAUSE_ILLEGAL_INSTRUCTION } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 const MHARTID = 0xf14;
+const SSTATUS = 0x100;
+/** Exception causes used in these tests. */
+const CAUSE_ECALL_FROM_U = 8;
+const CAUSE_ECALL_FROM_S = 9;
+const CAUSE_ECALL_FROM_M = 11;
 /** Unimplemented CSR address used in illegal-access tests. */
 const UNIMPLEMENTED_CSR = 0x400;
 
@@ -82,17 +80,17 @@ describe('system', () => {
     ecall(registers, guest);
 
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MEPC),
+      snapshotControlAndStatusRegister(registers, MEPC),
       signedNumberToBytes(new Uint8Array(8), 0x40, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MCAUSE),
+      snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ECALL_FROM_M, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
     // MPIE set, MIE clear, MPP = M → 0x1880.
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x1880, 32)
     );
   });
@@ -110,11 +108,11 @@ describe('system', () => {
     ebreak(registers, guest);
 
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MEPC),
+      snapshotControlAndStatusRegister(registers, MEPC),
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MCAUSE),
+      snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_BREAKPOINT, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
@@ -140,7 +138,7 @@ describe('system', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
     // MIE set, MPIE set, MPP = U → 0x0088.
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x0088, 32)
     );
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
@@ -156,7 +154,7 @@ describe('system', () => {
     );
     mret(registers, testMemory(256n));
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MCAUSE),
+      snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
@@ -180,7 +178,7 @@ describe('system', () => {
     // SIE set, SPIE set, SPP cleared → 0x22 (SPP was set → return to S).
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x22, 32)
     );
   });
@@ -197,7 +195,7 @@ describe('system', () => {
     setPrivilegeMode(registers, PRIVILEGE_USER);
     ecall(registers, guest);
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MCAUSE),
+      snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ECALL_FROM_U, 32)
     );
 
@@ -205,7 +203,7 @@ describe('system', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x10, 32));
     ecall(registers, guest);
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MCAUSE),
+      snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ECALL_FROM_S, 32)
     );
   });
@@ -218,7 +216,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x188a, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, SSTATUS),
+      snapshotControlAndStatusRegister(registers, SSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x0002, 32)
     );
     writeControlAndStatusRegister(
@@ -228,7 +226,7 @@ describe('system', () => {
     );
     // SIE cleared, SPIE set; MIE/MPIE/MPP preserved → 0x18a8.
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x18a8, 32)
     );
   });
@@ -248,7 +246,7 @@ describe('system', () => {
       instructionWord: 0x300020f3,
     });
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MCAUSE),
+      snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
     );
   });
@@ -272,7 +270,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x11, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x22, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
@@ -297,7 +295,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x11, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x22, 32)
     );
   });
@@ -316,7 +314,7 @@ describe('system', () => {
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x22, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
@@ -342,7 +340,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0b1100, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0b1110, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
@@ -358,7 +356,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0b1110, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0b0100, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
@@ -383,7 +381,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x5, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x5, 32)
     );
 
@@ -398,7 +396,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x5, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x5, 32)
     );
   });
@@ -422,7 +420,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0b1100, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0b1010, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
@@ -438,7 +436,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0b1010, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0b1111, 32)
     );
 
@@ -453,7 +451,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0b1111, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0b1100, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 12);
@@ -478,7 +476,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x5, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x5, 32)
     );
 
@@ -493,7 +491,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x5, 32)
     );
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MSTATUS),
+      snapshotControlAndStatusRegister(registers, MSTATUS),
       signedNumberToBytes(new Uint8Array(8), 0x5, 32)
     );
   });
@@ -515,13 +513,16 @@ describe('system', () => {
       instructionWord,
     });
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MCAUSE),
+      snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
     );
-    assert.equal(bytesToNumber(readControlAndStatusRegister(registers, MTVAL)), instructionWord);
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
     assert.deepEqual(
-      [...readControlAndStatusRegister(registers, MHARTID)],
+      [...snapshotControlAndStatusRegister(registers, MHARTID)],
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
     assert.deepEqual(
@@ -561,10 +562,13 @@ describe('system', () => {
       instructionWord,
     });
     assert.deepEqual(
-      readControlAndStatusRegister(registers, MCAUSE),
+      snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
     );
-    assert.equal(bytesToNumber(readControlAndStatusRegister(registers, MTVAL)), instructionWord);
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x3000);
     assert.deepEqual(
       [...readGeneralPurposeRegister(registers, 1)],

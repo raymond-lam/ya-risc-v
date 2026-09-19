@@ -47,18 +47,23 @@ const PRIVILEGE_BY_CSR_LEVEL = [
 
 /** Supervisor-mode CSRs. */
 const SSTATUS = 0x100; // S-visible status (masked view of mstatus)
+const SIE = 0x104; // S-visible interrupt enables (masked view of mie)
 const STVEC = 0x105; // S-mode trap handler address
 const SEPC = 0x141; // PC saved on trap to S
 const SCAUSE = 0x142; // exception/interrupt code for S traps
 const STVAL = 0x143; // faulting address/instruction for S traps
+const SIP = 0x144; // S-visible interrupt pending (masked view of mip)
 
 /** Machine-mode CSRs used by trap entry, `mret`, and delegation. */
 const MSTATUS = 0x300; // global status / interrupt enables / prior privilege
 const MEDELEG = 0x302; // which exceptions are delegated to S
+const MIDELEG = 0x303; // which interrupts are delegated to S
+const MIE = 0x304; // machine interrupt-enable bits
 const MTVEC = 0x305; // M-mode trap handler address
 const MEPC = 0x341; // PC saved on trap to M
 const MCAUSE = 0x342; // exception/interrupt code for M traps
 const MTVAL = 0x343; // faulting address/instruction for M traps
+const MIP = 0x344; // machine interrupt-pending bits
 
 /** Identity CSR addresses (implemented read-only). */
 const MVENDORID = 0xf11; // JEDEC vendor id (hardwired 0)
@@ -85,6 +90,50 @@ const MSTATUS_KEEP_OUTSIDE_SSTATUS = Uint8Array.of(
 ) as ReadonlyUint8Array;
 
 /**
+ * Implemented interrupt enable bits in mie: SSI, MSI, STI, MTI, SEI, MEI
+ * (bits 1, 3, 5, 7, 9, 11) → 0xaaa. Other bits are WPRI (read as zero, writes ignored).
+ */
+const MIE_MASK_BYTES = Uint8Array.of(0xaa, 0x0a, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/**
+ * Software-writable mip bits: SSI, STI, SEI, MEIP (bits 1, 5, 9, 11) → 0xa22.
+ * MSIP and MTIP are hardware-driven by the CLINT and preserved across CSR writes.
+ */
+const MIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0x0a, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/** mip bits driven by devices: MSIP (3) + MTIP (7) → 0x88. (MEIP stays CSR-writable until PLIC.) */
+const MIP_HARDWARE_MASK_BYTES = Uint8Array.of(0x88, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/** mip.MTIP — machine timer interrupt pending (byte0 bit 7). */
+const MIP_BYTE0_MTIP = 0x80;
+
+/** mip.MSIP — machine software interrupt pending (byte0 bit 3). */
+const MIP_BYTE0_MSIP = 0x08;
+
+/** Bits of mie/mip outside the sie/sip view (inverse of SIE_SIP_MASK). */
+const MIE_MIP_KEEP_OUTSIDE_SIE_SIP = Uint8Array.of(
+  0xdd,
+  0xfd,
+  0xff,
+  0xff,
+  0xff,
+  0xff,
+  0xff,
+  0xff
+) as ReadonlyUint8Array;
+
+/**
+ * sie/sip show only supervisor interrupt bits: SSI, STI, SEI (bits 1, 5, 9) → 0x222.
+ */
+const SIE_SIP_MASK_BYTES = Uint8Array.of(0x22, 0x02, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/**
+ * mideleg WARL: only supervisor interrupt causes (SSI/STI/SEI) are delegatable here.
+ * Machine interrupts (MSI/MTI/MEI) always target M.
+ */
+const MIDELEG_MASK_BYTES = Uint8Array.of(0x22, 0x02, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/**
  * MPP ("machine previous privilege") — mstatus bits 12:11, stored in byte1 bits 4:3.
  * On trap entry MPP ← current mode; on mret privilege ← MPP and MPP ← U (user).
  */
@@ -100,16 +149,21 @@ const isIdentityControlAndStatusRegister = (index: number): boolean =>
 
 const isImplementedControlAndStatusRegister = (index: number): boolean =>
   index === SSTATUS ||
+  index === SIE ||
   index === STVEC ||
   index === SEPC ||
   index === SCAUSE ||
   index === STVAL ||
+  index === SIP ||
   index === MSTATUS ||
   index === MEDELEG ||
+  index === MIDELEG ||
+  index === MIE ||
   index === MTVEC ||
   index === MEPC ||
   index === MCAUSE ||
   index === MTVAL ||
+  index === MIP ||
   isIdentityControlAndStatusRegister(index);
 
 const isReadOnlyControlAndStatusRegister = (index: number): boolean =>
@@ -222,10 +276,16 @@ const legalizeMstatus = (mstatus: Uint8Array): Uint8Array => {
 };
 
 const readControlAndStatusRegister = (registers: Registers, index: number): ReadonlyUint8Array => {
-  if (index === SSTATUS) {
-    return andBytes(new Uint8Array(8), registers.controlAndStatus[MSTATUS]!, SSTATUS_MASK_BYTES);
+  switch (index) {
+    case SSTATUS:
+      return andBytes(new Uint8Array(8), registers.controlAndStatus[MSTATUS]!, SSTATUS_MASK_BYTES);
+    case SIE:
+      return andBytes(new Uint8Array(8), registers.controlAndStatus[MIE]!, SIE_SIP_MASK_BYTES);
+    case SIP:
+      return andBytes(new Uint8Array(8), registers.controlAndStatus[MIP]!, SIE_SIP_MASK_BYTES);
+    default:
+      return registers.controlAndStatus[index]!;
   }
-  return registers.controlAndStatus[index]!;
 };
 
 /** Copy a CSR; the file slot is live and must not be used as a mutable old value. */
@@ -241,25 +301,65 @@ const writeControlAndStatusRegister = (
   if (isIdentityControlAndStatusRegister(index)) {
     return registers.controlAndStatus[index]!;
   }
-  if (index === SSTATUS) {
-    // sstatus has no slot of its own: merge the writable S-visible bits into mstatus
-    // and leave M-only fields (MIE, MPIE, MPP, …) unchanged.
-    const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
-    const cleared = andBytes(new Uint8Array(8), mstatus, MSTATUS_KEEP_OUTSIDE_SSTATUS);
-    const incoming = andBytes(new Uint8Array(8), value, SSTATUS_MASK_BYTES);
-    return copyBytes(
-      registers.controlAndStatus[MSTATUS]!,
-      orBytes(new Uint8Array(8), cleared, incoming)
-    );
+  switch (index) {
+    case SSTATUS: {
+      // sstatus has no slot of its own: merge the writable S-visible bits into mstatus
+      // and leave M-only fields (MIE, MPIE, MPP, …) unchanged.
+      const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
+      const cleared = andBytes(new Uint8Array(8), mstatus, MSTATUS_KEEP_OUTSIDE_SSTATUS);
+      const incoming = andBytes(new Uint8Array(8), value, SSTATUS_MASK_BYTES);
+      return copyBytes(
+        registers.controlAndStatus[MSTATUS]!,
+        orBytes(new Uint8Array(8), cleared, incoming)
+      );
+    }
+    case SIE: {
+      const mie = snapshotControlAndStatusRegister(registers, MIE);
+      const cleared = andBytes(new Uint8Array(8), mie, MIE_MIP_KEEP_OUTSIDE_SIE_SIP);
+      const incoming = andBytes(new Uint8Array(8), value, SIE_SIP_MASK_BYTES);
+      return copyBytes(
+        registers.controlAndStatus[MIE]!,
+        orBytes(new Uint8Array(8), cleared, incoming)
+      );
+    }
+    case SIP: {
+      const mip = snapshotControlAndStatusRegister(registers, MIP);
+      const cleared = andBytes(new Uint8Array(8), mip, MIE_MIP_KEEP_OUTSIDE_SIE_SIP);
+      const incoming = andBytes(new Uint8Array(8), value, SIE_SIP_MASK_BYTES);
+      return copyBytes(
+        registers.controlAndStatus[MIP]!,
+        orBytes(new Uint8Array(8), cleared, incoming)
+      );
+    }
+    case MSTATUS:
+      // Store mstatus after forcing MPP to a legal encoding.
+      return copyBytes(
+        registers.controlAndStatus[MSTATUS]!,
+        legalizeMstatus(copyBytes(new Uint8Array(8), value))
+      );
+    case MIE:
+      return copyBytes(
+        registers.controlAndStatus[MIE]!,
+        andBytes(new Uint8Array(8), value, MIE_MASK_BYTES)
+      );
+    case MIP: {
+      // Preserve device-driven MTIP/MEIP; only software-writable pending bits update.
+      const previous = registers.controlAndStatus[MIP]!;
+      const writable = andBytes(new Uint8Array(8), value, MIP_WRITABLE_MASK_BYTES);
+      const hardware = andBytes(new Uint8Array(8), previous, MIP_HARDWARE_MASK_BYTES);
+      return copyBytes(
+        registers.controlAndStatus[MIP]!,
+        orBytes(new Uint8Array(8), writable, hardware)
+      );
+    }
+    case MIDELEG:
+      return copyBytes(
+        registers.controlAndStatus[MIDELEG]!,
+        andBytes(new Uint8Array(8), value, MIDELEG_MASK_BYTES)
+      );
+    default:
+      return copyBytes(registers.controlAndStatus[index]!, value);
   }
-  if (index === MSTATUS) {
-    // Store mstatus after forcing MPP to a legal encoding.
-    return copyBytes(
-      registers.controlAndStatus[MSTATUS]!,
-      legalizeMstatus(copyBytes(new Uint8Array(8), value))
-    );
-  }
-  return copyBytes(registers.controlAndStatus[index]!, value);
 };
 
 const privilegeModeFromMppBits = (mppBits: number): ReadonlyUint8Array => {
@@ -282,26 +382,45 @@ const mppBitsFromPrivilegeMode = (mode: ReadonlyUint8Array): number => {
   return MSTATUS_BYTE1_MPP_USER;
 };
 
+/** Set or clear mip.MTIP from the CLINT compare (not a guest CSR write). */
+const setMachineTimerInterruptPending = (registers: Registers, pending: boolean): void => {
+  const mip = registers.controlAndStatus[MIP]!;
+  if (pending) {
+    mip[0]! |= MIP_BYTE0_MTIP;
+  } else {
+    mip[0]! &= ~MIP_BYTE0_MTIP;
+  }
+};
+
+/** Set or clear mip.MSIP from the CLINT msip register (not a guest CSR write). */
+const setMachineSoftwareInterruptPending = (registers: Registers, pending: boolean): void => {
+  const mip = registers.controlAndStatus[MIP]!;
+  if (pending) {
+    mip[0]! |= MIP_BYTE0_MSIP;
+  } else {
+    mip[0]! &= ~MIP_BYTE0_MSIP;
+  }
+};
+
 export {
   PRIVILEGE_USER,
   PRIVILEGE_SUPERVISOR,
   PRIVILEGE_MACHINE,
-  SSTATUS,
   STVEC,
   SEPC,
   SCAUSE,
   STVAL,
   MSTATUS,
   MEDELEG,
+  MIDELEG,
+  MIE,
   MTVEC,
   MEPC,
   MCAUSE,
   MTVAL,
+  MIP,
   MSTATUS_BYTE1_MPP_MASK,
   MSTATUS_BYTE1_MPP_USER,
-  MSTATUS_BYTE1_MPP_SUPERVISOR,
-  MSTATUS_BYTE1_MPP_MACHINE,
-  SSTATUS_MASK_BYTES,
   FOUR_BYTES,
   createRegisters,
   readPrivilegeMode,
@@ -312,10 +431,11 @@ export {
   readProgramCounter,
   setProgramCounter,
   advanceProgramCounter,
-  readControlAndStatusRegister,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   isControlAndStatusRegisterAccessAllowed,
   privilegeModeFromMppBits,
   mppBitsFromPrivilegeMode,
+  setMachineTimerInterruptPending,
+  setMachineSoftwareInterruptPending,
 };

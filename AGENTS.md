@@ -3,22 +3,28 @@
 A RISC-V emulator written in TypeScript for Node (>= 24, ESM only). The CLI (`src/index.ts`)
 reads a raw program image, starts the emulator and Ink TUI, and wires them over streams.
 
-**Work in progress.** RV64I, RV64M, Zicsr, U/S/M privilege (`mret`/`sret`, `medeleg`, S-mode trap
-CSRs), and synchronous traps (`ecall`/`ebreak`/illegal → `mtvec`/`stvec`) are implemented; further
-extensions, interrupts, and virtual memory are still to come.
+**Work in progress.** RV64I, RV64M, Zicsr, U/S/M privilege (`mret`/`sret`, `medeleg`/`mideleg`,
+S-mode trap CSRs), synchronous traps (`ecall`/`ebreak`/illegal → `mtvec`/`stvec`), interrupt
+delivery (`mie`/`mip`/`sie`/`sip`, run-loop take), and a CLINT (`msip` → `mip.MSIP`,
+`mtime`/`mtimecmp` → `mip.MTIP`) are implemented; PLIC, further extensions, and virtual memory are
+still to come.
 Missing instructions and features are unfinished work, not deliberate scope — don't treat the
 current opcode coverage in `decode.ts` as the intended ceiling, and don't add code that assumes
 today's ISA is all there will ever be.
 
 ## Commands
 
-| Command               | Purpose                                                      |
-| --------------------- | ------------------------------------------------------------ |
-| `npm run dev <image>` | Run from source via `tsx` (pass `--ram-size`)                |
-| `npm test`            | `node:test` runner over `src/**/*.test.ts` and `*.test.tsx`  |
-| `npm run check`       | format check + lint + type-check + tests (run before done)   |
-| `npm run fix`         | Prettier write + `eslint --fix`                              |
+| Command               | Purpose                                                        |
+| --------------------- | -------------------------------------------------------------- |
+| `npm run dev <image>` | Run from source via `tsx` (pass `--ram-size`)                  |
+| `npm test`            | `node:test` runner over `src/**/*.test.ts` and `*.test.tsx`    |
+| `npm run check`       | format check + lint + type-check + tests (run before done)     |
+| `npm run fix`         | Prettier write + `eslint --fix`                                |
 | `npm run build`       | Bundle to `dist/` (generated, gitignored — never edit by hand) |
+
+Worker bundles are tree-shaken (`sideEffects: false`, esbuild `--tree-shaking`): the hart worker may
+import `isClintMachineTimerPending` / `isClintMachineSoftwarePending` from `#emulator/clint` without
+keeping the host `create` / `Worker` path (enforced by `scripts/assert-cpu-worker-tree-shake.mjs`).
 
 Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
@@ -30,12 +36,15 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - `src/tui/` — host Ink UI (`create` / `start` / `stop`; `components/`, `hooks/use-mouse-left-click`);
   terminal pane over caller streams.
 - `src/emulator/index.ts` — host-side `create` (requires `ramSize`); maps the image into DRAM at
-  `0x8000_0000` (UART at `0x1000_0000`), creates CPU + terminal handles, returns an awaitable.
-  `start` / `stop` forward to both; awaiting joins both.
+  `0x8000_0000` (UART at `0x1000_0000`, CLINT at `0x0200_0000`), creates CPU + CLINT + terminal
+  handles, returns an awaitable. `start` / `stop` forward to all three; awaiting joins all three.
 - `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, decode,
   trap, registers, instructions (one file per opcode group).
 - `src/emulator/memory/` — guest memory package (`index` public API; private `types` / `ram` /
-  `uart`).
+  `uart` / `clint` guest physical-address decode + shadow R/W + host-clock `mtime` advance).
+- `src/emulator/clint/` — CLINT timebase: host `create` / `start` / `stop`, worker `run.ts`
+  (calls `tickClint` and drives the timer IRQ wire); exports `isClintMachineTimerPending` /
+  `isClintMachineSoftwarePending` for the hart to sample into `mip.MTIP` / `mip.MSIP`.
 - `src/emulator/terminal/` — UART↔stream bridge: host `create` / `start` / `stop`, worker `run.ts`.
 - `src/utils/bytes.ts` — architectural byte helpers (`ReadonlyUint8Array` lives here, re-exported
   from `#emulator/memory` with `Memory`).
@@ -50,10 +59,15 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   buffer and return it for chaining (`const x = addBytes(new Uint8Array(8), a, b)`). Guest
   addresses stay as byte arrays through `loadBytes`/`storeBytes`. Map decode
   uses `bytesToBigInt` only for range compares. Guest-mapped RAM size (`ramSize`) is `bigint`
-  (PA math); the UART window is a fixed 16550 register block (8 bytes) with RX/TX queues
-  packed in the SAB (host-only; RBR/THR/LSR loads/stores are queue side effects in
-  `memory/uart.ts`). **address** means a guest physical address (architectural bytes);
-  **index** means a host TypedArray index into `memory.bytes` (`number`). Transfer widths
+  (physical-address math); the UART window is a fixed 16550 register block (8 bytes) with RX/TX
+  queues packed in the SAB (host-only; RBR/THR/LSR loads/stores are queue side effects in
+  `memory/uart.ts`). Guest CLINT MMIO (`msip` / `mtime` / `mtimecmp`) is decoded in `memory/clint.ts`;
+  host shadows, timer/software wires, and epoch live in the SAB after UART (see `memory/clint.ts`);
+  the `#emulator/clint` worker advances the 10 MHz timebase and drives the timer wire; the hart
+  samples the wires (`isClintMachineTimerPending` / `isClintMachineSoftwarePending`) into
+  `mip.MTIP` / `mip.MSIP`. **address** means a guest
+  physical address (architectural bytes); **index** means a host TypedArray index into
+  `memory.bytes` (`number`). Transfer widths
   (`byteLength` on load/store) are also `number`.
   `bytesToNumber` reads u32 from architectural bytes. `signedNumberToBytes`,
   `unsignedNumberToBytes`, `unsignedBigIntToBytes`, and `low32Bytes` pack values into a
@@ -71,20 +85,28 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - **Guest memory is a `SharedArrayBuffer`** shared with the worker, accessed with plain byte reads
   and writes. The absence of `Atomics` is deliberate: unsynchronized hosts should race like real
   memory.
-- **Privilege modes and synchronous traps.** The hart tracks U/S/M in `registers.privilegeMode`
-  (8-byte little-endian; reset = M). `ecall`, `ebreak`, and illegal encodings call `enterTrap` in `trap.ts`: they write
-  `xepc`/`xcause`/`xtval`, update enable stacks (`MPIE`/`MIE`/`MPP` or `SPIE`/`SIE`/`SPP`), set
-  privilege to M or S (when `medeleg` delegates and the hart is below M), and set the PC from
-  `mtvec`/`stvec` (direct mode). `mret`/`sret` restore that stack and return to `mepc`/`sepc`.
-  `ecall` cause is 8/9/11 by mode. No interrupt delivery yet.
+- **Privilege modes and traps.** The hart tracks U/S/M in `registers.privilegeMode`
+  (8-byte little-endian; reset = M). `ecall`, `ebreak`, and illegal encodings call `enterTrap` in
+  `trap.ts`: they write `xepc`/`xcause`/`xtval`, update enable stacks (`MPIE`/`MIE`/`MPP` or
+  `SPIE`/`SIE`/`SPP`), set privilege to M or S (when `medeleg` delegates and the hart is below M),
+  and set the PC from `mtvec`/`stvec` (direct mode). `mret`/`sret` restore that stack and return to
+  `mepc`/`sepc`. `ecall` cause is 8/9/11 by mode. The CLINT worker ticks `mtime` and drives a
+  level-sensitive timer wire in the SAB; guest `msip` stores drive a software IRQ wire. The hart
+  run loop samples both wires into `mip.MTIP` / `mip.MSIP`, then calls `takeInterruptIfAny`
+  before each fetch: pending∧enabled interrupts take via the
+  same entry path with `xcause` interrupt bit set; `mideleg` routes supervisor causes to S.
+  `mip.MSIP` and `mip.MTIP` are not CSR-writable (CLINT-driven); other pending bits remain
+  software-writable until more devices exist.
 - **Zicsr checks CSR existence and privilege.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live
   in `system.ts` (SYSTEM opcode group). Only the implemented set is accessible (`mstatus`/
-  `sstatus`, `medeleg`, `mtvec`/`stvec`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, and the
-  identity CSRs); any other index or an access above the current privilege raises
-  illegal-instruction. Writes to read-only CSRs also illegal; `csrrs`/`csrrc` with `rs1` = `x0` and
-  `csrrsi`/`csrrci` with a zero immediate are read-only and may touch identity CSRs. `sstatus` is a
-  masked alias of `mstatus`; `mstatus` MPP is WARL (reserved → U). They snapshot the CSR slot
-  before writing `rd` (the file is live).
+  `sstatus`, `medeleg`/`mideleg`, `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mepc`/`sepc`,
+  `mcause`/`scause`, `mtval`/`stval`, and the identity CSRs); any other index or an access above
+  the current privilege raises illegal-instruction. Writes to read-only CSRs also illegal;
+  `csrrs`/`csrrc` with `rs1` = `x0` and `csrrsi`/`csrrci` with a zero immediate are read-only and
+  may touch identity CSRs. `sstatus`/`sie`/`sip` are masked aliases of `mstatus`/`mie`/`mip`;
+  `mstatus` MPP is WARL (reserved → U); `mie`/`mideleg` WARL to implemented interrupt bits;
+  `mip` WARL preserves hardware `MSIP`/`MTIP`. They snapshot the CSR slot before writing `rd` (the file
+  is live).
 
 ## Adding instructions
 
@@ -102,14 +124,14 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 - Import with `#` subpath specifiers and no file extension
   (`import { loadBytes } from '#emulator/memory'`). `tsconfig` `paths` maps `#*` to `src/*` and
   `#test/*` to `test/*`; bundler resolution fills in `index` and `.ts`/`.tsx`. The worker
-  entries `#emulator/cpu/run` and `#emulator/terminal/run` are also `package.json` `"imports"`
-  targets (`src` vs `dist`). Relative imports are a lint error.
+  entries `#emulator/cpu/run`, `#emulator/clint/run`, and `#emulator/terminal/run` are also
+  `package.json` `"imports"` targets (`src` vs `dist`). Relative imports are a lint error.
 - **Package boundary:** a directory with `index.ts` is a package. Sibling modules
   (`memory/uart.ts`, `cpu/types.ts`, …) are private; outside that directory import only from the
   package root. Host code uses `#emulator` and `#tui`. Inside `emulator/`, subpackages import each
-  other via `#emulator/cpu`, `#emulator/memory`, `#emulator/terminal` (workers use
-  `#emulator/cpu/run` / `#emulator/terminal/run`). Unit tests may import instruction modules
-  directly for coverage.
+  other via `#emulator/cpu`, `#emulator/memory`, `#emulator/clint`, `#emulator/terminal` (workers
+  use `#emulator/cpu/run` / `#emulator/clint/run` / `#emulator/terminal/run`). Unit tests may
+  import instruction modules directly for coverage.
 - Arrow functions only — no `function` expressions or declarations, and no `export default function`.
 - Modules with a single export use `export default`; otherwise list named exports in one block at the
   bottom of the file, with `export type { … }` after it.
@@ -123,4 +145,4 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 `node:test` with `describe`/`it` and `node:assert/strict`. Compare register state with
 `assert.deepEqual(readGeneralPurposeRegister(registers, 1), signedNumberToBytes(10, 32))` rather than
 hand-written byte arrays, and start from `createRegisters()` / `createTestMemory(256n)`
-  (`#test/guest-memory`) in each test. Helpers live in `test/`, not `src/`.
+(`#test/guest-memory`) in each test. Helpers live in `test/`, not `src/`.

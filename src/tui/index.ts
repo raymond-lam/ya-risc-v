@@ -30,9 +30,9 @@ type TuiCreateOptions = {
 };
 
 type TuiHandle = Promise<void> & {
-  /** Mount the Ink app. */
+  /** Mount the Ink app. Throws if already started or already stopped. */
   start: () => void;
-  /** Unmount the Ink app, or settle immediately if it never started. */
+  /** Unmount the Ink app. Throws if not started; idempotent after the first stop. */
   stop: () => void;
 };
 
@@ -55,8 +55,11 @@ class Tui implements TuiHandle {
   }
 
   start = (): void => {
-    if (this.#started || this.#stopped) {
-      return;
+    if (this.#stopped) {
+      throw new Error('Already stopped.');
+    }
+    if (this.#started) {
+      throw new Error('Already started.');
     }
     this.#started = true;
     const { stdin, stdout, onShutdown } = this.#options;
@@ -71,6 +74,9 @@ class Tui implements TuiHandle {
   };
 
   stop = (): void => {
+    if (!this.#started) {
+      throw new Error('Not started.');
+    }
     if (this.#stopped) {
       return;
     }
