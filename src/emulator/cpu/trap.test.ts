@@ -21,6 +21,7 @@ import {
   CAUSE_ILLEGAL_INSTRUCTION,
   enterTrap,
   instructionWordTrapValue,
+  isPendingEnabledInterrupt,
   returnFromMachineTrap,
   returnFromSupervisorTrap,
   takeInterruptIfAny,
@@ -239,6 +240,31 @@ describe('trap', () => {
       interruptCauseBytes(CAUSE_MACHINE_SOFTWARE_INTERRUPT)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
+  });
+
+  it('isPendingEnabledInterrupt ignores global MIE', () => {
+    const registers = createRegisters();
+    // mstatus.MIE clear
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    setMachineTimerInterruptPending(registers, true);
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), 1 << CAUSE_MACHINE_TIMER_INTERRUPT, 32)
+    );
+    assert.equal(isPendingEnabledInterrupt(registers), true);
+    assert.equal(takeInterruptIfAny(registers), false);
+  });
+
+  it('isPendingEnabledInterrupt is false when mie masks the pending bit', () => {
+    const registers = createRegisters();
+    setMachineTimerInterruptPending(registers, true);
+    writeControlAndStatusRegister(registers, MIE, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    assert.equal(isPendingEnabledInterrupt(registers), false);
   });
 
   it('takeInterruptIfAny takes a machine timer interrupt when MTIP/MTIE/MIE are set', () => {

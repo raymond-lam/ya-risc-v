@@ -17,7 +17,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import decode from '#emulator/cpu/decode';
-import { loadBytes, storeBytes } from '#emulator/memory';
+import { loadBytes, storeBytes, type Memory } from '#emulator/memory';
 import testMemory from '#test/guest-memory';
 import {
   createRegisters,
@@ -28,7 +28,8 @@ import {
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#types';
 
 /** Pack a 32-bit instruction encoding as little-endian bytes. */
 const instructionBytes = (encoding: number): Uint8Array => {
@@ -38,6 +39,26 @@ const instructionBytes = (encoding: number): Uint8Array => {
   bytes[2] = (encoding >>> 16) & 0xff;
   bytes[3] = (encoding >>> 24) & 0xff;
   return bytes;
+};
+
+const CLINT_MTIMECMP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_4000n) as ReadonlyUint8Array;
+const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as ReadonlyUint8Array;
+
+/** Assert CLINT timer wire and `mie.MTIE` so `wfi` returns without waiting. */
+const armTimerWake = (registers: ReturnType<typeof createRegisters>, memory: Memory): void => {
+  storeBytes({
+    memory,
+    address: CLINT_MTIMECMP,
+    source: unsignedBigIntToBytes(new Uint8Array(8), 0n),
+    byteLength: 8,
+  });
+  storeBytes({
+    memory,
+    address: CLINT_MTIME,
+    source: unsignedBigIntToBytes(new Uint8Array(8), 0n),
+    byteLength: 8,
+  });
+  writeControlAndStatusRegister(registers, 0x304, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
 };
 
 describe('decode + execute', () => {
@@ -235,6 +256,15 @@ describe('decode + execute', () => {
     // sret (legal in M-mode)
     decode(instructionBytes(0x10200073))(registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x30);
+  });
+
+  it('executes wfi and resumes once an interrupt is pending and enabled in mie', () => {
+    const registers = createRegisters();
+    const memory = testMemory(64n);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    armTimerWake(registers, memory);
+    decode(instructionBytes(0x10500073))(registers, memory);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 
   it('traps on an illegal encoding and records mtval', () => {

@@ -5,7 +5,7 @@ reads a raw program image, starts the emulator and Ink TUI, and wires them over 
 
 **Work in progress.** RV64I, RV64M, Zicsr, U/S/M privilege (`mret`/`sret`, `medeleg`/`mideleg`,
 S-mode trap CSRs), synchronous traps (`ecall`/`ebreak`/illegal → `mtvec`/`stvec`), interrupt
-delivery (`mie`/`mip`/`sie`/`sip`, run-loop take), and a CLINT (`msip` → `mip.MSIP`,
+delivery (`mie`/`mip`/`sie`/`sip`, run-loop take, `wfi`), and a CLINT (`msip` → `mip.MSIP`,
 `mtime`/`mtimecmp` → `mip.MTIP`) are implemented; PLIC, further extensions, and virtual memory are
 still to come.
 Missing instructions and features are unfinished work, not deliberate scope — don't treat the
@@ -94,9 +94,13 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   and set the PC from `mtvec`/`stvec` (direct mode). `mret`/`sret` restore that stack and return to
   `mepc`/`sepc`. `ecall` cause is 8/9/11 by mode. The CLINT worker ticks `mtime` and drives a
   level-sensitive timer wire in the SAB; guest `msip` stores drive a software IRQ wire. The hart
-  run loop samples both wires into `mip.MTIP` / `mip.MSIP`, then calls `takeInterruptIfAny`
-  before each fetch: pending∧enabled interrupts take via the
+  run loop samples both wires into `mip.MTIP` / `mip.MSIP`, then calls
+  `takeInterruptIfAny` before each fetch: pending∧enabled interrupts take via the
   same entry path with `xcause` interrupt bit set; `mideleg` routes supervisor causes to S.
+  `wfi` advances the PC then waits on the shared hart-wake Int32 (`Atomics.wait`) until a
+  device notifies (CLINT wire 0→1) and `mip ∧ mie` is nonzero (wake ignores global
+  `mstatus.MIE`/`SIE`). With `mstatus.TW` set, `wfi` below M raises illegal-instruction
+  immediately (limit = 0).
   `mip.MSIP` and `mip.MTIP` are not CSR-writable (CLINT-driven); other pending bits remain
   software-writable until more devices exist.
 - **Zicsr checks CSR existence and privilege.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live

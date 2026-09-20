@@ -16,12 +16,15 @@
 
 import { andBytes, compareUnsignedBytes, isZeroBytes, orBytes, xorBytes } from '#utils/bytes';
 import {
+  MSTATUS,
   PRIVILEGE_MACHINE,
   PRIVILEGE_SUPERVISOR,
   advanceProgramCounter,
   isControlAndStatusRegisterAccessAllowed,
   readGeneralPurposeRegister,
   readPrivilegeMode,
+  setMachineSoftwareInterruptPending,
+  setMachineTimerInterruptPending,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
@@ -32,11 +35,17 @@ import {
   ecallCauseForPrivilege,
   enterTrap,
   instructionWordTrapValue,
+  isPendingEnabledInterrupt,
   returnFromMachineTrap,
   returnFromSupervisorTrap,
 } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
-import type { Memory } from '#emulator/memory';
+import {
+  isClintMachineSoftwarePending,
+  isClintMachineTimerPending,
+  waitHartWake,
+  type Memory,
+} from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
 
 type CsrRegisterArgs = {
@@ -55,8 +64,23 @@ type CsrImmediateArgs = {
 
 const ALL_ONES_BYTES = new Uint8Array(8).fill(0xff) as ReadonlyUint8Array;
 
+/** Encoding of `wfi` (for illegal-instruction `mtval` when `mstatus.TW` intercepts). */
+const WFI_INSTRUCTION_WORD = 0x10500073;
+
+/**
+ * mstatus.TW (Timeout Wait), bit 21 → little-endian bytes[2] bit 5.
+ * When set, `wfi` in privilege < M raises illegal-instruction (time limit = 0).
+ */
+const MSTATUS_BYTE2_TW = 0x20;
+
 const trapIllegalCsrAccess = (registers: Registers, instructionWord: number): void => {
   enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(instructionWord));
+};
+
+/** Sample CLINT wires into `mip` (device-driven pending bits). */
+const sampleClintPending = (registers: Registers, memory: Memory): void => {
+  setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
+  setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));
 };
 
 /** ecall: environment call; cause depends on the current privilege mode. */
@@ -85,6 +109,37 @@ const sret = (registers: Registers, _memory: Memory): void => {
     return;
   }
   returnFromSupervisorTrap(registers);
+};
+
+/**
+ * wfi: hint that the hart may stall until an interrupt is pending and enabled in
+ * `mie` (`mip ∧ mie`). Advances PC, then waits on the shared hart-wake word until a
+ * device notifies. Global `mstatus.MIE`/`SIE` are not required to resume (interrupt
+ * take still needs them on the following run-loop check).
+ *
+ * When `mstatus.TW` is set and privilege is below M, `wfi` raises illegal-instruction
+ * immediately (implementation-defined wait limit of zero).
+ */
+const wfi = (registers: Registers, memory: Memory): void => {
+  if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_MACHINE) < 0) {
+    const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
+    if ((mstatus[2]! & MSTATUS_BYTE2_TW) !== 0) {
+      enterTrap(
+        registers,
+        CAUSE_ILLEGAL_INSTRUCTION,
+        instructionWordTrapValue(WFI_INSTRUCTION_WORD)
+      );
+      return;
+    }
+  }
+  advanceProgramCounter(registers);
+  for (;;) {
+    sampleClintPending(registers, memory);
+    if (isPendingEnabledInterrupt(registers)) {
+      return;
+    }
+    waitHartWake(memory);
+  }
 };
 
 /** csrrw: rd = csr; csr = rs1. */
@@ -207,5 +262,5 @@ const csrrci = (registers: Registers, _memory: Memory, args: CsrImmediateArgs): 
   advanceProgramCounter(registers);
 };
 
-export { ecall, ebreak, mret, sret, csrrw, csrrs, csrrc, csrrwi, csrrsi, csrrci };
+export { ecall, ebreak, mret, sret, wfi, csrrw, csrrs, csrrc, csrrwi, csrrsi, csrrci };
 export type { CsrRegisterArgs, CsrImmediateArgs };
