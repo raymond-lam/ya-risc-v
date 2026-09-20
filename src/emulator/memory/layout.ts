@@ -16,6 +16,7 @@
 
 import type { ReadonlyUint8Array } from '#types';
 import { CLINT_HOST_SIZE, clintAddressToRegister } from '#emulator/memory/clint';
+import { HART_WAKE_HOST_SIZE } from '#emulator/memory/hart-wake';
 import { ramAddressToHostIndex } from '#emulator/memory/ram';
 import {
   META_INT32_COUNT,
@@ -53,12 +54,13 @@ type GuestMemoryHostLayout = {
   uartRxDataHostIndex: number;
   uartTxDataHostIndex: number;
   clintHostBaseIndex: number;
+  hartWakeHostIndex: number;
   packedByteLength: number;
 };
 
 /**
  * Full host packing for one guest memory SAB:
- *   [RAM][UART registers][pad to 4][queue meta][RX ring][TX ring][pad to 8][CLINT]
+ *   [RAM][UART registers][pad to 4][queue meta][RX ring][TX ring][pad to 8][CLINT][pad to 4][hart wake]
  */
 const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
   const {
@@ -69,6 +71,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
       uartRxDataHostIndex,
       uartTxDataHostIndex,
       clintHostBaseIndex,
+      hartWakeHostIndex,
     ],
     packedByteLength,
   } = packHostRegions([
@@ -78,6 +81,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
     { byteLength: UART_QUEUE_CAPACITY },
     { byteLength: UART_QUEUE_CAPACITY },
     { byteLength: CLINT_HOST_SIZE, align: 8 },
+    { byteLength: HART_WAKE_HOST_SIZE, align: 4 },
   ]);
   return {
     uartRegistersHostIndex: uartRegistersHostIndex ?? 0,
@@ -85,6 +89,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
     uartRxDataHostIndex: uartRxDataHostIndex ?? 0,
     uartTxDataHostIndex: uartTxDataHostIndex ?? 0,
     clintHostBaseIndex: clintHostBaseIndex ?? 0,
+    hartWakeHostIndex: hartWakeHostIndex ?? 0,
     packedByteLength,
   };
 };

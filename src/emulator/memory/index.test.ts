@@ -21,6 +21,7 @@ import {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
   loadBytes,
+  readHartWake,
   popTransmit,
   pushReceive,
   storeBytes,
@@ -57,6 +58,8 @@ describe('memory', () => {
     assert.equal(memory.uartMetaHostIndex % 4, 0);
     assert.equal(memory.clintHostBaseIndex % 8, 0);
     assert.ok(memory.bytes.byteLength > memory.clintHostBaseIndex);
+    assert.equal(memory.hartWakeHostIndex % 4, 0);
+    assert.ok(memory.hartWakeHostIndex >= memory.clintHostBaseIndex + 32);
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
   });
 
@@ -337,6 +340,26 @@ describe('clint', () => {
       byteLength: 4,
     });
     assert.equal(isClintMachineSoftwarePending(memory), false);
+  });
+
+  it('msip 0→1 bumps the hart-wake word for wfi', () => {
+    const memory = createTestMemory(64n);
+    const before = readHartWake(memory);
+    storeBytes({
+      memory,
+      address: clintAddress(0n),
+      source: new Uint8Array([1, 0, 0, 0]),
+      byteLength: 4,
+    });
+    assert.equal(readHartWake(memory), before + 1);
+    // Level stays asserted: no second notify.
+    storeBytes({
+      memory,
+      address: clintAddress(0n),
+      source: new Uint8Array([1, 0, 0, 0]),
+      byteLength: 4,
+    });
+    assert.equal(readHartWake(memory), before + 1);
   });
 
   it('asserts pending when mtime is written at or above mtimecmp', () => {

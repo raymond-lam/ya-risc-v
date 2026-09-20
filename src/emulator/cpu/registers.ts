@@ -73,7 +73,7 @@ const MHARTID = 0xf14; // hardware thread id (hardwired 0)
 
 /**
  * sstatus is a restricted view of mstatus. Masked fields: SIE, SPIE, SPP, SUM, MXR.
- * (FS/XS/SD/UXL omitted until FP / wider WARL work lands.)
+ * (FS/XS/SD/UXL omitted until FP / wider WARL work lands. TW/TSR/TVM are M-only.)
  */
 const SSTATUS_MASK_BYTES = Uint8Array.of(0x22, 0x01, 0x0c, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 

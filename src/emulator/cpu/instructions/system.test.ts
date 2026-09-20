@@ -28,10 +28,12 @@ import {
   ecall,
   mret,
   sret,
+  wfi,
 } from '#emulator/cpu/instructions/system';
 import {
   MCAUSE,
   MEPC,
+  MIE,
   MSTATUS,
   MTVAL,
   MTVEC,
@@ -50,8 +52,41 @@ import {
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
 import { CAUSE_BREAKPOINT, CAUSE_ILLEGAL_INSTRUCTION } from '#emulator/cpu/trap';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+import { storeBytes, type Memory } from '#emulator/memory';
+import {
+  bytesToNumber,
+  signedNumberToBytes,
+  unsignedBigIntToBytes,
+  unsignedNumberToBytes,
+} from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#types';
 
+/** mie bit for machine timer interrupt (cause 7). */
+const MIE_MTIE = 1 << 7;
+
+const CLINT_MTIMECMP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_4000n) as ReadonlyUint8Array;
+const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as ReadonlyUint8Array;
+
+/** Assert CLINT timer wire and `mie.MTIE` so `wfi` returns without waiting. */
+const armTimerWake = (registers: ReturnType<typeof createRegisters>, memory: Memory): void => {
+  storeBytes({
+    memory,
+    address: CLINT_MTIMECMP,
+    source: unsignedBigIntToBytes(new Uint8Array(8), 0n),
+    byteLength: 8,
+  });
+  storeBytes({
+    memory,
+    address: CLINT_MTIME,
+    source: unsignedBigIntToBytes(new Uint8Array(8), 0n),
+    byteLength: 8,
+  });
+  writeControlAndStatusRegister(
+    registers,
+    MIE,
+    signedNumberToBytes(new Uint8Array(8), MIE_MTIE, 32)
+  );
+};
 const MHARTID = 0xf14;
 const SSTATUS = 0x100;
 /** Exception causes used in these tests. */
@@ -158,6 +193,61 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+  });
+
+  it('wfi advances the PC and returns once an interrupt is pending and enabled in mie', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    armTimerWake(registers, memory);
+    wfi(registers, memory);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
+  });
+
+  it('wfi in S-mode with mstatus.TW set raises illegal-instruction', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    // TW = bit 21 → 0x20_0000
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x20_0000, 32)
+    );
+    wfi(registers, testMemory(256n));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedNumberToBytes(new Uint8Array(8), 0x10500073)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
+  });
+
+  it('wfi in M-mode ignores mstatus.TW', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x20_0000, 32)
+    );
+    armTimerWake(registers, memory);
+    wfi(registers, memory);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
   });
 
   it('sret returns to sepc and restores SIE from SPIE', () => {

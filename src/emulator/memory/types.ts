@@ -37,10 +37,12 @@ import type { ReadonlyUint8Array } from '#types';
  * Host packing in `bytes` (indices; sparse guest map; no hole allocated) is computed
  * once by `guestMemoryHostLayout` (`memory/layout.ts`) and stored on this type:
  *   [RAM][UART registers][pad to 4][queue meta][RX ring][TX ring][pad to 8][CLINT]
+ *   [pad to 4][hart wake Int32]
  *
  * The CLINT tick worker (`#emulator/clint/run`) advances `mtime` and drives the timer
  * wire; guest `msip` stores drive the software wire; the hart samples both
- * (`#emulator/memory`) into `mip.MTIP` / `mip.MSIP`.
+ * (`#emulator/memory`) into `mip.MTIP` / `mip.MSIP`. CLINT wire 0→1 asserts call
+ * `notifyHartWake` so a hart in `wfi` wakes via `Atomics.wait` on the hart-wake word.
  *
  * Guest bases/`ramSize` participate in physical-address math as `bigint`. Host indices
  * are `number`.
@@ -63,6 +65,8 @@ type Memory = {
   uartTxDataHostIndex: number;
   /** Host index of the CLINT shadow region (8-byte aligned). */
   clintHostBaseIndex: number;
+  /** Host index of the Int32 `wfi` wake word (`Atomics.wait` / `notify`). */
+  hartWakeHostIndex: number;
 };
 
 export type { Memory };

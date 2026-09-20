@@ -305,6 +305,21 @@ const selectTakeableInterrupt = (registers: Registers): TakeableInterrupt | null
 };
 
 /**
+ * Whether any interrupt is pending in `mip` and enabled in `mie` (ignores global
+ * `mstatus.MIE`/`SIE`). Used for `wfi` completion; taking still needs `takeInterruptIfAny`.
+ */
+const isPendingEnabledInterrupt = (registers: Registers): boolean => {
+  const mip = snapshotControlAndStatusRegister(registers, MIP);
+  const mie = snapshotControlAndStatusRegister(registers, MIE);
+  for (const code of INTERRUPT_PRIORITY) {
+    if (csrBitIsSet(mip, code) && csrBitIsSet(mie, code)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
  * If a takeable interrupt exists, enter its trap and return true.
  * Saves the current PC (instruction about to execute). `xtval` is zero.
  */
@@ -343,6 +358,7 @@ export {
   CAUSE_ILLEGAL_INSTRUCTION,
   CAUSE_BREAKPOINT,
   enterTrap,
+  isPendingEnabledInterrupt,
   takeInterruptIfAny,
   returnFromMachineTrap,
   returnFromSupervisorTrap,

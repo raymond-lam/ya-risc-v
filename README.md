@@ -5,7 +5,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 > [!WARNING]
 > **This is a work in progress and nowhere near finished.** RV64I, RV64M, and Zicsr execute and are
 > covered by tests. U/S/M privilege modes, `mret`/`sret`, trap CSRs, synchronous traps, interrupt
-> delivery, and a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`) are in
+> delivery (including `wfi`), and a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`) are in
 > place. A polled 16550
 > UART plus an Ink TUI console path exist, but there is no PLIC, no further ISA extensions, and no
 > OS boot path. It cannot run Linux yet. Anything listed under
@@ -38,6 +38,10 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   then calls `takeInterruptIfAny` before each fetch. Pending∧enabled local interrupts vector with
   the `xcause` interrupt bit set; global `MIE`/`SIE` and privilege rules apply; `mideleg` sends
   supervisor causes to S. `mip.MSIP` and `mip.MTIP` are CLINT-driven (not CSR-writable).
+  `wfi` advances the PC then waits on a shared wake word until a device IRQ wire asserts and
+  `mip ∧ mie` is nonzero (wake does not require global `MIE`/`SIE`); the interrupt is taken
+  on the following run-loop check if globally enabled. `mstatus.TW` makes `wfi` in S/U illegal
+  immediately (wait limit zero).
 - **CLINT:** MMIO at `0x02000000` — `msip` at `+0x0000` (bit 0), `mtimecmp` at
   `+0x4000`, `mtime` at `+0xbff8`, 10 MHz timebase from `process.hrtime` on its own worker. Reset:
   `mtime` = 0, `mtimecmp` = all-ones, `msip` clear. Guest may write `mtime` (reseats the epoch) or

@@ -17,6 +17,7 @@
 import { bytesToBigInt } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory/types';
+import { notifyHartWake } from '#emulator/memory/hart-wake';
 
 /**
  * CLINT layout (single hart), relative to `clintBaseAddress`:
@@ -52,13 +53,22 @@ const NS_PER_SECOND = 1_000_000_000n;
 type ClintTimeRegister = 'mtime' | 'mtimecmp';
 type ClintRegister = 'msip' | ClintTimeRegister;
 
+/** Drive a level-sensitive CLINT IRQ wire (1 = pending); wake `wfi` only on 0→1. */
+const setClintIrqWire = (memory: Memory, wireOffset: number, pending: boolean): void => {
+  const index = memory.clintHostBaseIndex + wireOffset;
+  const previous = Atomics.load(memory.bytes, index);
+  const next = pending ? 1 : 0;
+  Atomics.store(memory.bytes, index, next);
+  // Rising edge only: re-notifying while the wire stays high (e.g. every `tickClint`)
+  // would be useless and wasteful.
+  if (next !== 0 && previous === 0) {
+    notifyHartWake(memory);
+  }
+};
+
 /** Drive the level-sensitive CLINT timer IRQ wire (1 = pending). */
 const setClintTimerWire = (memory: Memory, pending: boolean): void => {
-  Atomics.store(
-    memory.bytes,
-    memory.clintHostBaseIndex + CLINT_HOST_TIMER_WIRE_OFFSET,
-    pending ? 1 : 0
-  );
+  setClintIrqWire(memory, CLINT_HOST_TIMER_WIRE_OFFSET, pending);
 };
 
 /** Level of the CLINT timer interrupt wire (sampled by the hart into `mip.MTIP`). */
@@ -67,11 +77,7 @@ const isClintMachineTimerPending = (memory: Memory): boolean =>
 
 /** Drive the level-sensitive CLINT software IRQ wire (1 = pending). */
 const setClintSoftwareWire = (memory: Memory, pending: boolean): void => {
-  Atomics.store(
-    memory.bytes,
-    memory.clintHostBaseIndex + CLINT_HOST_SOFTWARE_WIRE_OFFSET,
-    pending ? 1 : 0
-  );
+  setClintIrqWire(memory, CLINT_HOST_SOFTWARE_WIRE_OFFSET, pending);
 };
 
 /** Level of the CLINT software interrupt wire (sampled by the hart into `mip.MSIP`). */

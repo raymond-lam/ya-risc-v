@@ -68,6 +68,7 @@ const createMemory = ({
     uartRxDataHostIndex,
     uartTxDataHostIndex,
     clintHostBaseIndex,
+    hartWakeHostIndex,
     packedByteLength,
   } = guestMemoryHostLayout(ramSize);
   const memory: Memory = {
@@ -81,6 +82,7 @@ const createMemory = ({
     uartRxDataHostIndex,
     uartTxDataHostIndex,
     clintHostBaseIndex,
+    hartWakeHostIndex,
   };
   initializeClint(memory);
   return memory;
@@ -165,4 +167,5 @@ export {
   isClintMachineTimerPending,
   tickClint,
 } from '#emulator/memory/clint';
+export { readHartWake, waitHartWake } from '#emulator/memory/hart-wake';
 export type { Memory } from '#emulator/memory/types';
