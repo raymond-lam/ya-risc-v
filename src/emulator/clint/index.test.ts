@@ -17,11 +17,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { create, isClintMachineTimerPending } from '#emulator/clint';
-import { loadBytes, storeBytes } from '#emulator/memory';
+import { create } from '#emulator/clint';
+import { isClintMachineTimerPending, loadBytes, storeBytes } from '#emulator/memory';
 import createTestMemory from '#test/guest-memory';
+import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
-import type { ReadonlyUint8Array } from '#emulator/memory';
 
 /** CLINT register offsets relative to base — local to tests. */
 const CLINT_MTIMECMP_OFFSET = 0x4000n;

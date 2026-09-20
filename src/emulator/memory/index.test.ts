@@ -16,16 +16,17 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
 import {
   createMemory,
+  isClintMachineSoftwarePending,
+  isClintMachineTimerPending,
   loadBytes,
   popTransmit,
   pushReceive,
   storeBytes,
-  type ReadonlyUint8Array,
 } from '#emulator/memory';
 import createTestMemory from '#test/guest-memory';
+import type { ReadonlyUint8Array } from '#types';
 import { signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 /** LSR bits — local to tests (not part of the public UART surface). */
@@ -52,8 +53,19 @@ describe('memory', () => {
   it('createMemory packs RAM with UART state into one SharedArrayBuffer', () => {
     const memory = createTestMemory(64n);
     assert.equal(memory.ramSize, 64n);
-    assert.ok(memory.bytes.byteLength > Number(64n + 8n));
+    assert.equal(memory.uartRegistersHostIndex, 64);
+    assert.equal(memory.uartMetaHostIndex % 4, 0);
+    assert.equal(memory.clintHostBaseIndex % 8, 0);
+    assert.ok(memory.bytes.byteLength > memory.clintHostBaseIndex);
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
+  });
+
+  it('createMemory 8-byte-aligns CLINT after a misaligned UART packing end', () => {
+    // ramSize 1 → UART packing ends at an index ≡ 4 (mod 8); CLINT must pad to 8.
+    const memory = createTestMemory(1n);
+    assert.equal(memory.uartRegistersHostIndex, 1);
+    assert.equal(memory.clintHostBaseIndex % 8, 0);
+    assert.ok(memory.clintHostBaseIndex > memory.uartTxDataHostIndex);
   });
 
   it('storeBytes and loadBytes round-trip in RAM', () => {

@@ -16,6 +16,13 @@
 
 /* eslint-disable import/prefer-default-export -- named export matches call-site style */
 
+/** Half-open guest or host range `[base, base + size)` with a label for diagnostics. */
+type NamedRange = {
+  name: string;
+  base: bigint;
+  size: bigint;
+};
+
 /**
  * True when half-open ranges `[aBase, aBase + aSize)` and `[bBase, bBase + bSize)`
  * overlap. Empty ranges (size ≤ 0) never overlap.
@@ -23,4 +30,29 @@
 const rangesOverlap = (aBase: bigint, aSize: bigint, bBase: bigint, bSize: bigint): boolean =>
   aSize > 0n && bSize > 0n && aBase < bBase + bSize && bBase < aBase + aSize;
 
-export { rangesOverlap };
+/**
+ * First overlapping pair among `ranges` (order preserved: earlier index is `a`),
+ * or `null` if none overlap.
+ */
+const findOverlappingPair = (
+  ranges: readonly NamedRange[]
+): { a: NamedRange; b: NamedRange } | null => {
+  for (let index = 0; index < ranges.length; index += 1) {
+    const a = ranges[index];
+    if (a === undefined) {
+      continue;
+    }
+    for (let other = index + 1; other < ranges.length; other += 1) {
+      const b = ranges[other];
+      if (b === undefined) {
+        continue;
+      }
+      if (rangesOverlap(a.base, a.size, b.base, b.size)) {
+        return { a, b };
+      }
+    }
+  }
+  return null;
+};
+
+export { findOverlappingPair };

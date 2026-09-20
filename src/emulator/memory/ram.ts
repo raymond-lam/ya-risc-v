@@ -15,7 +15,7 @@
  */
 
 import { bytesToBigInt } from '#utils/bytes';
-import type { ReadonlyUint8Array } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory/types';
 
 /**

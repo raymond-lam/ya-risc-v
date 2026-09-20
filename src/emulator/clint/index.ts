@@ -97,5 +97,4 @@ const create = (options: ClintCreateOptions): ClintHandle => new Clint(options);
 
 export { create };
 /** Re-export so unused host `create`/`Worker` can tree-shake out of workers. */
-export { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint/wire';
 export type { ClintCreateOptions, ClintHandle } from '#emulator/clint/types';

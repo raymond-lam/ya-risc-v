@@ -20,8 +20,8 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * The hart worker imports `isClintMachineTimerPending` / `isClintMachineSoftwarePending`
- * from `#emulator/clint`. Tree-shaking must drop the host `create` path (`new Worker` →
- * `#emulator/clint/run`).
+ * from `#emulator/memory`. Tree-shaking must drop the host CLINT `create` path
+ * (`new Worker` → `#emulator/clint/run`).
  */
 const cpuWorkerPath = join(
   dirname(fileURLToPath(import.meta.url)),

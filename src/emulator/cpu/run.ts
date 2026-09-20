@@ -16,8 +16,11 @@
 
 import { parentPort, workerData } from 'node:worker_threads';
 import decode from '#emulator/cpu/decode';
-import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
-import { loadBytes } from '#emulator/memory';
+import {
+  isClintMachineSoftwarePending,
+  isClintMachineTimerPending,
+  loadBytes,
+} from '#emulator/memory';
 import {
   createRegisters,
   readProgramCounter,
