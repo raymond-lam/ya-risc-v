@@ -14,21 +14,16 @@
  * limitations under the License.
  */
 
-import { writeGeneralPurposeRegister, advanceProgramCounter } from '#emulator/cpu/registers';
-import type { Registers } from '#emulator/cpu/types';
-import type { Memory } from '#emulator/memory';
-import type { ReadonlyUint8Array } from '#types';
+/* eslint-disable import/prefer-default-export -- shared architectural types */
 
-type LuiArgs = {
-  destinationRegister: number;
-  immediate: ReadonlyUint8Array;
+/**
+ * Byte buffer used only for reading. Plain `Uint8Array` values are assignable;
+ * writes through this type are a type error. Type-level only — no runtime Proxy.
+ */
+type ReadonlyUint8Array = {
+  readonly length: number;
+  readonly [index: number]: number;
+  [Symbol.iterator](): IterableIterator<number>;
 };
 
-/** lui: rd = imm (U-type). */
-const lui = (registers: Registers, _memory: Memory, args: LuiArgs): void => {
-  writeGeneralPurposeRegister(registers, args.destinationRegister, args.immediate);
-  advanceProgramCounter(registers);
-};
-
-export { lui };
-export type { LuiArgs };
+export type { ReadonlyUint8Array };

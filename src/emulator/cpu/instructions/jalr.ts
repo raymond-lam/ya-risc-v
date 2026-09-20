@@ -23,7 +23,8 @@ import {
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import type { Registers } from '#emulator/cpu/types';
-import type { Memory, ReadonlyUint8Array } from '#emulator/memory';
+import type { Memory } from '#emulator/memory';
+import type { ReadonlyUint8Array } from '#types';
 
 type JalrArgs = {
   destinationRegister: number;

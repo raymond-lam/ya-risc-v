@@ -14,52 +14,27 @@
  * limitations under the License.
  */
 
-import { addBytes, copyBytes, signedNumberToBytes } from '#utils/bytes';
-import type { ReadonlyUint8Array } from '#utils/bytes';
+import { addBytes, bytesToBigInt, copyBytes, signedNumberToBytes } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#types';
+import { findOverlappingPair } from '#utils/ranges';
 import {
-  CLINT_HOST_SIZE,
-  clintAddressToRegister,
-  clintOverlapsRam,
-  clintOverlapsUart,
+  CLINT_WINDOW_SIZE,
   initializeClint,
   loadClintByte,
   storeClintByte,
 } from '#emulator/memory/clint';
+import { guestMemoryHostLayout, locationFromGuestAddress } from '#emulator/memory/layout';
 import { loadRamByte, ramAddressToHostIndex, storeRamByte } from '#emulator/memory/ram';
 import {
+  UART_REGISTER_WINDOW,
   loadUartRegister,
   popTransmit,
   pushReceive,
   storeUartRegister,
-  uartAddressToRegisterIndex,
-  uartOverlapsRam,
-  uartPackedByteLength,
 } from '#emulator/memory/uart';
 import type { Memory } from '#emulator/memory/types';
 
 const ONE_BYTE = signedNumberToBytes(new Uint8Array(8), 1, 32) as ReadonlyUint8Array;
-
-const locationFromGuestAddress = (
-  memory: Memory,
-  address: ReadonlyUint8Array
-):
-  | { region: 'uart'; registerIndex: number }
-  | { region: 'clint'; register: 'msip' | 'mtime' | 'mtimecmp'; byteOffset: number }
-  | { region: 'ram' }
-  | { region: 'unmapped' } => {
-  const uartRegisterIndex = uartAddressToRegisterIndex(memory, address);
-  if (uartRegisterIndex !== null) {
-    return { region: 'uart', registerIndex: uartRegisterIndex };
-  }
-  const clint = clintAddressToRegister(memory, address);
-  if (clint !== null) {
-    return { region: 'clint', register: clint.register, byteOffset: clint.byteOffset };
-  }
-  if (ramAddressToHostIndex(memory, address) !== null) {
-    return { region: 'ram' };
-  }
-  return { region: 'unmapped' };
-};
 
 /**
  * Allocate guest memory (RAM + UART queues + CLINT shadows in one SharedArrayBuffer)
@@ -79,22 +54,32 @@ const createMemory = ({
   if (ramSize < 0n) {
     throw new RangeError('ramSize must be non-negative.');
   }
-  if (uartOverlapsRam({ ramBaseAddress, ramSize, uartBaseAddress })) {
-    throw new RangeError('UART window overlaps RAM.');
+  const overlap = findOverlappingPair([
+    { name: 'UART', base: bytesToBigInt(uartBaseAddress), size: BigInt(UART_REGISTER_WINDOW) },
+    { name: 'CLINT', base: bytesToBigInt(clintBaseAddress), size: CLINT_WINDOW_SIZE },
+    { name: 'RAM', base: bytesToBigInt(ramBaseAddress), size: ramSize },
+  ]);
+  if (overlap !== null) {
+    throw new RangeError(`${overlap.a.name} window overlaps ${overlap.b.name}.`);
   }
-  if (clintOverlapsRam({ ramBaseAddress, ramSize, clintBaseAddress })) {
-    throw new RangeError('CLINT window overlaps RAM.');
-  }
-  if (clintOverlapsUart({ uartBaseAddress, clintBaseAddress })) {
-    throw new RangeError('CLINT window overlaps UART.');
-  }
-  const clintHostBaseIndex = uartPackedByteLength(ramSize);
+  const {
+    uartRegistersHostIndex,
+    uartMetaHostIndex,
+    uartRxDataHostIndex,
+    uartTxDataHostIndex,
+    clintHostBaseIndex,
+    packedByteLength,
+  } = guestMemoryHostLayout(ramSize);
   const memory: Memory = {
-    bytes: new Uint8Array(new SharedArrayBuffer(clintHostBaseIndex + CLINT_HOST_SIZE)),
+    bytes: new Uint8Array(new SharedArrayBuffer(packedByteLength)),
     ramBaseAddress,
     ramSize,
     uartBaseAddress,
     clintBaseAddress,
+    uartRegistersHostIndex,
+    uartMetaHostIndex,
+    uartRxDataHostIndex,
+    uartTxDataHostIndex,
     clintHostBaseIndex,
   };
   initializeClint(memory);
@@ -175,6 +160,9 @@ const storeBytes = ({
 };
 
 export { createMemory, loadBytes, popTransmit, pushReceive, storeBytes, ramAddressToHostIndex };
-export { tickClint } from '#emulator/memory/clint';
+export {
+  isClintMachineSoftwarePending,
+  isClintMachineTimerPending,
+  tickClint,
+} from '#emulator/memory/clint';
 export type { Memory } from '#emulator/memory/types';
-export type { ReadonlyUint8Array } from '#utils/bytes';

@@ -23,8 +23,8 @@ today's ISA is all there will ever be.
 | `npm run build`       | Bundle to `dist/` (generated, gitignored — never edit by hand) |
 
 Worker bundles are tree-shaken (`sideEffects: false`, esbuild `--tree-shaking`): the hart worker may
-import `isClintMachineTimerPending` / `isClintMachineSoftwarePending` from `#emulator/clint` without
-keeping the host `create` / `Worker` path (enforced by `scripts/assert-cpu-worker-tree-shake.mjs`).
+import `isClintMachineTimerPending` / `isClintMachineSoftwarePending` from `#emulator/memory` without
+keeping the host CLINT `create` / `Worker` path (enforced by `scripts/assert-cpu-worker-tree-shake.mjs`).
 
 Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
@@ -40,14 +40,15 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   handles, returns an awaitable. `start` / `stop` forward to all three; awaiting joins all three.
 - `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, decode,
   trap, registers, instructions (one file per opcode group).
-- `src/emulator/memory/` — guest memory package (`index` public API; private `types` / `ram` /
-  `uart` / `clint` guest physical-address decode + shadow R/W + host-clock `mtime` advance).
+- `src/emulator/memory/` — guest memory package (`index` public API; private `types` / `layout` /
+  `ram` / `uart` / `clint` guest physical-address decode + shadow R/W + host-clock `mtime` advance;
+  exports `pushReceive` / `popTransmit` and `isClintMachineTimerPending` /
+  `isClintMachineSoftwarePending` for workers).
 - `src/emulator/clint/` — CLINT timebase: host `create` / `start` / `stop`, worker `run.ts`
-  (calls `tickClint` and drives the timer IRQ wire); exports `isClintMachineTimerPending` /
-  `isClintMachineSoftwarePending` for the hart to sample into `mip.MTIP` / `mip.MSIP`.
+  (calls `tickClint` in `#emulator/memory`).
 - `src/emulator/terminal/` — UART↔stream bridge: host `create` / `start` / `stop`, worker `run.ts`.
-- `src/utils/bytes.ts` — architectural byte helpers (`ReadonlyUint8Array` lives here, re-exported
-  from `#emulator/memory` with `Memory`).
+- `src/utils/bytes.ts` — architectural byte helpers.
+- `src/types.ts` — shared architectural types (`ReadonlyUint8Array`).
 - `test/` — shared test helpers (`guest-memory.ts`). Unit tests stay colocated as `*.test.ts`.
 
 ## Core invariants
@@ -62,7 +63,8 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   (physical-address math); the UART window is a fixed 16550 register block (8 bytes) with RX/TX
   queues packed in the SAB (host-only; RBR/THR/LSR loads/stores are queue side effects in
   `memory/uart.ts`). Guest CLINT MMIO (`msip` / `mtime` / `mtimecmp`) is decoded in `memory/clint.ts`;
-  host shadows, timer/software wires, and epoch live in the SAB after UART (see `memory/clint.ts`);
+  host shadows, timer/software wires, and epoch live in the SAB after UART (see `memory/clint.ts`),
+  accessed with `Atomics` (`BigUint64Array` for time/epoch, bytes for wires) like UART queue meta;
   the `#emulator/clint` worker advances the 10 MHz timebase and drives the timer wire; the hart
   samples the wires (`isClintMachineTimerPending` / `isClintMachineSoftwarePending`) into
   `mip.MTIP` / `mip.MSIP`. **address** means a guest
@@ -82,9 +84,9 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   reach that path for illegal cases (see Zicsr). Read-only byte buffers elsewhere (addresses,
   immediates, arithmetic sources) use the same structural `ReadonlyUint8Array` type so plain
   `Uint8Array` remains assignable.
-- **Guest memory is a `SharedArrayBuffer`** shared with the worker, accessed with plain byte reads
-  and writes. The absence of `Atomics` is deliberate: unsynchronized hosts should race like real
-  memory.
+- **Guest DRAM is a `SharedArrayBuffer`** shared with the worker, accessed with plain byte reads
+  and writes. The absence of `Atomics` there is deliberate: unsynchronized hosts should race like
+  real memory. Host-only packing (UART queue meta, CLINT time/epoch/wires) uses `Atomics`.
 - **Privilege modes and traps.** The hart tracks U/S/M in `registers.privilegeMode`
   (8-byte little-endian; reset = M). `ecall`, `ebreak`, and illegal encodings call `enterTrap` in
   `trap.ts`: they write `xepc`/`xcause`/`xtval`, update enable stacks (`MPIE`/`MIE`/`MPP` or

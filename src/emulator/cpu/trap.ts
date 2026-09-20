@@ -50,7 +50,7 @@ import {
   setProgramCounter,
 } from '#emulator/cpu/registers';
 import type { Registers } from '#emulator/cpu/types';
-import type { ReadonlyUint8Array } from '#emulator/memory';
+import type { ReadonlyUint8Array } from '#types';
 
 /** Synchronous exception codes (mcause/scause with interrupt bit clear). */
 const CAUSE_ILLEGAL_INSTRUCTION = 2;

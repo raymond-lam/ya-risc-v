@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { createMemory, type Memory, type ReadonlyUint8Array } from '#emulator/memory';
+import { createMemory, type Memory } from '#emulator/memory';
+import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
 /** Test map: RAM at guest physical address 0, UART at `0x1000_0000`, CLINT at `0x0200_0000`. */

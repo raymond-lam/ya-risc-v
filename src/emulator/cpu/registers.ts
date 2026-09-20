@@ -23,7 +23,7 @@ import {
   orBytes,
   signedNumberToBytes,
 } from '#utils/bytes';
-import type { ReadonlyUint8Array } from '#emulator/memory';
+import type { ReadonlyUint8Array } from '#types';
 
 /** Number of integer general-purpose registers (x0–x31). */
 const GENERAL_PURPOSE_REGISTER_COUNT = 32;

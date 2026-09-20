@@ -16,7 +16,8 @@
 
 import { create as createClint, type ClintHandle } from '#emulator/clint';
 import { create as createCpu, type CpuHandle } from '#emulator/cpu';
-import { createMemory, ramAddressToHostIndex, type ReadonlyUint8Array } from '#emulator/memory';
+import { createMemory, ramAddressToHostIndex } from '#emulator/memory';
+import type { ReadonlyUint8Array } from '#types';
 import { create as createTerminal, type TerminalHandle } from '#emulator/terminal';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 import type { EmulatorCreateOptions, EmulatorHandle } from '#emulator/types';

@@ -14,14 +14,8 @@
  * limitations under the License.
  */
 
-import { bytesToBigInt, unsignedBigIntToBytes } from '#utils/bytes';
-import type { ReadonlyUint8Array } from '#utils/bytes';
-import { rangesOverlap } from '#utils/ranges';
-import {
-  isClintMachineSoftwarePending,
-  setClintSoftwareWire,
-  setClintTimerWire,
-} from '#emulator/clint/wire';
+import { bytesToBigInt } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory/types';
 
 /**
@@ -40,14 +34,16 @@ const CLINT_REGISTER_SIZE = 8;
 const CLINT_WINDOW_SIZE = 0xc000n;
 
 /**
- * Host packing after UART in `memory.bytes`:
+ * Host packing after UART in `memory.bytes` (8-byte aligned base; Atomics on words/wires):
  *   [mtime 8][mtimecmp 8][timerWire 1][softwareWire 1][pad 6][epochNs 8]
- * Wire bytes are driven/sampled by `#emulator/clint/wire` (offsets 16 and 17).
  */
-const CLINT_HOST_MTIME_OFFSET = 0;
-const CLINT_HOST_MTIMECMP_OFFSET = 8;
-const CLINT_HOST_EPOCH_NS_OFFSET = 24;
-const CLINT_HOST_SIZE = 32;
+const CLINT_HOST_MTIME_WORD = 0;
+const CLINT_HOST_MTIMECMP_WORD = 1;
+const CLINT_HOST_EPOCH_NS_WORD = 3;
+const CLINT_HOST_WORD_COUNT = 4;
+const CLINT_HOST_SIZE = CLINT_HOST_WORD_COUNT * 8;
+const CLINT_HOST_TIMER_WIRE_OFFSET = 16;
+const CLINT_HOST_SOFTWARE_WIRE_OFFSET = 17;
 
 /** Free-running `mtime` frequency (10 MHz timebase). */
 const CLINT_TIMEBASE_HZ = 10_000_000n;
@@ -56,35 +52,31 @@ const NS_PER_SECOND = 1_000_000_000n;
 type ClintTimeRegister = 'mtime' | 'mtimecmp';
 type ClintRegister = 'msip' | ClintTimeRegister;
 
-const clintOverlapsRam = ({
-  ramBaseAddress,
-  ramSize,
-  clintBaseAddress,
-}: {
-  ramBaseAddress: ReadonlyUint8Array;
-  ramSize: bigint;
-  clintBaseAddress: ReadonlyUint8Array;
-}): boolean =>
-  rangesOverlap(
-    bytesToBigInt(ramBaseAddress),
-    ramSize,
-    bytesToBigInt(clintBaseAddress),
-    CLINT_WINDOW_SIZE
+/** Drive the level-sensitive CLINT timer IRQ wire (1 = pending). */
+const setClintTimerWire = (memory: Memory, pending: boolean): void => {
+  Atomics.store(
+    memory.bytes,
+    memory.clintHostBaseIndex + CLINT_HOST_TIMER_WIRE_OFFSET,
+    pending ? 1 : 0
   );
+};
 
-const clintOverlapsUart = ({
-  uartBaseAddress,
-  clintBaseAddress,
-}: {
-  uartBaseAddress: ReadonlyUint8Array;
-  clintBaseAddress: ReadonlyUint8Array;
-}): boolean =>
-  rangesOverlap(
-    bytesToBigInt(uartBaseAddress),
-    8n,
-    bytesToBigInt(clintBaseAddress),
-    CLINT_WINDOW_SIZE
+/** Level of the CLINT timer interrupt wire (sampled by the hart into `mip.MTIP`). */
+const isClintMachineTimerPending = (memory: Memory): boolean =>
+  Atomics.load(memory.bytes, memory.clintHostBaseIndex + CLINT_HOST_TIMER_WIRE_OFFSET) !== 0;
+
+/** Drive the level-sensitive CLINT software IRQ wire (1 = pending). */
+const setClintSoftwareWire = (memory: Memory, pending: boolean): void => {
+  Atomics.store(
+    memory.bytes,
+    memory.clintHostBaseIndex + CLINT_HOST_SOFTWARE_WIRE_OFFSET,
+    pending ? 1 : 0
   );
+};
+
+/** Level of the CLINT software interrupt wire (sampled by the hart into `mip.MSIP`). */
+const isClintMachineSoftwarePending = (memory: Memory): boolean =>
+  Atomics.load(memory.bytes, memory.clintHostBaseIndex + CLINT_HOST_SOFTWARE_WIRE_OFFSET) !== 0;
 
 const clintAddressToRegister = (
   memory: Memory,
@@ -107,15 +99,21 @@ const clintAddressToRegister = (
   return null;
 };
 
-const timeRegisterHostIndex = (memory: Memory, register: ClintTimeRegister): number =>
-  memory.clintHostBaseIndex +
-  (register === 'mtime' ? CLINT_HOST_MTIME_OFFSET : CLINT_HOST_MTIMECMP_OFFSET);
+/** `BigUint64Array` over the CLINT host region (`mtime` / `mtimecmp` / pad / `epochNs`). */
+const clintHostWords = (memory: Memory): BigUint64Array =>
+  new BigUint64Array(memory.bytes.buffer, memory.clintHostBaseIndex, CLINT_HOST_WORD_COUNT);
+
+const timeRegisterWord = (register: ClintTimeRegister): number =>
+  register === 'mtime' ? CLINT_HOST_MTIME_WORD : CLINT_HOST_MTIMECMP_WORD;
 
 const loadTimeRegisterByte = (
   memory: Memory,
   register: ClintTimeRegister,
   byteOffset: number
-): number => memory.bytes[timeRegisterHostIndex(memory, register) + byteOffset] ?? 0;
+): number => {
+  const word = Atomics.load(clintHostWords(memory), timeRegisterWord(register));
+  return Number((word >> BigInt(byteOffset * 8)) & 0xffn);
+};
 
 const storeTimeRegisterByte = (
   memory: Memory,
@@ -123,7 +121,20 @@ const storeTimeRegisterByte = (
   byteOffset: number,
   value: number
 ): void => {
-  memory.bytes[timeRegisterHostIndex(memory, register) + byteOffset] = value & 0xff;
+  const words = clintHostWords(memory);
+  const wordIndex = timeRegisterWord(register);
+  const shift = BigInt(byteOffset * 8);
+  const mask = 0xffn << shift;
+  const byte = BigInt(value & 0xff) << shift;
+  let expected = Atomics.load(words, wordIndex);
+  for (;;) {
+    const next = (expected & ~mask) | byte;
+    const observed = Atomics.compareExchange(words, wordIndex, expected, next);
+    if (observed === expected) {
+      return;
+    }
+    expected = observed;
+  }
 };
 
 /** Guest msip byte: only byte 0 bit 0 is defined (software IRQ wire). */
@@ -141,27 +152,19 @@ const storeMsipByte = (memory: Memory, byteOffset: number, value: number): void 
   setClintSoftwareWire(memory, (value & 1) !== 0);
 };
 
-const readTimeRegister = (memory: Memory, register: ClintTimeRegister): bigint => {
-  const index = timeRegisterHostIndex(memory, register);
-  return bytesToBigInt(
-    memory.bytes.subarray(index, index + CLINT_REGISTER_SIZE) as ReadonlyUint8Array
-  );
-};
+const readTimeRegister = (memory: Memory, register: ClintTimeRegister): bigint =>
+  Atomics.load(clintHostWords(memory), timeRegisterWord(register));
 
 const writeTimeRegister = (memory: Memory, register: ClintTimeRegister, value: bigint): void => {
-  const index = timeRegisterHostIndex(memory, register);
-  unsignedBigIntToBytes(memory.bytes.subarray(index, index + CLINT_REGISTER_SIZE), value);
+  Atomics.store(clintHostWords(memory), timeRegisterWord(register), BigInt.asUintN(64, value));
 };
 
 const writeEpochNs = (memory: Memory, value: bigint): void => {
-  const index = memory.clintHostBaseIndex + CLINT_HOST_EPOCH_NS_OFFSET;
-  unsignedBigIntToBytes(memory.bytes.subarray(index, index + 8), value);
+  Atomics.store(clintHostWords(memory), CLINT_HOST_EPOCH_NS_WORD, BigInt.asUintN(64, value));
 };
 
-const readEpochNs = (memory: Memory): bigint => {
-  const index = memory.clintHostBaseIndex + CLINT_HOST_EPOCH_NS_OFFSET;
-  return bytesToBigInt(memory.bytes.subarray(index, index + 8) as ReadonlyUint8Array);
-};
+const readEpochNs = (memory: Memory): bigint =>
+  Atomics.load(clintHostWords(memory), CLINT_HOST_EPOCH_NS_WORD);
 
 const updateTimerWireFromCompare = (memory: Memory): void => {
   setClintTimerWire(
@@ -229,11 +232,12 @@ const storeClintByte = (
 
 export {
   CLINT_HOST_SIZE,
+  CLINT_WINDOW_SIZE,
   tickClint,
   clintAddressToRegister,
-  clintOverlapsRam,
-  clintOverlapsUart,
   initializeClint,
+  isClintMachineSoftwarePending,
+  isClintMachineTimerPending,
   loadClintByte,
   storeClintByte,
 };

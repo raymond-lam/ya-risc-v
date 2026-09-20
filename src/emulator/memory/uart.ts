@@ -15,8 +15,7 @@
  */
 
 import { bytesToBigInt } from '#utils/bytes';
-import type { ReadonlyUint8Array } from '#utils/bytes';
-import { rangesOverlap } from '#utils/ranges';
+import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory/types';
 
 /** Guest-visible 16550 register window size (RBR/THR … SCR). */
@@ -42,54 +41,6 @@ const META_TX_HEAD = 2;
 const META_TX_TAIL = 3;
 const META_INT32_COUNT = 4;
 
-type UartHostLayout = {
-  /** Host index of the first UART register-shadow byte in `memory.bytes`. */
-  registersHostIndex: number;
-  /** Host index of the Int32 queue metadata (rx/tx head and tail). */
-  metaHostIndex: number;
-  /** Host index of the first RX ring byte. */
-  rxDataHostIndex: number;
-  /** Host index of the first TX ring byte. */
-  txDataHostIndex: number;
-  /** Total host bytes: RAM + registers + meta + both rings. */
-  packedByteLength: number;
-};
-
-const align4 = (value: number): number => (value + 3) & ~3;
-
-/**
- * Host packing after RAM (all fields are host indices into `memory.bytes`):
- *   [registers 8][pad to 4][rxHead rxTail txHead txTail][rx ring][tx ring]
- * Queue rings are not guest-mapped; only the 8-byte window is.
- */
-const uartHostLayout = (ramSize: bigint): UartHostLayout => {
-  const registersHostIndex = Number(ramSize);
-  const metaHostIndex = align4(registersHostIndex + UART_REGISTER_WINDOW);
-  const rxDataHostIndex = metaHostIndex + META_INT32_COUNT * 4;
-  const txDataHostIndex = rxDataHostIndex + UART_QUEUE_CAPACITY;
-  const packedByteLength = txDataHostIndex + UART_QUEUE_CAPACITY;
-  return { registersHostIndex, metaHostIndex, rxDataHostIndex, txDataHostIndex, packedByteLength };
-};
-
-/** Total packed host buffer length for the given RAM size (RAM + UART shadow + queues). */
-const uartPackedByteLength = (ramSize: bigint): number => uartHostLayout(ramSize).packedByteLength;
-
-const uartOverlapsRam = ({
-  ramBaseAddress,
-  ramSize,
-  uartBaseAddress,
-}: {
-  ramBaseAddress: ReadonlyUint8Array;
-  ramSize: bigint;
-  uartBaseAddress: ReadonlyUint8Array;
-}): boolean =>
-  rangesOverlap(
-    bytesToBigInt(ramBaseAddress),
-    ramSize,
-    bytesToBigInt(uartBaseAddress),
-    BigInt(UART_REGISTER_WINDOW)
-  );
-
 /**
  * Map a guest UART address to a register index within the 8-byte window (0..7),
  * or `null` if the address is outside the window.
@@ -104,10 +55,8 @@ const uartAddressToRegisterIndex = (memory: Memory, address: ReadonlyUint8Array)
   return null;
 };
 
-const queueMeta = (memory: Memory): Int32Array => {
-  const { metaHostIndex } = uartHostLayout(memory.ramSize);
-  return new Int32Array(memory.bytes.buffer, metaHostIndex, META_INT32_COUNT);
-};
+const queueMeta = (memory: Memory): Int32Array =>
+  new Int32Array(memory.bytes.buffer, memory.uartMetaHostIndex, META_INT32_COUNT);
 
 const queueLength = (head: number, tail: number): number =>
   (tail - head + UART_QUEUE_CAPACITY) % UART_QUEUE_CAPACITY;
@@ -125,8 +74,7 @@ const pushReceive = (memory: Memory, value: number): boolean => {
   if (queueIsFull(head, tail)) {
     return false;
   }
-  const { rxDataHostIndex } = uartHostLayout(memory.ramSize);
-  memory.bytes[rxDataHostIndex + tail] = value & 0xff;
+  memory.bytes[memory.uartRxDataHostIndex + tail] = value & 0xff;
   Atomics.store(meta, META_RX_TAIL, (tail + 1) % UART_QUEUE_CAPACITY);
   return true;
 };
@@ -141,8 +89,7 @@ const popTransmit = (memory: Memory): number | null => {
   if (head === tail) {
     return null;
   }
-  const { txDataHostIndex } = uartHostLayout(memory.ramSize);
-  const value = memory.bytes[txDataHostIndex + head] ?? 0;
+  const value = memory.bytes[memory.uartTxDataHostIndex + head] ?? 0;
   Atomics.store(meta, META_TX_HEAD, (head + 1) % UART_QUEUE_CAPACITY);
   return value;
 };
@@ -154,8 +101,7 @@ const popReceive = (memory: Memory): number => {
   if (head === tail) {
     return 0;
   }
-  const { rxDataHostIndex } = uartHostLayout(memory.ramSize);
-  const value = memory.bytes[rxDataHostIndex + head] ?? 0;
+  const value = memory.bytes[memory.uartRxDataHostIndex + head] ?? 0;
   Atomics.store(meta, META_RX_HEAD, (head + 1) % UART_QUEUE_CAPACITY);
   return value;
 };
@@ -167,8 +113,7 @@ const pushTransmit = (memory: Memory, value: number): boolean => {
   if (queueIsFull(head, tail)) {
     return false;
   }
-  const { txDataHostIndex } = uartHostLayout(memory.ramSize);
-  memory.bytes[txDataHostIndex + tail] = value & 0xff;
+  memory.bytes[memory.uartTxDataHostIndex + tail] = value & 0xff;
   Atomics.store(meta, META_TX_TAIL, (tail + 1) % UART_QUEUE_CAPACITY);
   return true;
 };
@@ -202,8 +147,7 @@ const loadUartRegister = (memory: Memory, registerIndex: number): number => {
   if (registerIndex === 5) {
     return readLineStatus(memory);
   }
-  const { registersHostIndex } = uartHostLayout(memory.ramSize);
-  return memory.bytes[registersHostIndex + registerIndex] ?? 0;
+  return memory.bytes[memory.uartRegistersHostIndex + registerIndex] ?? 0;
 };
 
 /**
@@ -218,16 +162,16 @@ const storeUartRegister = (memory: Memory, registerIndex: number, value: number)
   if (registerIndex === 5) {
     return;
   }
-  const { registersHostIndex } = uartHostLayout(memory.ramSize);
-  memory.bytes[registersHostIndex + registerIndex] = value & 0xff;
+  memory.bytes[memory.uartRegistersHostIndex + registerIndex] = value & 0xff;
 };
 
 export {
+  META_INT32_COUNT,
+  UART_QUEUE_CAPACITY,
+  UART_REGISTER_WINDOW,
   loadUartRegister,
   popTransmit,
   pushReceive,
   storeUartRegister,
   uartAddressToRegisterIndex,
-  uartOverlapsRam,
-  uartPackedByteLength,
 };

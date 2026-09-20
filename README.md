@@ -138,7 +138,8 @@ src/
       types.ts            Memory type (private; re-exported from index)
       ram.ts              RAM host mapping and byte access (private)
       uart.ts             16550 window, RX/TX queues (private)
-      clint.ts            Guest physical-address decode, shadow R/W, init, MMIO side effects (private)
+      clint.ts            Guest decode, shadow R/W, tickClint, IRQ wire sample (private)
+      layout.ts           Host SAB packing + guest address → region (private)
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT wire, take IRQ, fetch/decode/execute
@@ -148,17 +149,17 @@ src/
       types.ts            Architectural state types (re-exported from index)
       instructions/       One file per opcode group (op-imm.ts, load.ts, branch.ts, …)
     clint/
-      index.ts            Host-side create()/start()/stop(); isClintMachineTimerPending
+      index.ts            Host-side create()/start()/stop()
       run.ts              Worker: timebase tick loop (calls tickClint)
-      wire.ts             Drive + sample timer IRQ wire
       types.ts            Worker payload types (private to the package)
     terminal/
       index.ts            Host-side create()/start()/stop(); UART↔stream bridge
       run.ts              Worker entry
       types.ts            Worker payload types (private to the package)
   tui/                    Ink host UI (create()/start()/stop())
+  types.ts                Shared architectural types (ReadonlyUint8Array)
   utils/
-    bytes.ts              64-bit LE byte-array arithmetic + ReadonlyUint8Array
+    bytes.ts              64-bit LE byte-array arithmetic
     tty.ts                VT100 encode/paint helpers for the TUI terminal pane
 ```
 

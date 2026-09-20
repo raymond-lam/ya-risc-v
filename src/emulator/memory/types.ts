@@ -15,7 +15,7 @@
  */
 
 /* eslint-disable import/prefer-default-export -- Memory is the package's type module surface */
-import type { ReadonlyUint8Array } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#types';
 
 /**
  * Guest address space: RAM, a 16550 UART register window, and a CLINT
@@ -34,15 +34,13 @@ import type { ReadonlyUint8Array } from '#utils/bytes';
  *   clintBaseAddress + 0x4000                 — mtimecmp (8 bytes)
  *   clintBaseAddress + 0xbff8                 — mtime (8 bytes)
  *
- * Host packing in `bytes` (indices; sparse guest map; no hole allocated):
- *   [0, ramSize)                         — DRAM
- *   [ramSize, ramSize + 8)               — UART register shadow (non-data/status)
- *   then aligned queue metadata + RX ring + TX ring (see `uartHostLayout`)
- *   then CLINT shadows + timer/software IRQ wires + epoch (see `memory/clint.ts`)
+ * Host packing in `bytes` (indices; sparse guest map; no hole allocated) is computed
+ * once by `guestMemoryHostLayout` (`memory/layout.ts`) and stored on this type:
+ *   [RAM][UART registers][pad to 4][queue meta][RX ring][TX ring][pad to 8][CLINT]
  *
  * The CLINT tick worker (`#emulator/clint/run`) advances `mtime` and drives the timer
  * wire; guest `msip` stores drive the software wire; the hart samples both
- * (`#emulator/clint`) into `mip.MTIP` / `mip.MSIP`.
+ * (`#emulator/memory`) into `mip.MTIP` / `mip.MSIP`.
  *
  * Guest bases/`ramSize` participate in physical-address math as `bigint`. Host indices
  * are `number`.
@@ -55,7 +53,15 @@ type Memory = {
   ramSize: bigint;
   uartBaseAddress: ReadonlyUint8Array;
   clintBaseAddress: ReadonlyUint8Array;
-  /** Host index of the CLINT shadow region in `bytes` (after UART packing). */
+  /** Host index of the UART register-shadow bytes. */
+  uartRegistersHostIndex: number;
+  /** Host index of the Int32 UART queue metadata (rx/tx head and tail). */
+  uartMetaHostIndex: number;
+  /** Host index of the first UART RX ring byte. */
+  uartRxDataHostIndex: number;
+  /** Host index of the first UART TX ring byte. */
+  uartTxDataHostIndex: number;
+  /** Host index of the CLINT shadow region (8-byte aligned). */
   clintHostBaseIndex: number;
 };
 

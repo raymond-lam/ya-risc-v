@@ -16,18 +16,48 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { rangesOverlap } from '#utils/ranges';
+import { findOverlappingPair } from '#utils/ranges';
 
-describe('rangesOverlap', () => {
-  it('detects overlapping half-open ranges', () => {
-    assert.equal(rangesOverlap(0n, 8n, 4n, 8n), true);
-    assert.equal(rangesOverlap(0n, 8n, 8n, 8n), false);
-    assert.equal(rangesOverlap(10n, 5n, 0n, 10n), false);
-    assert.equal(rangesOverlap(10n, 5n, 0n, 11n), true);
+describe('findOverlappingPair', () => {
+  it('returns null when no ranges overlap', () => {
+    assert.equal(
+      findOverlappingPair([
+        { name: 'a', base: 0n, size: 8n },
+        { name: 'b', base: 8n, size: 8n },
+        { name: 'c', base: 16n, size: 8n },
+      ]),
+      null
+    );
   });
 
-  it('treats empty ranges as non-overlapping', () => {
-    assert.equal(rangesOverlap(0n, 0n, 0n, 8n), false);
-    assert.equal(rangesOverlap(0n, 8n, 4n, 0n), false);
+  it('treats abutting and empty ranges as non-overlapping', () => {
+    assert.equal(
+      findOverlappingPair([
+        { name: 'a', base: 0n, size: 8n },
+        { name: 'b', base: 8n, size: 8n },
+      ]),
+      null
+    );
+    assert.equal(
+      findOverlappingPair([
+        { name: 'a', base: 0n, size: 0n },
+        { name: 'b', base: 0n, size: 8n },
+      ]),
+      null
+    );
+  });
+
+  it('returns the first overlapping pair in list order', () => {
+    assert.deepEqual(
+      findOverlappingPair([
+        { name: 'uart', base: 0x1000n, size: 8n },
+        { name: 'clint', base: 0x2000n, size: 0xc000n },
+        { name: 'ram', base: 0x8000n, size: 0x1000n },
+      ]),
+      {
+        a: { name: 'clint', base: 0x2000n, size: 0xc000n },
+        b: { name: 'ram', base: 0x8000n, size: 0x1000n },
+      }
+    );
   });
 });

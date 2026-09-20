@@ -22,7 +22,7 @@ import { loadBytes, storeBytes } from '#emulator/memory';
 import { create } from '#emulator/terminal';
 import createTestMemory from '#test/guest-memory';
 import { unsignedBigIntToBytes } from '#utils/bytes';
-import type { ReadonlyUint8Array } from '#emulator/memory';
+import type { ReadonlyUint8Array } from '#types';
 
 const UART_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n) as ReadonlyUint8Array;
 
