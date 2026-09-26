@@ -16,8 +16,8 @@
 
 import { bytesToBigInt } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
+import { setIrqWire } from '#emulator/memory/hart-wake';
 import type { Memory } from '#emulator/memory/types';
-import { notifyHartWake } from '#emulator/memory/hart-wake';
 
 /**
  * CLINT layout (single hart), relative to `clintBaseAddress`:
@@ -35,14 +35,14 @@ const CLINT_REGISTER_SIZE = 8;
 const CLINT_WINDOW_SIZE = 0xc000n;
 
 /**
- * Host packing after UART in `memory.bytes` (8-byte aligned base; Atomics on words/wires):
+ * Host packing after UART in `memory.bytes` (8-byte aligned base; Atomics on u64s/wires):
  *   [mtime 8][mtimecmp 8][timerWire 1][softwareWire 1][pad 6][epochNs 8]
  */
-const CLINT_HOST_MTIME_WORD = 0;
-const CLINT_HOST_MTIMECMP_WORD = 1;
-const CLINT_HOST_EPOCH_NS_WORD = 3;
-const CLINT_HOST_WORD_COUNT = 4;
-const CLINT_HOST_SIZE = CLINT_HOST_WORD_COUNT * 8;
+const CLINT_HOST_MTIME_UINT64 = 0;
+const CLINT_HOST_MTIMECMP_UINT64 = 1;
+const CLINT_HOST_EPOCH_NS_UINT64 = 3;
+const CLINT_HOST_UINT64_COUNT = 4;
+const CLINT_HOST_SIZE = CLINT_HOST_UINT64_COUNT * 8;
 const CLINT_HOST_TIMER_WIRE_OFFSET = 16;
 const CLINT_HOST_SOFTWARE_WIRE_OFFSET = 17;
 
@@ -55,15 +55,7 @@ type ClintRegister = 'msip' | ClintTimeRegister;
 
 /** Drive a level-sensitive CLINT IRQ wire (1 = pending); wake `wfi` only on 0→1. */
 const setClintIrqWire = (memory: Memory, wireOffset: number, pending: boolean): void => {
-  const index = memory.clintHostBaseIndex + wireOffset;
-  const previous = Atomics.load(memory.bytes, index);
-  const next = pending ? 1 : 0;
-  Atomics.store(memory.bytes, index, next);
-  // Rising edge only: re-notifying while the wire stays high (e.g. every `tickClint`)
-  // would be useless and wasteful.
-  if (next !== 0 && previous === 0) {
-    notifyHartWake(memory);
-  }
+  setIrqWire(memory, memory.clintHostBaseIndex + wireOffset, pending);
 };
 
 /** Drive the level-sensitive CLINT timer IRQ wire (1 = pending). */
@@ -106,20 +98,23 @@ const clintAddressToRegister = (
 };
 
 /** `BigUint64Array` over the CLINT host region (`mtime` / `mtimecmp` / pad / `epochNs`). */
-const clintHostWords = (memory: Memory): BigUint64Array =>
-  new BigUint64Array(memory.bytes.buffer, memory.clintHostBaseIndex, CLINT_HOST_WORD_COUNT);
+const clintHostUint64s = (memory: Memory): BigUint64Array =>
+  new BigUint64Array(memory.bytes.buffer, memory.clintHostBaseIndex, CLINT_HOST_UINT64_COUNT);
 
-const timeRegisterWord = (register: ClintTimeRegister): number =>
-  register === 'mtime' ? CLINT_HOST_MTIME_WORD : CLINT_HOST_MTIMECMP_WORD;
+const timeRegisterUint64Index = (register: ClintTimeRegister): number =>
+  register === 'mtime' ? CLINT_HOST_MTIME_UINT64 : CLINT_HOST_MTIMECMP_UINT64;
+
+const timeRegisterByteIndex = (
+  memory: Memory,
+  register: ClintTimeRegister,
+  byteOffset: number
+): number => memory.clintHostBaseIndex + timeRegisterUint64Index(register) * 8 + byteOffset;
 
 const loadTimeRegisterByte = (
   memory: Memory,
   register: ClintTimeRegister,
   byteOffset: number
-): number => {
-  const word = Atomics.load(clintHostWords(memory), timeRegisterWord(register));
-  return Number((word >> BigInt(byteOffset * 8)) & 0xffn);
-};
+): number => Atomics.load(memory.bytes, timeRegisterByteIndex(memory, register, byteOffset));
 
 const storeTimeRegisterByte = (
   memory: Memory,
@@ -127,20 +122,7 @@ const storeTimeRegisterByte = (
   byteOffset: number,
   value: number
 ): void => {
-  const words = clintHostWords(memory);
-  const wordIndex = timeRegisterWord(register);
-  const shift = BigInt(byteOffset * 8);
-  const mask = 0xffn << shift;
-  const byte = BigInt(value & 0xff) << shift;
-  let expected = Atomics.load(words, wordIndex);
-  for (;;) {
-    const next = (expected & ~mask) | byte;
-    const observed = Atomics.compareExchange(words, wordIndex, expected, next);
-    if (observed === expected) {
-      return;
-    }
-    expected = observed;
-  }
+  Atomics.store(memory.bytes, timeRegisterByteIndex(memory, register, byteOffset), value & 0xff);
 };
 
 /** Guest msip byte: only byte 0 bit 0 is defined (software IRQ wire). */
@@ -159,18 +141,22 @@ const storeMsipByte = (memory: Memory, byteOffset: number, value: number): void 
 };
 
 const readTimeRegister = (memory: Memory, register: ClintTimeRegister): bigint =>
-  Atomics.load(clintHostWords(memory), timeRegisterWord(register));
+  Atomics.load(clintHostUint64s(memory), timeRegisterUint64Index(register));
 
 const writeTimeRegister = (memory: Memory, register: ClintTimeRegister, value: bigint): void => {
-  Atomics.store(clintHostWords(memory), timeRegisterWord(register), BigInt.asUintN(64, value));
+  Atomics.store(
+    clintHostUint64s(memory),
+    timeRegisterUint64Index(register),
+    BigInt.asUintN(64, value)
+  );
 };
 
 const writeEpochNs = (memory: Memory, value: bigint): void => {
-  Atomics.store(clintHostWords(memory), CLINT_HOST_EPOCH_NS_WORD, BigInt.asUintN(64, value));
+  Atomics.store(clintHostUint64s(memory), CLINT_HOST_EPOCH_NS_UINT64, BigInt.asUintN(64, value));
 };
 
 const readEpochNs = (memory: Memory): bigint =>
-  Atomics.load(clintHostWords(memory), CLINT_HOST_EPOCH_NS_WORD);
+  Atomics.load(clintHostUint64s(memory), CLINT_HOST_EPOCH_NS_UINT64);
 
 const updateTimerWireFromCompare = (memory: Memory): void => {
   setClintTimerWire(

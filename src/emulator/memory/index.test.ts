@@ -20,15 +20,21 @@ import {
   createMemory,
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
+  isPlicMachineExternalPending,
   loadBytes,
-  readHartWake,
-  popTransmit,
-  pushReceive,
+  popUartTransmit,
+  pushUartReceive,
   storeBytes,
+  type Memory,
 } from '#emulator/memory';
+import { atomicUpdateBit } from '#emulator/memory/atomics';
 import createTestMemory from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
 import { signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
+
+/** Snapshot the `wfi` wake Int32 (test observation only). */
+const readHartWake = (memory: Memory): number =>
+  Atomics.load(new Int32Array(memory.bytes.buffer, memory.hartWakeHostIndex, 1), 0);
 
 /** LSR bits — local to tests (not part of the public UART surface). */
 const LSR_DR = 0x01;
@@ -42,6 +48,7 @@ const CLINT_MTIME_OFFSET = 0xbff8n;
 const RAM_BASE = new Uint8Array(8) as ReadonlyUint8Array;
 const UART_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n) as ReadonlyUint8Array;
 const CLINT_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n) as ReadonlyUint8Array;
+const PLIC_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x0c00_0000n) as ReadonlyUint8Array;
 const HIGH_RAM_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000n) as ReadonlyUint8Array;
 
 const uartAddress = (registerIndex: number): ReadonlyUint8Array => {
@@ -55,11 +62,13 @@ describe('memory', () => {
     const memory = createTestMemory(64n);
     assert.equal(memory.ramSize, 64n);
     assert.equal(memory.uartRegistersHostIndex, 64);
-    assert.equal(memory.uartMetaHostIndex % 4, 0);
+    assert.equal(memory.uartMetaHostIndex, 72);
     assert.equal(memory.clintHostBaseIndex % 8, 0);
     assert.ok(memory.bytes.byteLength > memory.clintHostBaseIndex);
+    assert.ok(memory.plicHostBaseIndex >= memory.clintHostBaseIndex + 32);
+    assert.equal(memory.plicHostBaseIndex % 4, 0);
     assert.equal(memory.hartWakeHostIndex % 4, 0);
-    assert.ok(memory.hartWakeHostIndex >= memory.clintHostBaseIndex + 32);
+    assert.ok(memory.hartWakeHostIndex >= memory.plicHostBaseIndex);
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
   });
 
@@ -130,6 +139,7 @@ describe('memory', () => {
       ramSize,
       uartBaseAddress: UART_BASE,
       clintBaseAddress: CLINT_BASE,
+      plicBaseAddress: PLIC_BASE,
     });
 
     // Guest physical address 0x8000_0000 + 4 → host index 4
@@ -162,6 +172,7 @@ describe('memory', () => {
           ramSize: 0x1000_0000n + 1n,
           uartBaseAddress: UART_BASE,
           clintBaseAddress: CLINT_BASE,
+          plicBaseAddress: PLIC_BASE,
         }),
       /overlaps RAM/
     );
@@ -173,6 +184,7 @@ describe('memory', () => {
       ramSize: 0x1000_0000n + 1n,
       uartBaseAddress: UART_BASE,
       clintBaseAddress: CLINT_BASE,
+      plicBaseAddress: PLIC_BASE,
     });
     assert.ok(memory.bytes.byteLength > Number(0x1000_0000n + 1n));
   });
@@ -185,14 +197,29 @@ describe('memory', () => {
           ramSize: 0xc000n,
           uartBaseAddress: UART_BASE,
           clintBaseAddress: CLINT_BASE,
+          plicBaseAddress: PLIC_BASE,
         }),
       /CLINT window overlaps RAM/
+    );
+  });
+
+  it('rejects a PLIC window that overlaps RAM', () => {
+    assert.throws(
+      () =>
+        createMemory({
+          ramBaseAddress: PLIC_BASE,
+          ramSize: 0x201008n,
+          uartBaseAddress: UART_BASE,
+          clintBaseAddress: CLINT_BASE,
+          plicBaseAddress: PLIC_BASE,
+        }),
+      /PLIC window overlaps RAM/
     );
   });
 });
 
 describe('uart queues', () => {
-  it('THR store pushes TX; popTransmit drains; LSR reflects THRE/TEMT', () => {
+  it('THR store pushes TX; popUartTransmit drains; LSR reflects THRE/TEMT', () => {
     const memory = createTestMemory(64n);
 
     const lsrEmpty = new Uint8Array(8);
@@ -205,8 +232,8 @@ describe('uart queues', () => {
       source: new Uint8Array([0x41]),
       byteLength: 1,
     });
-    assert.equal(popTransmit(memory), 0x41);
-    assert.equal(popTransmit(memory), null);
+    assert.equal(popUartTransmit(memory), 0x41);
+    assert.equal(popUartTransmit(memory), null);
 
     storeBytes({
       memory,
@@ -218,12 +245,12 @@ describe('uart queues', () => {
     loadBytes({ destination: lsrPending, memory, address: uartAddress(5), byteLength: 1 });
     assert.equal(lsrPending[0]! & LSR_TEMT, 0);
     assert.equal(lsrPending[0]! & LSR_THRE, LSR_THRE);
-    assert.equal(popTransmit(memory), 0x42);
+    assert.equal(popUartTransmit(memory), 0x42);
   });
 
-  it('pushReceive then RBR load pops RX and clears DR', () => {
+  it('pushUartReceive then RBR load pops RX and clears DR', () => {
     const memory = createTestMemory(64n);
-    assert.equal(pushReceive(memory, 0xab), true);
+    assert.equal(pushUartReceive(memory, 0xab), true);
 
     const lsrReady = new Uint8Array(8);
     loadBytes({ destination: lsrReady, memory, address: uartAddress(5), byteLength: 1 });
@@ -245,7 +272,7 @@ describe('uart queues', () => {
   it('drops RX when the receive queue is full', () => {
     const memory = createTestMemory(64n);
     let filled = 0;
-    while (pushReceive(memory, filled & 0xff)) {
+    while (pushUartReceive(memory, filled & 0xff)) {
       filled += 1;
     }
     assert.ok(filled > 0);
@@ -280,8 +307,8 @@ describe('uart queues', () => {
       source: new Uint8Array([0xff]),
       byteLength: 1,
     });
-    assert.equal(popTransmit(memory), 0);
-    assert.equal(popTransmit(memory), 1);
+    assert.equal(popUartTransmit(memory), 0);
+    assert.equal(popUartTransmit(memory), 1);
   });
 
   it('round-trips scratch and ignores LSR writes', () => {
@@ -342,7 +369,7 @@ describe('clint', () => {
     assert.equal(isClintMachineSoftwarePending(memory), false);
   });
 
-  it('msip 0→1 bumps the hart-wake word for wfi', () => {
+  it('msip 0→1 bumps the hart-wake Int32 for wfi', () => {
     const memory = createTestMemory(64n);
     const before = readHartWake(memory);
     storeBytes({
@@ -404,5 +431,99 @@ describe('clint', () => {
       byteLength: 8,
     });
     assert.deepEqual(destination, value);
+  });
+});
+
+describe('plic', () => {
+  /** UART external interrupt identity (source 10). */
+  const PLIC_SOURCE_UART = 10;
+  /** Host byte offset of the pending bitfield (`priority×32 × 4`). */
+  const PLIC_HOST_PENDING = 128;
+
+  const plicAddress = (offset: bigint): ReadonlyUint8Array =>
+    unsignedBigIntToBytes(new Uint8Array(8), 0x0c00_0000n + offset);
+
+  const storePlicUint32 = (
+    memory: ReturnType<typeof createTestMemory>,
+    offset: bigint,
+    value: number
+  ): void => {
+    storeBytes({
+      memory,
+      address: plicAddress(offset),
+      source: unsignedBigIntToBytes(new Uint8Array(8), BigInt(value >>> 0)),
+      byteLength: 4,
+    });
+  };
+
+  const loadPlicUint32 = (memory: ReturnType<typeof createTestMemory>, offset: bigint): number => {
+    const destination = new Uint8Array(8);
+    loadBytes({
+      destination,
+      memory,
+      address: plicAddress(offset),
+      byteLength: 4,
+    });
+    return (
+      destination[0]! | (destination[1]! << 8) | (destination[2]! << 16) | (destination[3]! << 24)
+    );
+  };
+
+  /**
+   * Device-driven pending (guest MMIO cannot set it). Re-stores M enable so context wires refresh.
+   */
+  const setUartPending = (memory: Memory, pending: boolean): void => {
+    atomicUpdateBit({
+      bytes: memory.bytes,
+      index: memory.plicHostBaseIndex + PLIC_HOST_PENDING + (PLIC_SOURCE_UART >> 3),
+      bit: PLIC_SOURCE_UART & 7,
+      value: pending,
+    });
+    storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
+  };
+
+  it('UART source + M enable/priority above threshold asserts MEIP wire', () => {
+    const memory = createTestMemory(64n);
+    assert.equal(isPlicMachineExternalPending(memory), false);
+
+    storePlicUint32(memory, BigInt(PLIC_SOURCE_UART * 4), 7); // priority
+    storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART); // enable M
+    storePlicUint32(memory, 0x200000n, 0); // threshold
+    setUartPending(memory, true);
+
+    assert.equal(isPlicMachineExternalPending(memory), true);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 1 << PLIC_SOURCE_UART);
+  });
+
+  it('claim returns the UART id and clears the MEIP wire until complete', () => {
+    const memory = createTestMemory(64n);
+    storePlicUint32(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+    storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
+    setUartPending(memory, true);
+    assert.equal(isPlicMachineExternalPending(memory), true);
+
+    assert.equal(loadPlicUint32(memory, 0x200004n), PLIC_SOURCE_UART);
+    assert.equal(isPlicMachineExternalPending(memory), false);
+
+    // Still pending at the source, but claimed — complete re-arms the wire.
+    storePlicUint32(memory, 0x200004n, PLIC_SOURCE_UART);
+    assert.equal(isPlicMachineExternalPending(memory), true);
+  });
+
+  it('source 0→1 bumps the hart-wake Int32', () => {
+    const memory = createTestMemory(64n);
+    storePlicUint32(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+    storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
+    const before = readHartWake(memory);
+    setUartPending(memory, true);
+    assert.equal(readHartWake(memory), before + 1);
+    setUartPending(memory, true);
+    assert.equal(readHartWake(memory), before + 1);
+  });
+
+  it('pending is not CSR/MMIO-writable', () => {
+    const memory = createTestMemory(64n);
+    storePlicUint32(memory, 0x1000n, 0xffff_ffff);
+    assert.equal(loadPlicUint32(memory, 0x1000n), 0);
   });
 });

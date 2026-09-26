@@ -22,17 +22,19 @@ const HART_WAKE_HOST_SIZE = 4;
 const hartWakeWords = (memory: Memory): Int32Array =>
   new Int32Array(memory.bytes.buffer, memory.hartWakeHostIndex, 1);
 
-/** Read the shared wake word (for tests). */
-const readHartWake = (memory: Memory): number => Atomics.load(hartWakeWords(memory), 0);
-
 /**
- * Signal a hart waiting in `wfi` that an interrupt source may now be pending.
- * Devices call this on a 0→1 IRQ-wire transition (CLINT today; PLIC later).
+ * Drive a level-sensitive IRQ wire byte in the SAB (1 = pending).
+ * Wakes `wfi` only on a 0→1 edge — re-notifying while the wire stays high is wasteful.
  */
-const notifyHartWake = (memory: Memory): void => {
-  const wake = hartWakeWords(memory);
-  Atomics.add(wake, 0, 1);
-  Atomics.notify(wake, 0);
+const setIrqWire = (memory: Memory, hostByteIndex: number, pending: boolean): void => {
+  const previous = Atomics.load(memory.bytes, hostByteIndex);
+  const next = pending ? 1 : 0;
+  Atomics.store(memory.bytes, hostByteIndex, next);
+  if (next !== 0 && previous === 0) {
+    const wake = hartWakeWords(memory);
+    Atomics.add(wake, 0, 1);
+    Atomics.notify(wake, 0);
+  }
 };
 
 /**
@@ -44,4 +46,4 @@ const waitHartWake = (memory: Memory): void => {
   Atomics.wait(wake, 0, Atomics.load(wake, 0));
 };
 
-export { HART_WAKE_HOST_SIZE, readHartWake, notifyHartWake, waitHartWake };
+export { HART_WAKE_HOST_SIZE, setIrqWire, waitHartWake };

@@ -34,12 +34,13 @@ const LSR_THRE = 0x20;
 /** LSR: transmitter empty (TX queue empty). */
 const LSR_TEMT = 0x40;
 
-/** Int32 indices into the queue-meta view: rxHead, rxTail, txHead, txTail. */
+/** Byte offsets into queue meta: rxHead, rxTail, txHead, txTail. */
 const META_RX_HEAD = 0;
 const META_RX_TAIL = 1;
 const META_TX_HEAD = 2;
 const META_TX_TAIL = 3;
-const META_INT32_COUNT = 4;
+/** Host bytes reserved for UART queue head/tail indices. */
+const META_BYTE_COUNT = 4;
 
 /**
  * Map a guest UART address to a register index within the 8-byte window (0..7),
@@ -55,8 +56,7 @@ const uartAddressToRegisterIndex = (memory: Memory, address: ReadonlyUint8Array)
   return null;
 };
 
-const queueMeta = (memory: Memory): Int32Array =>
-  new Int32Array(memory.bytes.buffer, memory.uartMetaHostIndex, META_INT32_COUNT);
+const metaIndex = (memory: Memory, offset: number): number => memory.uartMetaHostIndex + offset;
 
 const queueLength = (head: number, tail: number): number =>
   (tail - head + UART_QUEUE_CAPACITY) % UART_QUEUE_CAPACITY;
@@ -67,63 +67,58 @@ const queueIsFull = (head: number, tail: number): boolean =>
 /**
  * Host/keyboard: enqueue a received byte. Returns false if the RX ring is full (byte dropped).
  */
-const pushReceive = (memory: Memory, value: number): boolean => {
-  const meta = queueMeta(memory);
-  const head = Atomics.load(meta, META_RX_HEAD);
-  const tail = Atomics.load(meta, META_RX_TAIL);
+const pushUartReceive = (memory: Memory, value: number): boolean => {
+  const head = Atomics.load(memory.bytes, metaIndex(memory, META_RX_HEAD));
+  const tail = Atomics.load(memory.bytes, metaIndex(memory, META_RX_TAIL));
   if (queueIsFull(head, tail)) {
     return false;
   }
   memory.bytes[memory.uartRxDataHostIndex + tail] = value & 0xff;
-  Atomics.store(meta, META_RX_TAIL, (tail + 1) % UART_QUEUE_CAPACITY);
+  Atomics.store(memory.bytes, metaIndex(memory, META_RX_TAIL), (tail + 1) % UART_QUEUE_CAPACITY);
   return true;
 };
 
 /**
  * Host: dequeue a transmitted byte. Returns `null` if the TX ring is empty.
  */
-const popTransmit = (memory: Memory): number | null => {
-  const meta = queueMeta(memory);
-  const head = Atomics.load(meta, META_TX_HEAD);
-  const tail = Atomics.load(meta, META_TX_TAIL);
+const popUartTransmit = (memory: Memory): number | null => {
+  const head = Atomics.load(memory.bytes, metaIndex(memory, META_TX_HEAD));
+  const tail = Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
   if (head === tail) {
     return null;
   }
   const value = memory.bytes[memory.uartTxDataHostIndex + head] ?? 0;
-  Atomics.store(meta, META_TX_HEAD, (head + 1) % UART_QUEUE_CAPACITY);
+  Atomics.store(memory.bytes, metaIndex(memory, META_TX_HEAD), (head + 1) % UART_QUEUE_CAPACITY);
   return value;
 };
 
 const popReceive = (memory: Memory): number => {
-  const meta = queueMeta(memory);
-  const head = Atomics.load(meta, META_RX_HEAD);
-  const tail = Atomics.load(meta, META_RX_TAIL);
+  const head = Atomics.load(memory.bytes, metaIndex(memory, META_RX_HEAD));
+  const tail = Atomics.load(memory.bytes, metaIndex(memory, META_RX_TAIL));
   if (head === tail) {
     return 0;
   }
   const value = memory.bytes[memory.uartRxDataHostIndex + head] ?? 0;
-  Atomics.store(meta, META_RX_HEAD, (head + 1) % UART_QUEUE_CAPACITY);
+  Atomics.store(memory.bytes, metaIndex(memory, META_RX_HEAD), (head + 1) % UART_QUEUE_CAPACITY);
   return value;
 };
 
 const pushTransmit = (memory: Memory, value: number): boolean => {
-  const meta = queueMeta(memory);
-  const head = Atomics.load(meta, META_TX_HEAD);
-  const tail = Atomics.load(meta, META_TX_TAIL);
+  const head = Atomics.load(memory.bytes, metaIndex(memory, META_TX_HEAD));
+  const tail = Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
   if (queueIsFull(head, tail)) {
     return false;
   }
   memory.bytes[memory.uartTxDataHostIndex + tail] = value & 0xff;
-  Atomics.store(meta, META_TX_TAIL, (tail + 1) % UART_QUEUE_CAPACITY);
+  Atomics.store(memory.bytes, metaIndex(memory, META_TX_TAIL), (tail + 1) % UART_QUEUE_CAPACITY);
   return true;
 };
 
 const readLineStatus = (memory: Memory): number => {
-  const meta = queueMeta(memory);
-  const rxHead = Atomics.load(meta, META_RX_HEAD);
-  const rxTail = Atomics.load(meta, META_RX_TAIL);
-  const txHead = Atomics.load(meta, META_TX_HEAD);
-  const txTail = Atomics.load(meta, META_TX_TAIL);
+  const rxHead = Atomics.load(memory.bytes, metaIndex(memory, META_RX_HEAD));
+  const rxTail = Atomics.load(memory.bytes, metaIndex(memory, META_RX_TAIL));
+  const txHead = Atomics.load(memory.bytes, metaIndex(memory, META_TX_HEAD));
+  const txTail = Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
   let lsr = 0;
   if (queueLength(rxHead, rxTail) > 0) {
     lsr |= LSR_DR;
@@ -166,12 +161,12 @@ const storeUartRegister = (memory: Memory, registerIndex: number, value: number)
 };
 
 export {
-  META_INT32_COUNT,
+  META_BYTE_COUNT,
   UART_QUEUE_CAPACITY,
   UART_REGISTER_WINDOW,
   loadUartRegister,
-  popTransmit,
-  pushReceive,
+  popUartTransmit,
+  pushUartReceive,
   storeUartRegister,
   uartAddressToRegisterIndex,
 };

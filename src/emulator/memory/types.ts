@@ -18,10 +18,10 @@
 import type { ReadonlyUint8Array } from '#types';
 
 /**
- * Guest address space: RAM, a 16550 UART register window, and a CLINT
- * (`msip` / `mtime` / `mtimecmp`), with UART RX/TX queues and CLINT shadows packed into one
- * SharedArrayBuffer (queues and CLINT shadows are host-only packing, not a dense
- * physical-address map).
+ * Guest address space: RAM, a 16550 UART register window, a CLINT
+ * (`msip` / `mtime` / `mtimecmp`), and a PLIC (priority / enable / claim), with UART RX/TX
+ * queues, CLINT shadows, and PLIC shadows packed into one SharedArrayBuffer (queues and
+ * device shadows are host-only packing, not a dense physical-address map).
  *
  * Vocabulary:
  *   - **address** — guest physical address (8-byte little-endian `Uint8Array`)
@@ -33,16 +33,18 @@ import type { ReadonlyUint8Array } from '#types';
  *   clintBaseAddress + 0x0000                 — msip (4 bytes; bit 0)
  *   clintBaseAddress + 0x4000                 — mtimecmp (8 bytes)
  *   clintBaseAddress + 0xbff8                 — mtime (8 bytes)
+ *   plicBaseAddress + …                      — PLIC (see `plic.ts`)
  *
  * Host packing in `bytes` (indices; sparse guest map; no hole allocated) is computed
  * once by `guestMemoryHostLayout` (`memory/layout.ts`) and stored on this type:
- *   [RAM][UART registers][pad to 4][queue meta][RX ring][TX ring][pad to 8][CLINT]
- *   [pad to 4][hart wake Int32]
+ *   [RAM][UART registers][queue meta bytes][RX ring][TX ring][pad to 8][CLINT]
+ *   [pad to 4][PLIC][pad to 4][hart wake Int32]
  *
  * The CLINT tick worker (`#emulator/clint/run`) advances `mtime` and drives the timer
  * wire; guest `msip` stores drive the software wire; the hart samples both
- * (`#emulator/memory`) into `mip.MTIP` / `mip.MSIP`. CLINT wire 0→1 asserts call
- * `notifyHartWake` so a hart in `wfi` wakes via `Atomics.wait` on the hart-wake word.
+ * (`#emulator/memory`) into `mip.MTIP` / `mip.MSIP`. PLIC source wires (UART = 10) and
+ * context enables drive `mip.MEIP` / `mip.SEIP`. Device wire 0→1 asserts call
+ * `setIrqWire` so a hart in `wfi` wakes via `Atomics.wait` on the hart-wake word.
  *
  * Guest bases/`ramSize` participate in physical-address math as `bigint`. Host indices
  * are `number`.
@@ -55,9 +57,10 @@ type Memory = {
   ramSize: bigint;
   uartBaseAddress: ReadonlyUint8Array;
   clintBaseAddress: ReadonlyUint8Array;
+  plicBaseAddress: ReadonlyUint8Array;
   /** Host index of the UART register-shadow bytes. */
   uartRegistersHostIndex: number;
-  /** Host index of the Int32 UART queue metadata (rx/tx head and tail). */
+  /** Host index of the UART queue metadata bytes (rx/tx head and tail). */
   uartMetaHostIndex: number;
   /** Host index of the first UART RX ring byte. */
   uartRxDataHostIndex: number;
@@ -65,6 +68,8 @@ type Memory = {
   uartTxDataHostIndex: number;
   /** Host index of the CLINT shadow region (8-byte aligned). */
   clintHostBaseIndex: number;
+  /** Host index of the PLIC shadow region (4-byte aligned). */
+  plicHostBaseIndex: number;
   /** Host index of the Int32 `wfi` wake word (`Atomics.wait` / `notify`). */
   hartWakeHostIndex: number;
 };

@@ -18,7 +18,7 @@ import { once } from 'node:events';
 import { Readable, Writable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parentPort, workerData } from 'node:worker_threads';
-import { popTransmit, pushReceive } from '#emulator/memory';
+import { popUartTransmit, pushUartReceive } from '#emulator/memory';
 import type { TerminalWorkerData } from '#emulator/terminal/types';
 
 /** How often to poll the UART TX ring when it is empty. */
@@ -35,14 +35,14 @@ const pumpTransmit = async (
   stdout: Writable
 ): Promise<void> => {
   for (;;) {
-    let value = popTransmit(memory);
+    let value = popUartTransmit(memory);
     if (value === null) {
       await sleep(TRANSMIT_POLL_MS);
       continue;
     }
     while (value !== null) {
       await writeByte(stdout, value);
-      value = popTransmit(memory);
+      value = popUartTransmit(memory);
     }
   }
 };
@@ -54,7 +54,7 @@ const main = (): void => {
 
   const onStdinData = (chunk: Buffer): void => {
     for (const byte of chunk) {
-      pushReceive(memory, byte);
+      pushUartReceive(memory, byte);
     }
   };
   stdin.on('data', onStdinData);

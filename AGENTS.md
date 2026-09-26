@@ -5,9 +5,10 @@ reads a raw program image, starts the emulator and Ink TUI, and wires them over 
 
 **Work in progress.** RV64I, RV64M, Zicsr, U/S/M privilege (`mret`/`sret`, `medeleg`/`mideleg`,
 S-mode trap CSRs), synchronous traps (`ecall`/`ebreak`/illegal → `mtvec`/`stvec`), interrupt
-delivery (`mie`/`mip`/`sie`/`sip`, run-loop take, `wfi`), and a CLINT (`msip` → `mip.MSIP`,
-`mtime`/`mtimecmp` → `mip.MTIP`) are implemented; PLIC, further extensions, and virtual memory are
-still to come.
+delivery (`mie`/`mip`/`sie`/`sip`, run-loop take, `wfi`), a CLINT (`msip` → `mip.MSIP`,
+`mtime`/`mtimecmp` → `mip.MTIP`), and a PLIC (priority/enable/claim → `mip.MEIP`/`SEIP`, UART
+source 10) are implemented; UART IER/IIR→PLIC, further extensions, and virtual memory are still to
+come.
 Missing instructions and features are unfinished work, not deliberate scope — don't treat the
 current opcode coverage in `decode.ts` as the intended ceiling, and don't add code that assumes
 today's ISA is all there will ever be.
@@ -36,14 +37,15 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - `src/tui/` — host Ink UI (`create` / `start` / `stop`; `components/`, `hooks/use-mouse-left-click`);
   terminal pane over caller streams.
 - `src/emulator/index.ts` — host-side `create` (requires `ramSize`); maps the image into DRAM at
-  `0x8000_0000` (UART at `0x1000_0000`, CLINT at `0x0200_0000`), creates CPU + CLINT + terminal
+  `0x8000_0000` (UART at `0x1000_0000`, CLINT at `0x0200_0000`, PLIC at `0x0c00_0000`), creates
+  CPU + CLINT + terminal
   handles, returns an awaitable. `start` / `stop` forward to all three; awaiting joins all three.
 - `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, decode,
   trap, registers, instructions (one file per opcode group).
 - `src/emulator/memory/` — guest memory package (`index` public API; private `types` / `layout` /
-  `ram` / `uart` / `clint` guest physical-address decode + shadow R/W + host-clock `mtime` advance;
-  exports `pushReceive` / `popTransmit` and `isClintMachineTimerPending` /
-  `isClintMachineSoftwarePending` for workers).
+  `ram` / `uart` / `clint` / `plic` / `atomics` / `hart-wake` guest physical-address decode + shadow
+  R/W + host-clock `mtime` advance; exports `pushUartReceive` / `popUartTransmit`, CLINT/PLIC pending
+  samples, and hart-wake helpers for workers).
 - `src/emulator/clint/` — CLINT timebase: host `create` / `start` / `stop`, worker `run.ts`
   (calls `tickClint` in `#emulator/memory`).
 - `src/emulator/terminal/` — UART↔stream bridge: host `create` / `start` / `stop`, worker `run.ts`.
@@ -64,10 +66,12 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   queues packed in the SAB (host-only; RBR/THR/LSR loads/stores are queue side effects in
   `memory/uart.ts`). Guest CLINT MMIO (`msip` / `mtime` / `mtimecmp`) is decoded in `memory/clint.ts`;
   host shadows, timer/software wires, and epoch live in the SAB after UART (see `memory/clint.ts`),
-  accessed with `Atomics` (`BigUint64Array` for time/epoch, bytes for wires) like UART queue meta;
-  the `#emulator/clint` worker advances the 10 MHz timebase and drives the timer wire; the hart
-  samples the wires (`isClintMachineTimerPending` / `isClintMachineSoftwarePending`) into
-  `mip.MTIP` / `mip.MSIP`. **address** means a guest
+  accessed with `Atomics` (`BigUint64Array` for time/epoch, bytes for wires) like UART queue meta
+  and PLIC shadows; the `#emulator/clint` worker advances the 10 MHz timebase and drives the timer
+  wire; the hart samples the wires (`isClintMachineTimerPending` / `isClintMachineSoftwarePending`) into
+  `mip.MTIP` / `mip.MSIP`. Guest PLIC MMIO is decoded in `memory/plic.ts` (priority / enable /
+  claim; UART source 10); host shadows and MEIP/SEIP wires sit after CLINT in the SAB; the hart
+  samples them into `mip.MEIP` / `mip.SEIP`. **address** means a guest
   physical address (architectural bytes); **index** means a host TypedArray index into
   `memory.bytes` (`number`). Transfer widths
   (`byteLength` on load/store) are also `number`.
@@ -86,7 +90,9 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `Uint8Array` remains assignable.
 - **Guest DRAM is a `SharedArrayBuffer`** shared with the worker, accessed with plain byte reads
   and writes. The absence of `Atomics` there is deliberate: unsynchronized hosts should race like
-  real memory. Host-only packing (UART queue meta, CLINT time/epoch/wires) uses `Atomics`.
+  real memory. Host-only packing (UART queue meta, CLINT time/epoch/wires, PLIC shadows/wires)
+  uses `Atomics` on bytes (`Uint8Array`), except CLINT time/epoch (`BigUint64Array`) and the
+  hart-wake word (`Int32Array` for `Atomics.wait` / `notify`).
 - **Privilege modes and traps.** The hart tracks U/S/M in `registers.privilegeMode`
   (8-byte little-endian; reset = M). `ecall`, `ebreak`, and illegal encodings call `enterTrap` in
   `trap.ts`: they write `xepc`/`xcause`/`xtval`, update enable stacks (`MPIE`/`MIE`/`MPP` or
@@ -98,11 +104,11 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `takeInterruptIfAny` before each fetch: pending∧enabled interrupts take via the
   same entry path with `xcause` interrupt bit set; `mideleg` routes supervisor causes to S.
   `wfi` advances the PC then waits on the shared hart-wake Int32 (`Atomics.wait`) until a
-  device notifies (CLINT wire 0→1) and `mip ∧ mie` is nonzero (wake ignores global
+  device notifies (CLINT/PLIC wire 0→1) and `mip ∧ mie` is nonzero (wake ignores global
   `mstatus.MIE`/`SIE`). With `mstatus.TW` set, `wfi` below M raises illegal-instruction
   immediately (limit = 0).
-  `mip.MSIP` and `mip.MTIP` are not CSR-writable (CLINT-driven); other pending bits remain
-  software-writable until more devices exist.
+  `mip.MSIP`/`MTIP` (CLINT) and `mip.MEIP`/`SEIP` (PLIC) are not CSR-writable; other pending
+  bits remain software-writable until more devices exist.
 - **Zicsr checks CSR existence and privilege.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live
   in `system.ts` (SYSTEM opcode group). Only the implemented set is accessible (`mstatus`/
   `sstatus`, `medeleg`/`mideleg`, `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mepc`/`sepc`,
@@ -111,7 +117,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `csrrs`/`csrrc` with `rs1` = `x0` and `csrrsi`/`csrrci` with a zero immediate are read-only and
   may touch identity CSRs. `sstatus`/`sie`/`sip` are masked aliases of `mstatus`/`mie`/`mip`;
   `mstatus` MPP is WARL (reserved → U); `mie`/`mideleg` WARL to implemented interrupt bits;
-  `mip` WARL preserves hardware `MSIP`/`MTIP`. They snapshot the CSR slot before writing `rd` (the file
+  `mip` WARL preserves hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`. They snapshot the CSR slot before writing `rd` (the file
   is live).
 
 ## Adding instructions

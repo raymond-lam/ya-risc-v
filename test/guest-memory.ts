@@ -18,7 +18,7 @@ import { createMemory, type Memory } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
-/** Test map: RAM at guest physical address 0, UART at `0x1000_0000`, CLINT at `0x0200_0000`. */
+/** Test map: RAM at guest physical address 0; UART/CLINT/PLIC at fixed MMIO bases. */
 const RAM_BASE_ADDRESS = new Uint8Array(8) as ReadonlyUint8Array;
 const UART_BASE_ADDRESS = unsignedBigIntToBytes(
   new Uint8Array(8),
@@ -28,6 +28,10 @@ const CLINT_BASE_ADDRESS = unsignedBigIntToBytes(
   new Uint8Array(8),
   0x0200_0000n
 ) as ReadonlyUint8Array;
+const PLIC_BASE_ADDRESS = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  0x0c00_0000n
+) as ReadonlyUint8Array;
 
 const createTestMemory = (ramSize: bigint): Memory =>
   createMemory({
@@ -35,6 +39,7 @@ const createTestMemory = (ramSize: bigint): Memory =>
     ramSize,
     uartBaseAddress: UART_BASE_ADDRESS,
     clintBaseAddress: CLINT_BASE_ADDRESS,
+    plicBaseAddress: PLIC_BASE_ADDRESS,
   });
 
 export default createTestMemory;

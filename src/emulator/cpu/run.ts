@@ -19,14 +19,18 @@ import decode from '#emulator/cpu/decode';
 import {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
+  isPlicMachineExternalPending,
+  isPlicSupervisorExternalPending,
   loadBytes,
 } from '#emulator/memory';
 import {
   createRegisters,
   readProgramCounter,
+  setMachineExternalInterruptPending,
   setMachineSoftwareInterruptPending,
   setMachineTimerInterruptPending,
   setProgramCounter,
+  setSupervisorExternalInterruptPending,
 } from '#emulator/cpu/registers';
 import { takeInterruptIfAny } from '#emulator/cpu/trap';
 import type { CpuWorkerData } from '#emulator/cpu/types';
@@ -41,6 +45,8 @@ const main = (): void => {
   for (;;) {
     setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
     setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));
+    setMachineExternalInterruptPending(registers, isPlicMachineExternalPending(memory));
+    setSupervisorExternalInterruptPending(registers, isPlicSupervisorExternalPending(memory));
     if (takeInterruptIfAny(registers)) {
       continue;
     }

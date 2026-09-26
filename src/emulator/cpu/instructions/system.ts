@@ -23,8 +23,10 @@ import {
   isControlAndStatusRegisterAccessAllowed,
   readGeneralPurposeRegister,
   readPrivilegeMode,
+  setMachineExternalInterruptPending,
   setMachineSoftwareInterruptPending,
   setMachineTimerInterruptPending,
+  setSupervisorExternalInterruptPending,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
@@ -43,6 +45,8 @@ import type { Registers } from '#emulator/cpu/types';
 import {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
+  isPlicMachineExternalPending,
+  isPlicSupervisorExternalPending,
   waitHartWake,
   type Memory,
 } from '#emulator/memory';
@@ -77,10 +81,12 @@ const trapIllegalCsrAccess = (registers: Registers, instructionWord: number): vo
   enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(instructionWord));
 };
 
-/** Sample CLINT wires into `mip` (device-driven pending bits). */
-const sampleClintPending = (registers: Registers, memory: Memory): void => {
+/** Sample CLINT/PLIC wires into `mip` (device-driven pending bits). */
+const sampleDevicePending = (registers: Registers, memory: Memory): void => {
   setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
   setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));
+  setMachineExternalInterruptPending(registers, isPlicMachineExternalPending(memory));
+  setSupervisorExternalInterruptPending(registers, isPlicSupervisorExternalPending(memory));
 };
 
 /** ecall: environment call; cause depends on the current privilege mode. */
@@ -134,7 +140,7 @@ const wfi = (registers: Registers, memory: Memory): void => {
   }
   advanceProgramCounter(registers);
   for (;;) {
-    sampleClintPending(registers, memory);
+    sampleDevicePending(registers, memory);
     if (isPendingEnabledInterrupt(registers)) {
       return;
     }
