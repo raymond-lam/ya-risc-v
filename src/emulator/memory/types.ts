@@ -37,14 +37,16 @@ import type { ReadonlyUint8Array } from '#types';
  *
  * Host packing in `bytes` (indices; sparse guest map; no hole allocated) is computed
  * once by `guestMemoryHostLayout` (`memory/layout.ts`) and stored on this type:
- *   [RAM][UART registers][queue meta bytes][RX ring][TX ring][pad to 8][CLINT]
- *   [pad to 4][PLIC][pad to 4][hart wake Int32]
+ *   [RAM][UART registers][queue meta bytes][RX ring][TX ring][pad to 4][UART TX wake]
+ *   [pad to 8][CLINT][pad to 4][PLIC][pad to 4][hart wake Int32]
  *
  * The CLINT tick worker (`#emulator/clint/run`) advances `mtime` and drives the timer
  * wire; guest `msip` stores drive the software wire; the hart samples both
  * (`#emulator/memory`) into `mip.MTIP` / `mip.MSIP`. PLIC source wires (UART = 10) and
  * context enables drive `mip.MEIP` / `mip.SEIP`. Device wire 0→1 asserts call
  * `setIrqWire` so a hart in `wfi` wakes via `Atomics.wait` on the hart-wake word.
+ * Guest THR stores that empty→nonempty the TX ring notify the UART TX wake word so the
+ * terminal worker can `Atomics.waitAsync` instead of polling.
  *
  * Guest bases/`ramSize` participate in physical-address math as `bigint`. Host indices
  * are `number`.
@@ -66,6 +68,8 @@ type Memory = {
   uartRxDataHostIndex: number;
   /** Host index of the first UART TX ring byte. */
   uartTxDataHostIndex: number;
+  /** Host index of the Int32 UART TX wake word (`Atomics.wait` / `notify`). */
+  uartTxWakeHostIndex: number;
   /** Host index of the CLINT shadow region (8-byte aligned). */
   clintHostBaseIndex: number;
   /** Host index of the PLIC shadow region (4-byte aligned). */

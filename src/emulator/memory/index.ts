@@ -37,6 +37,7 @@ import {
   popUartTransmit,
   pushUartReceive,
   storeUartRegister,
+  waitUartTransmit,
 } from '#emulator/memory/uart';
 import type { Memory } from '#emulator/memory/types';
 
@@ -76,6 +77,7 @@ const createMemory = ({
     uartMetaHostIndex,
     uartRxDataHostIndex,
     uartTxDataHostIndex,
+    uartTxWakeHostIndex,
     clintHostBaseIndex,
     plicHostBaseIndex,
     hartWakeHostIndex,
@@ -92,6 +94,7 @@ const createMemory = ({
     uartMetaHostIndex,
     uartRxDataHostIndex,
     uartTxDataHostIndex,
+    uartTxWakeHostIndex,
     clintHostBaseIndex,
     plicHostBaseIndex,
     hartWakeHostIndex,
@@ -187,6 +190,7 @@ export {
   pushUartReceive,
   storeBytes,
   ramAddressToHostIndex,
+  waitUartTransmit,
 };
 export {
   isClintMachineSoftwarePending,

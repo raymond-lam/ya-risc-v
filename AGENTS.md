@@ -44,11 +44,12 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   trap, registers, instructions (one file per opcode group).
 - `src/emulator/memory/` — guest memory package (`index` public API; private `types` / `layout` /
   `ram` / `uart` / `clint` / `plic` / `atomics` / `hart-wake` guest physical-address decode + shadow
-  R/W + host-clock `mtime` advance; exports `pushUartReceive` / `popUartTransmit`, CLINT/PLIC pending
-  samples, and hart-wake helpers for workers).
+  R/W + host-clock `mtime` advance; exports `pushUartReceive` / `popUartTransmit` /
+  `waitUartTransmit`, CLINT/PLIC pending samples, and hart-wake helpers for workers).
 - `src/emulator/clint/` — CLINT timebase: host `create` / `start` / `stop`, worker `run.ts`
   (calls `tickClint` in `#emulator/memory`).
-- `src/emulator/terminal/` — UART↔stream bridge: host `create` / `start` / `stop`, worker `run.ts`.
+- `src/emulator/terminal/` — UART↔stream bridge: host `create` / `start` / `stop`, worker
+  `run.ts` (TX drain waits on `waitUartTransmit` instead of polling).
 - `src/utils/bytes.ts` — architectural byte helpers.
 - `src/types.ts` — shared architectural types (`ReadonlyUint8Array`).
 - `test/` — shared test helpers (`guest-memory.ts`). Unit tests stay colocated as `*.test.ts`.
@@ -92,7 +93,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   and writes. The absence of `Atomics` there is deliberate: unsynchronized hosts should race like
   real memory. Host-only packing (UART queue meta, CLINT time/epoch/wires, PLIC shadows/wires)
   uses `Atomics` on bytes (`Uint8Array`), except CLINT time/epoch (`BigUint64Array`) and the
-  hart-wake word (`Int32Array` for `Atomics.wait` / `notify`).
+  hart-wake / UART TX-wake words (`Int32Array` for `Atomics.wait` / `waitAsync` / `notify`).
 - **Privilege modes and traps.** The hart tracks U/S/M in `registers.privilegeMode`
   (8-byte little-endian; reset = M). `ecall`, `ebreak`, and illegal encodings call `enterTrap` in
   `trap.ts`: they write `xepc`/`xcause`/`xtval`, update enable stacks (`MPIE`/`MIE`/`MPP` or

@@ -61,7 +61,8 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   **CLINT** at `0x02000000` (`msip` / `mtimecmp` / `mtime`), and a **PLIC** at `0x0c000000`. Flat
   images are copied to the RAM base (reset PC matches). Console I/O is still polled (no UART→PLIC
   yet).
-- **Host console:** a terminal worker bridges UART RX/TX to streams, and an Ink TUI paints guest
+- **Host console:** a terminal worker bridges UART RX/TX to streams (TX drain waits on a shared
+  wake word when the ring is empty), and an Ink TUI paints guest
   output with a headless VT100 emulator (`@xterm/headless`), with click-to-focus and Shutdown.
 - Unit tests over the decoder, instructions, traps, registers, memory (including UART queues and
   CLINT), the CLINT and terminal workers, byte helpers, and VT100 encoding/viewport helpers.
@@ -197,7 +198,8 @@ stores are plain byte accesses rather than `Atomics`, so an unsynchronized host 
 behaves like unsynchronized access to real memory. Host-only device packing is the exception: UART
 RX/TX queue metadata, CLINT time/epoch/wires, and PLIC shadows/wires use `Atomics` (byte views,
 plus `BigUint64Array` for CLINT time). The hart-wake word stays an `Int32` so `wfi` can
-`Atomics.wait` / `notify`.
+`Atomics.wait` / `notify`. Guest THR empty→nonempty notifies a separate UART TX wake word so
+the terminal worker can `Atomics.waitAsync` instead of polling.
 
 If you are pointing a coding agent at this repository, see [AGENTS.md](AGENTS.md) for the conventions
 it should follow.

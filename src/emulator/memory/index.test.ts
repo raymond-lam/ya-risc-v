@@ -36,6 +36,10 @@ import { signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 const readHartWake = (memory: Memory): number =>
   Atomics.load(new Int32Array(memory.bytes.buffer, memory.hartWakeHostIndex, 1), 0);
 
+/** Snapshot the UART TX wake Int32 (test observation only). */
+const readUartTxWake = (memory: Memory): number =>
+  Atomics.load(new Int32Array(memory.bytes.buffer, memory.uartTxWakeHostIndex, 1), 0);
+
 /** LSR bits — local to tests (not part of the public UART surface). */
 const LSR_DR = 0x01;
 const LSR_THRE = 0x20;
@@ -67,6 +71,9 @@ describe('memory', () => {
     assert.ok(memory.bytes.byteLength > memory.clintHostBaseIndex);
     assert.ok(memory.plicHostBaseIndex >= memory.clintHostBaseIndex + 32);
     assert.equal(memory.plicHostBaseIndex % 4, 0);
+    assert.equal(memory.uartTxWakeHostIndex % 4, 0);
+    assert.ok(memory.uartTxWakeHostIndex >= memory.uartTxDataHostIndex);
+    assert.ok(memory.clintHostBaseIndex >= memory.uartTxWakeHostIndex + 4);
     assert.equal(memory.hartWakeHostIndex % 4, 0);
     assert.ok(memory.hartWakeHostIndex >= memory.plicHostBaseIndex);
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
@@ -226,26 +233,39 @@ describe('uart queues', () => {
     loadBytes({ destination: lsrEmpty, memory, address: uartAddress(5), byteLength: 1 });
     assert.equal(lsrEmpty[0], LSR_THRE | LSR_TEMT);
 
+    const beforeWake = readUartTxWake(memory);
     storeBytes({
       memory,
       address: uartAddress(0),
       source: new Uint8Array([0x41]),
       byteLength: 1,
     });
+    assert.equal(readUartTxWake(memory), beforeWake + 1);
     assert.equal(popUartTransmit(memory), 0x41);
     assert.equal(popUartTransmit(memory), null);
 
+    const midWake = readUartTxWake(memory);
     storeBytes({
       memory,
       address: uartAddress(0),
       source: new Uint8Array([0x42]),
       byteLength: 1,
     });
+    assert.equal(readUartTxWake(memory), midWake + 1);
+    // Push while nonempty does not re-notify.
+    storeBytes({
+      memory,
+      address: uartAddress(0),
+      source: new Uint8Array([0x43]),
+      byteLength: 1,
+    });
+    assert.equal(readUartTxWake(memory), midWake + 1);
     const lsrPending = new Uint8Array(8);
     loadBytes({ destination: lsrPending, memory, address: uartAddress(5), byteLength: 1 });
     assert.equal(lsrPending[0]! & LSR_TEMT, 0);
     assert.equal(lsrPending[0]! & LSR_THRE, LSR_THRE);
     assert.equal(popUartTransmit(memory), 0x42);
+    assert.equal(popUartTransmit(memory), 0x43);
   });
 
   it('pushUartReceive then RBR load pops RX and clears DR', () => {

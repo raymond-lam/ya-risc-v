@@ -42,6 +42,39 @@ const META_TX_TAIL = 3;
 /** Host bytes reserved for UART queue head/tail indices. */
 const META_BYTE_COUNT = 4;
 
+/** Host Int32 wake word for the terminal TX pump (`Atomics.wait` / `notify`). */
+const UART_TX_WAKE_HOST_SIZE = 4;
+
+const uartTxWakeWords = (memory: Memory): Int32Array =>
+  new Int32Array(memory.bytes.buffer, memory.uartTxWakeHostIndex, 1);
+
+/** Notify the terminal worker that the TX ring may have become nonempty. */
+const notifyUartTransmit = (memory: Memory): void => {
+  const wake = uartTxWakeWords(memory);
+  Atomics.add(wake, 0, 1);
+  Atomics.notify(wake, 0);
+};
+
+/**
+ * Wait until the UART TX ring may have data (`Atomics.waitAsync` on the TX wake word).
+ * Re-checks emptiness after snapshotting the wake epoch so a concurrent THR store
+ * cannot strand the waiter. Async so the terminal worker's event loop (web streams)
+ * can keep running.
+ */
+const waitUartTransmit = async (memory: Memory): Promise<void> => {
+  const wake = uartTxWakeWords(memory);
+  const expected = Atomics.load(wake, 0);
+  const head = Atomics.load(memory.bytes, metaIndex(memory, META_TX_HEAD));
+  const tail = Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
+  if (head !== tail) {
+    return;
+  }
+  const result = Atomics.waitAsync(wake, 0, expected);
+  if (result.async) {
+    await result.value;
+  }
+};
+
 /**
  * Map a guest UART address to a register index within the 8-byte window (0..7),
  * or `null` if the address is outside the window.
@@ -109,8 +142,12 @@ const pushTransmit = (memory: Memory, value: number): boolean => {
   if (queueIsFull(head, tail)) {
     return false;
   }
+  const wasEmpty = head === tail;
   memory.bytes[memory.uartTxDataHostIndex + tail] = value & 0xff;
   Atomics.store(memory.bytes, metaIndex(memory, META_TX_TAIL), (tail + 1) % UART_QUEUE_CAPACITY);
+  if (wasEmpty) {
+    notifyUartTransmit(memory);
+  }
   return true;
 };
 
@@ -164,9 +201,11 @@ export {
   META_BYTE_COUNT,
   UART_QUEUE_CAPACITY,
   UART_REGISTER_WINDOW,
+  UART_TX_WAKE_HOST_SIZE,
   loadUartRegister,
   popUartTransmit,
   pushUartReceive,
   storeUartRegister,
   uartAddressToRegisterIndex,
+  waitUartTransmit,
 };

@@ -23,6 +23,7 @@ import {
   META_BYTE_COUNT,
   UART_QUEUE_CAPACITY,
   UART_REGISTER_WINDOW,
+  UART_TX_WAKE_HOST_SIZE,
   uartAddressToRegisterIndex,
 } from '#emulator/memory/uart';
 import type { Memory } from '#emulator/memory/types';
@@ -54,6 +55,7 @@ type GuestMemoryHostLayout = {
   uartMetaHostIndex: number;
   uartRxDataHostIndex: number;
   uartTxDataHostIndex: number;
+  uartTxWakeHostIndex: number;
   clintHostBaseIndex: number;
   plicHostBaseIndex: number;
   hartWakeHostIndex: number;
@@ -63,7 +65,7 @@ type GuestMemoryHostLayout = {
 /**
  * Full host packing for one guest memory SAB:
  *   [RAM][UART registers][queue meta bytes][RX ring][TX ring]
- *   [pad to 8][CLINT][pad to 4][PLIC][pad to 4][hart wake Int32]
+ *   [pad to 4][UART TX wake Int32][pad to 8][CLINT][pad to 4][PLIC][pad to 4][hart wake Int32]
  */
 const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
   const {
@@ -73,6 +75,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
       uartMetaHostIndex,
       uartRxDataHostIndex,
       uartTxDataHostIndex,
+      uartTxWakeHostIndex,
       clintHostBaseIndex,
       plicHostBaseIndex,
       hartWakeHostIndex,
@@ -84,6 +87,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
     { byteLength: META_BYTE_COUNT },
     { byteLength: UART_QUEUE_CAPACITY },
     { byteLength: UART_QUEUE_CAPACITY },
+    { byteLength: UART_TX_WAKE_HOST_SIZE, align: 4 },
     { byteLength: CLINT_HOST_SIZE, align: 8 },
     { byteLength: PLIC_HOST_SIZE, align: 4 },
     { byteLength: HART_WAKE_HOST_SIZE, align: 4 },
@@ -93,6 +97,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
     uartMetaHostIndex: uartMetaHostIndex ?? 0,
     uartRxDataHostIndex: uartRxDataHostIndex ?? 0,
     uartTxDataHostIndex: uartTxDataHostIndex ?? 0,
+    uartTxWakeHostIndex: uartTxWakeHostIndex ?? 0,
     clintHostBaseIndex: clintHostBaseIndex ?? 0,
     plicHostBaseIndex: plicHostBaseIndex ?? 0,
     hartWakeHostIndex: hartWakeHostIndex ?? 0,
