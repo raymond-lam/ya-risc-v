@@ -113,6 +113,9 @@ describe('memory', () => {
     assert.ok(memory.clintHostBaseIndex >= memory.uartTxWakeHostIndex + 4);
     assert.equal(memory.hartWakeHostIndex % 4, 0);
     assert.ok(memory.hartWakeHostIndex >= memory.plicHostBaseIndex);
+    assert.equal(memory.reservationMonitorHostIndex % 8, 0);
+    assert.ok(memory.reservationMonitorHostIndex >= memory.plicHostBaseIndex);
+    assert.ok(memory.hartWakeHostIndex >= memory.reservationMonitorHostIndex);
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
   });
 

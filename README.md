@@ -3,11 +3,11 @@
 Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 > [!WARNING]
-> **This is a work in progress and nowhere near finished.** RV64I, RV64M, and Zicsr execute and are
-> covered by tests. U/S/M privilege modes, `mret`/`sret`, trap CSRs, synchronous traps, interrupt
-> delivery (including `wfi`), a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), and a
-> PLIC (→ `mip.MEIP`/`SEIP`, UART source 10) are in place. A 16550 UART (IER/IIR → PLIC source 10)
-> plus an Ink TUI console path exist. There are no further
+> **This is a work in progress and nowhere near finished.** RV64I, RV64M, RV64A (LR/SC + AMOs), and
+> Zicsr execute and are covered by tests. U/S/M privilege modes, `mret`/`sret`, trap CSRs, synchronous
+> traps, interrupt delivery (including `wfi`), a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` →
+> `mip.MTIP`), and a PLIC (→ `mip.MEIP`/`SEIP`, UART source 10) are in place. A 16550 UART (IER/IIR →
+> PLIC source 10) plus an Ink TUI console path exist. There are no further
 > ISA extensions and no OS boot path. It cannot run Linux yet. Anything listed under
 > [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate limit on
 > scope — the goal is a much more complete machine than what is here today.
@@ -21,6 +21,10 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   the RV64-specific 32-bit forms (`addiw`, `sllw`, `sraw`, …).
 - **RV64M** multiply/divide: `mul`/`mulh`/`mulhsu`/`mulhu`, `div`/`divu`, `rem`/`remu`, and the
   32-bit forms `mulw`, `divw`/`divuw`, `remw`/`remuw` (including the ÷0 and signed-overflow cases).
+- **RV64A** atomics: `lr.w`/`lr.d`, `sc.w`/`sc.d`, and the 32/64-bit AMO ops (`amoswap`,
+  `amoadd`, `amoxor`, `amoand`, `amoor`, `amomin`/`amomax`, `amominu`/`amomaxu`). A shared SAB
+  reservation monitor (line granule) is cleared by overlapping stores/AMOs; aligned RAM AMOs use host
+  `Atomics` RMW. `aq`/`rl` are accepted and ignored.
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
   Only implemented CSRs are accessible (`mstatus`/`sstatus`, `medeleg`/`mideleg`, `mie`/`mip`,
   `sie`/`sip`, `mtvec`/`stvec`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, identity);
@@ -68,7 +72,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 ### Not yet implemented
 
-- **Extensions.** No A (atomics), F/D (floating point), or C (compressed).
+- **Extensions.** No F/D (floating point) or C (compressed).
 - **Virtual memory.** No paging (`satp` / Sv39).
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.

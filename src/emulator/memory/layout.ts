@@ -19,6 +19,7 @@ import { CLINT_HOST_SIZE, clintAddressToRegister } from '#emulator/memory/clint'
 import { HART_WAKE_HOST_SIZE } from '#emulator/memory/hart-wake';
 import { PLIC_HOST_SIZE, plicAddressToLocation } from '#emulator/memory/plic';
 import { ramAddressToHostIndex } from '#emulator/memory/ram';
+import { RESERVATION_MONITOR_HOST_SIZE } from '#emulator/memory/reservation';
 import {
   META_BYTE_COUNT,
   UART_QUEUE_CAPACITY,
@@ -58,6 +59,7 @@ type GuestMemoryHostLayout = {
   uartTxWakeHostIndex: number;
   clintHostBaseIndex: number;
   plicHostBaseIndex: number;
+  reservationMonitorHostIndex: number;
   hartWakeHostIndex: number;
   packedByteLength: number;
 };
@@ -65,7 +67,8 @@ type GuestMemoryHostLayout = {
 /**
  * Full host packing for one guest memory SAB:
  *   [RAM][UART registers][queue meta bytes][RX ring][TX ring]
- *   [pad to 4][UART TX wake Int32][pad to 8][CLINT][pad to 4][PLIC][pad to 4][hart wake Int32]
+ *   [pad to 4][UART TX wake Int32][pad to 8][CLINT][pad to 4][PLIC]
+ *   [pad to 8][LR/SC reservation monitor][pad to 4][hart wake Int32]
  */
 const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
   const {
@@ -78,6 +81,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
       uartTxWakeHostIndex,
       clintHostBaseIndex,
       plicHostBaseIndex,
+      reservationMonitorHostIndex,
       hartWakeHostIndex,
     ],
     packedByteLength,
@@ -90,6 +94,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
     { byteLength: UART_TX_WAKE_HOST_SIZE, align: 4 },
     { byteLength: CLINT_HOST_SIZE, align: 8 },
     { byteLength: PLIC_HOST_SIZE, align: 4 },
+    { byteLength: RESERVATION_MONITOR_HOST_SIZE, align: 8 },
     { byteLength: HART_WAKE_HOST_SIZE, align: 4 },
   ]);
   return {
@@ -100,6 +105,7 @@ const guestMemoryHostLayout = (ramSize: bigint): GuestMemoryHostLayout => {
     uartTxWakeHostIndex: uartTxWakeHostIndex ?? 0,
     clintHostBaseIndex: clintHostBaseIndex ?? 0,
     plicHostBaseIndex: plicHostBaseIndex ?? 0,
+    reservationMonitorHostIndex: reservationMonitorHostIndex ?? 0,
     hartWakeHostIndex: hartWakeHostIndex ?? 0,
     packedByteLength,
   };

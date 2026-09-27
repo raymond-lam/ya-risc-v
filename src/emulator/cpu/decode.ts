@@ -29,6 +29,30 @@ import { beq, bne, blt, bge, bltu, bgeu } from '#emulator/cpu/instructions/branc
 import { lb, lh, lw, ld, lbu, lhu, lwu } from '#emulator/cpu/instructions/load';
 import { sb, sh, sw, sd } from '#emulator/cpu/instructions/store';
 import {
+  lrW,
+  lrD,
+  scW,
+  scD,
+  amoswapW,
+  amoswapD,
+  amoaddW,
+  amoaddD,
+  amoxorW,
+  amoxorD,
+  amoandW,
+  amoandD,
+  amoorW,
+  amoorD,
+  amominW,
+  amominD,
+  amomaxW,
+  amomaxD,
+  amominuW,
+  amominuD,
+  amomaxuW,
+  amomaxuD,
+} from '#emulator/cpu/instructions/amo';
+import {
   addi,
   slti,
   sltiu,
@@ -66,6 +90,7 @@ const OPCODE_OP_IMM = 0x13; // integer ops with immediate: addi/slti/…/andi/sl
 const OPCODE_AUIPC = 0x17; // add upper immediate to pc
 const OPCODE_OP_IMM_32 = 0x1b; // 32-bit integer ops with immediate (RV64): addiw/slliw/srliw/sraiw
 const OPCODE_STORE = 0x23; // stores: sb/sh/sw/sd
+const OPCODE_AMO = 0x2f; // atomics (A): lr/sc/amoswap/amoadd/…
 const OPCODE_OP = 0x33; // register–register integer ops: add/sub/sll/…/and
 const OPCODE_LUI = 0x37; // load upper immediate
 const OPCODE_OP_32 = 0x3b; // 32-bit register–register ops (RV64): addw/subw/sllw/srlw/sraw
@@ -102,6 +127,21 @@ const FUNCT3_SB = 0x0; // store byte
 const FUNCT3_SH = 0x1; // store halfword
 const FUNCT3_SW = 0x2; // store word
 const FUNCT3_SD = 0x3; // store doubleword
+
+const FUNCT3_AMO_W = 0x2; // AMO / LR / SC 32-bit
+const FUNCT3_AMO_D = 0x3; // AMO / LR / SC 64-bit
+
+const FUNCT5_AMOADD = 0x00; // atomic add
+const FUNCT5_AMOSWAP = 0x01; // atomic swap
+const FUNCT5_LR = 0x02; // load-reserved
+const FUNCT5_SC = 0x03; // store-conditional
+const FUNCT5_AMOXOR = 0x04; // atomic xor
+const FUNCT5_AMOOR = 0x08; // atomic or
+const FUNCT5_AMOAND = 0x0c; // atomic and
+const FUNCT5_AMOMIN = 0x10; // atomic signed min
+const FUNCT5_AMOMAX = 0x14; // atomic signed max
+const FUNCT5_AMOMINU = 0x18; // atomic unsigned min
+const FUNCT5_AMOMAXU = 0x1c; // atomic unsigned max
 
 const FUNCT3_FENCE = 0x0; // fence under MISC-MEM
 const FUNCT3_SYSTEM = 0x0; // ecall/ebreak/mret/sret under SYSTEM (distinguished by imm)
@@ -339,6 +379,72 @@ const decode = (
         case FUNCT3_SD:
           return (registers, memory) =>
             sd(registers, memory, { sourceRegister1, sourceRegister2, immediate });
+        default:
+          return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+      }
+    }
+
+    case OPCODE_AMO: {
+      const destinationRegister = destinationRegisterOf(encodedInstructionWord);
+      const sourceRegister1 = sourceRegister1Of(encodedInstructionWord);
+      const sourceRegister2 = sourceRegister2Of(encodedInstructionWord);
+      const function5 = encodedInstructionWord >>> 27;
+      const args = { destinationRegister, sourceRegister1, sourceRegister2 };
+      switch (function3Of(encodedInstructionWord)) {
+        case FUNCT3_AMO_W:
+          switch (function5) {
+            case FUNCT5_LR:
+              return (registers, memory) => lrW(registers, memory, args);
+            case FUNCT5_SC:
+              return (registers, memory) => scW(registers, memory, args);
+            case FUNCT5_AMOSWAP:
+              return (registers, memory) => amoswapW(registers, memory, args);
+            case FUNCT5_AMOADD:
+              return (registers, memory) => amoaddW(registers, memory, args);
+            case FUNCT5_AMOXOR:
+              return (registers, memory) => amoxorW(registers, memory, args);
+            case FUNCT5_AMOOR:
+              return (registers, memory) => amoorW(registers, memory, args);
+            case FUNCT5_AMOAND:
+              return (registers, memory) => amoandW(registers, memory, args);
+            case FUNCT5_AMOMIN:
+              return (registers, memory) => amominW(registers, memory, args);
+            case FUNCT5_AMOMAX:
+              return (registers, memory) => amomaxW(registers, memory, args);
+            case FUNCT5_AMOMINU:
+              return (registers, memory) => amominuW(registers, memory, args);
+            case FUNCT5_AMOMAXU:
+              return (registers, memory) => amomaxuW(registers, memory, args);
+            default:
+              return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+          }
+        case FUNCT3_AMO_D:
+          switch (function5) {
+            case FUNCT5_LR:
+              return (registers, memory) => lrD(registers, memory, args);
+            case FUNCT5_SC:
+              return (registers, memory) => scD(registers, memory, args);
+            case FUNCT5_AMOSWAP:
+              return (registers, memory) => amoswapD(registers, memory, args);
+            case FUNCT5_AMOADD:
+              return (registers, memory) => amoaddD(registers, memory, args);
+            case FUNCT5_AMOXOR:
+              return (registers, memory) => amoxorD(registers, memory, args);
+            case FUNCT5_AMOOR:
+              return (registers, memory) => amoorD(registers, memory, args);
+            case FUNCT5_AMOAND:
+              return (registers, memory) => amoandD(registers, memory, args);
+            case FUNCT5_AMOMIN:
+              return (registers, memory) => amominD(registers, memory, args);
+            case FUNCT5_AMOMAX:
+              return (registers, memory) => amomaxD(registers, memory, args);
+            case FUNCT5_AMOMINU:
+              return (registers, memory) => amominuD(registers, memory, args);
+            case FUNCT5_AMOMAXU:
+              return (registers, memory) => amomaxuD(registers, memory, args);
+            default:
+              return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+          }
         default:
           return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
       }

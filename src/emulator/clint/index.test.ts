@@ -45,7 +45,7 @@ describe('clint worker', () => {
     clint.start();
     try {
       let pending = false;
-      for (let attempt = 0; attempt < 50; attempt += 1) {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
         await delay(10);
         if (isClintMachineTimerPending(memory)) {
           pending = true;

@@ -21,6 +21,8 @@ import {
   andBytes,
   byte0ToNumber,
   bytesToBigInt,
+  bytesToBigInt64Array,
+  bytesToBigUint64Array,
   signedBytesToBigInt,
   bytesToNumber,
   compareSignedBytes,
@@ -216,5 +218,24 @@ describe('utils/bytes', () => {
     assert.equal(bytes[6], 0x34);
     assert.equal(bytes[7], 0x12);
     assert.throws(() => bytesToInt32Array(bytes, 1), /4-byte aligned/);
+  });
+
+  it('bytesToBigInt64Array returns an aligned BigInt64 view and rejects misalignment', () => {
+    const bytes = new Uint8Array(16);
+    const view = bytesToBigInt64Array(bytes, 8);
+    view[0] = 0x0102_0304_0506_0708n;
+    assert.deepEqual(
+      bytes.slice(8, 16),
+      Uint8Array.of(0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01)
+    );
+    assert.throws(() => bytesToBigInt64Array(bytes, 4), /8-byte aligned/);
+  });
+
+  it('bytesToBigUint64Array returns an aligned BigUint64 view and rejects misalignment', () => {
+    const bytes = new Uint8Array(16);
+    const view = bytesToBigUint64Array(bytes, 8);
+    view[0] = 0x8000_0000_0000_0001n;
+    assert.deepEqual(bytes.slice(8, 16), Uint8Array.of(0x01, 0, 0, 0, 0, 0, 0, 0x80));
+    assert.throws(() => bytesToBigUint64Array(bytes, 4), /8-byte aligned/);
   });
 });
