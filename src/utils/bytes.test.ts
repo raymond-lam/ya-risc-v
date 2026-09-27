@@ -27,6 +27,7 @@ import {
   compareUnsignedBytes,
   copyBytes,
   isZeroBytes,
+  bytesToInt32Array,
   low32Bytes,
   orBytes,
   shiftLeftBytes,
@@ -204,5 +205,16 @@ describe('utils/bytes', () => {
     const destination = signExtendBytes(signedNumberToBytes(new Uint8Array(8), 0x80000000, 32), 4);
     assert.deepEqual(destination, signedNumberToBytes(new Uint8Array(8), 0x80000000, 32));
     assert.equal(destination[7], 0xff);
+  });
+
+  it('bytesToInt32Array returns an aligned Int32 view and rejects misalignment', () => {
+    const bytes = new Uint8Array(8);
+    const view = bytesToInt32Array(bytes, 4);
+    view[0] = 0x12345678;
+    assert.equal(bytes[4], 0x78);
+    assert.equal(bytes[5], 0x56);
+    assert.equal(bytes[6], 0x34);
+    assert.equal(bytes[7], 0x12);
+    assert.throws(() => bytesToInt32Array(bytes, 1), /4-byte aligned/);
   });
 });

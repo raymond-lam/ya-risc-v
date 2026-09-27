@@ -24,32 +24,41 @@ import {
   storeClintByte,
 } from '#emulator/memory/clint';
 import { guestMemoryHostLayout, locationFromGuestAddress } from '#emulator/memory/layout';
+import {
+  PLIC_WINDOW_SIZE,
+  initializePlic,
+  loadPlicByte,
+  storePlicByte,
+} from '#emulator/memory/plic';
 import { loadRamByte, ramAddressToHostIndex, storeRamByte } from '#emulator/memory/ram';
 import {
   UART_REGISTER_WINDOW,
   loadUartRegister,
-  popTransmit,
-  pushReceive,
+  popUartTransmit,
+  pushUartReceive,
   storeUartRegister,
+  waitUartTransmit,
 } from '#emulator/memory/uart';
 import type { Memory } from '#emulator/memory/types';
 
 const ONE_BYTE = signedNumberToBytes(new Uint8Array(8), 1, 32) as ReadonlyUint8Array;
 
 /**
- * Allocate guest memory (RAM + UART queues + CLINT shadows in one SharedArrayBuffer)
- * and initialize the CLINT timebase (`mtime` = 0, `mtimecmp` = all-ones).
+ * Allocate guest memory (RAM + UART queues + CLINT/PLIC shadows in one SharedArrayBuffer)
+ * and initialize the CLINT timebase (`mtime` = 0, `mtimecmp` = all-ones) and PLIC.
  */
 const createMemory = ({
   ramBaseAddress,
   ramSize,
   uartBaseAddress,
   clintBaseAddress,
+  plicBaseAddress,
 }: {
   ramBaseAddress: ReadonlyUint8Array;
   ramSize: bigint;
   uartBaseAddress: ReadonlyUint8Array;
   clintBaseAddress: ReadonlyUint8Array;
+  plicBaseAddress: ReadonlyUint8Array;
 }): Memory => {
   if (ramSize < 0n) {
     throw new RangeError('ramSize must be non-negative.');
@@ -57,6 +66,7 @@ const createMemory = ({
   const overlap = findOverlappingPair([
     { name: 'UART', base: bytesToBigInt(uartBaseAddress), size: BigInt(UART_REGISTER_WINDOW) },
     { name: 'CLINT', base: bytesToBigInt(clintBaseAddress), size: CLINT_WINDOW_SIZE },
+    { name: 'PLIC', base: bytesToBigInt(plicBaseAddress), size: PLIC_WINDOW_SIZE },
     { name: 'RAM', base: bytesToBigInt(ramBaseAddress), size: ramSize },
   ]);
   if (overlap !== null) {
@@ -67,7 +77,9 @@ const createMemory = ({
     uartMetaHostIndex,
     uartRxDataHostIndex,
     uartTxDataHostIndex,
+    uartTxWakeHostIndex,
     clintHostBaseIndex,
+    plicHostBaseIndex,
     hartWakeHostIndex,
     packedByteLength,
   } = guestMemoryHostLayout(ramSize);
@@ -77,14 +89,18 @@ const createMemory = ({
     ramSize,
     uartBaseAddress,
     clintBaseAddress,
+    plicBaseAddress,
     uartRegistersHostIndex,
     uartMetaHostIndex,
     uartRxDataHostIndex,
     uartTxDataHostIndex,
+    uartTxWakeHostIndex,
     clintHostBaseIndex,
+    plicHostBaseIndex,
     hartWakeHostIndex,
   };
   initializeClint(memory);
+  initializePlic(memory);
   return memory;
 };
 
@@ -110,6 +126,9 @@ const loadBytes = ({
         break;
       case 'clint':
         destination[byteIndex] = loadClintByte(memory, location.register, location.byteOffset);
+        break;
+      case 'plic':
+        destination[byteIndex] = loadPlicByte(memory, addressCursor);
         break;
       case 'ram': {
         const hostIndex = ramAddressToHostIndex(memory, addressCursor);
@@ -147,6 +166,9 @@ const storeBytes = ({
       case 'clint':
         storeClintByte(memory, location.register, location.byteOffset, value);
         break;
+      case 'plic':
+        storePlicByte(memory, addressCursor, value);
+        break;
       case 'ram': {
         const hostIndex = ramAddressToHostIndex(memory, addressCursor);
         if (hostIndex !== null) {
@@ -161,11 +183,23 @@ const storeBytes = ({
   }
 };
 
-export { createMemory, loadBytes, popTransmit, pushReceive, storeBytes, ramAddressToHostIndex };
+export {
+  createMemory,
+  loadBytes,
+  popUartTransmit,
+  pushUartReceive,
+  storeBytes,
+  ramAddressToHostIndex,
+  waitUartTransmit,
+};
 export {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
   tickClint,
 } from '#emulator/memory/clint';
-export { readHartWake, waitHartWake } from '#emulator/memory/hart-wake';
+export {
+  isPlicMachineExternalPending,
+  isPlicSupervisorExternalPending,
+} from '#emulator/memory/plic';
+export { waitHartWake, loadHartIrqLevel } from '#emulator/memory/hart-wake';
 export type { Memory } from '#emulator/memory/types';

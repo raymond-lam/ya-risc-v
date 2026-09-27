@@ -258,12 +258,12 @@ describe('decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x30);
   });
 
-  it('executes wfi and resumes once an interrupt is pending and enabled in mie', () => {
+  it('executes wfi and resumes once an interrupt is pending and enabled in mie', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     armTimerWake(registers, memory);
-    decode(instructionBytes(0x10500073))(registers, memory);
+    await decode(instructionBytes(0x10500073))(registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 

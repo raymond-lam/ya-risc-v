@@ -46,6 +46,7 @@ import {
   snapshotControlAndStatusRegister,
   readPrivilegeMode,
   readProgramCounter,
+  setMachineExternalInterruptPending,
   setMachineSoftwareInterruptPending,
   setMachineTimerInterruptPending,
   setPrivilegeMode,
@@ -519,13 +520,9 @@ describe('trap', () => {
       MSTATUS,
       signedNumberToBytes(new Uint8Array(8), 0x08, 32)
     );
-    // MTIP (CLINT) + MEIP (CSR); MTIE|MEIE
+    // MTIP (CLINT) + MEIP (PLIC); MTIE|MEIE
     setMachineTimerInterruptPending(registers, true);
-    writeControlAndStatusRegister(
-      registers,
-      MIP,
-      signedNumberToBytes(new Uint8Array(8), 1 << 11, 32)
-    );
+    setMachineExternalInterruptPending(registers, true);
     writeControlAndStatusRegister(
       registers,
       MIE,

@@ -28,8 +28,10 @@ import {
   readPrivilegeMode,
   readProgramCounter,
   setBooleanGeneralPurposeRegister,
+  setMachineExternalInterruptPending,
   setMachineTimerInterruptPending,
   setProgramCounter,
+  setSupervisorExternalInterruptPending,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
@@ -135,10 +137,10 @@ describe('registers', () => {
       snapshotControlAndStatusRegister(registers, MIE),
       signedNumberToBytes(new Uint8Array(8), 0x0aaa, 32)
     );
-    // Writable pending bits only (no MSIP/MTIP from CSR).
+    // Writable pending bits only (SSIP/STIP; no MSIP/MTIP/SEIP/MEIP from CSR).
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MIP),
-      signedNumberToBytes(new Uint8Array(8), 0x0a22, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0022, 32)
     );
 
     setMachineTimerInterruptPending(registers, true);
@@ -173,8 +175,10 @@ describe('registers', () => {
     writeControlAndStatusRegister(
       registers,
       MIP,
-      signedNumberToBytes(new Uint8Array(8), 0x0a22, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0022, 32)
     );
+    setSupervisorExternalInterruptPending(registers, true);
+    setMachineExternalInterruptPending(registers, true);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, SIE),
       signedNumberToBytes(new Uint8Array(8), 0x0222, 32)
@@ -196,14 +200,14 @@ describe('registers', () => {
       SIP,
       signedNumberToBytes(new Uint8Array(8), 1 << 5, 32)
     );
-    // STIP via sip; SSIP/SEIP cleared; MEIP from earlier mip write preserved.
+    // STIP via sip; SSIP cleared; SEIP/MEIP (PLIC) preserved.
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MIP),
-      signedNumberToBytes(new Uint8Array(8), 0x0820, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0a20, 32)
     );
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, SIP),
-      signedNumberToBytes(new Uint8Array(8), 0x0020, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0220, 32)
     );
   });
 });

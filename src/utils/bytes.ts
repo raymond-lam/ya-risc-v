@@ -298,6 +298,18 @@ const zeroExtendBytes = (destination: Uint8Array, byteLength: number): Uint8Arra
   return destination;
 };
 
+/**
+ * One-element `Int32Array` view of `bytes` at host byte `index`
+ * (`index` must be 4-byte aligned relative to the underlying `ArrayBuffer`).
+ */
+const bytesToInt32Array = (bytes: Uint8Array, index: number): Int32Array => {
+  const byteOffset = bytes.byteOffset + index;
+  if (byteOffset % 4 !== 0) {
+    throw new RangeError('bytesToInt32Array index must be 4-byte aligned.');
+  }
+  return new Int32Array(bytes.buffer, byteOffset, 1);
+};
+
 export {
   copyBytes,
   addBytes,
@@ -321,4 +333,5 @@ export {
   unsignedBigIntToBytes,
   signExtendBytes,
   zeroExtendBytes,
+  bytesToInt32Array,
 };

@@ -23,8 +23,10 @@ import {
   isControlAndStatusRegisterAccessAllowed,
   readGeneralPurposeRegister,
   readPrivilegeMode,
+  setMachineExternalInterruptPending,
   setMachineSoftwareInterruptPending,
   setMachineTimerInterruptPending,
+  setSupervisorExternalInterruptPending,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
@@ -43,7 +45,10 @@ import type { Registers } from '#emulator/cpu/types';
 import {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
+  isPlicMachineExternalPending,
+  isPlicSupervisorExternalPending,
   waitHartWake,
+  loadHartIrqLevel,
   type Memory,
 } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
@@ -77,10 +82,12 @@ const trapIllegalCsrAccess = (registers: Registers, instructionWord: number): vo
   enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(instructionWord));
 };
 
-/** Sample CLINT wires into `mip` (device-driven pending bits). */
-const sampleClintPending = (registers: Registers, memory: Memory): void => {
+/** Sample CLINT/PLIC wires into `mip` (device-driven pending bits). */
+const sampleDevicePending = (registers: Registers, memory: Memory): void => {
   setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
   setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));
+  setMachineExternalInterruptPending(registers, isPlicMachineExternalPending(memory));
+  setSupervisorExternalInterruptPending(registers, isPlicSupervisorExternalPending(memory));
 };
 
 /** ecall: environment call; cause depends on the current privilege mode. */
@@ -113,14 +120,15 @@ const sret = (registers: Registers, _memory: Memory): void => {
 
 /**
  * wfi: hint that the hart may stall until an interrupt is pending and enabled in
- * `mie` (`mip ∧ mie`). Advances PC, then waits on the shared hart-wake word until a
- * device notifies. Global `mstatus.MIE`/`SIE` are not required to resume (interrupt
- * take still needs them on the following run-loop check).
+ * `mie` (`mip ∧ mie`). Advances PC, then waits on the published IRQ-level word (OR of
+ * device wires) until that level changes, re-sampling each time. Global
+ * `mstatus.MIE`/`SIE` are not required to resume (interrupt take still needs them
+ * on the following run-loop check).
  *
  * When `mstatus.TW` is set and privilege is below M, `wfi` raises illegal-instruction
  * immediately (implementation-defined wait limit of zero).
  */
-const wfi = (registers: Registers, memory: Memory): void => {
+const wfi = async (registers: Registers, memory: Memory): Promise<void> => {
   if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_MACHINE) < 0) {
     const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
     if ((mstatus[2]! & MSTATUS_BYTE2_TW) !== 0) {
@@ -134,11 +142,18 @@ const wfi = (registers: Registers, memory: Memory): void => {
   }
   advanceProgramCounter(registers);
   for (;;) {
-    sampleClintPending(registers, memory);
+    sampleDevicePending(registers, memory);
     if (isPendingEnabledInterrupt(registers)) {
       return;
     }
-    waitHartWake(memory);
+    // Snapshot the level word, then re-sample wires so a publish between the first
+    // check and this load cannot leave us waiting on an already-current level.
+    const fromLevel = loadHartIrqLevel(memory);
+    sampleDevicePending(registers, memory);
+    if (isPendingEnabledInterrupt(registers)) {
+      return;
+    }
+    await waitHartWake(memory, fromLevel);
   }
 };
 
