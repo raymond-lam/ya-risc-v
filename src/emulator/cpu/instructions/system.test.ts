@@ -195,16 +195,16 @@ describe('system', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
   });
 
-  it('wfi advances the PC and returns once an interrupt is pending and enabled in mie', () => {
+  it('wfi advances the PC and returns once an interrupt is pending and enabled in mie', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
     armTimerWake(registers, memory);
-    wfi(registers, memory);
+    await wfi(registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
   });
 
-  it('wfi in S-mode with mstatus.TW set raises illegal-instruction', () => {
+  it('wfi in S-mode with mstatus.TW set raises illegal-instruction', async () => {
     const registers = createRegisters();
     setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
@@ -219,7 +219,7 @@ describe('system', () => {
       MSTATUS,
       signedNumberToBytes(new Uint8Array(8), 0x20_0000, 32)
     );
-    wfi(registers, testMemory(256n));
+    await wfi(registers, testMemory(256n));
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
@@ -236,7 +236,7 @@ describe('system', () => {
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
   });
 
-  it('wfi in M-mode ignores mstatus.TW', () => {
+  it('wfi in M-mode ignores mstatus.TW', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
@@ -246,7 +246,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x20_0000, 32)
     );
     armTimerWake(registers, memory);
-    wfi(registers, memory);
+    await wfi(registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
   });
 

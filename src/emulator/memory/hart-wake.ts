@@ -14,34 +14,65 @@
  * limitations under the License.
  */
 
+import { bytesToInt32Array } from '#utils/bytes';
+import { WAKE_HOST_SIZE, waitWake } from '#emulator/memory/atomics';
 import type { Memory } from '#emulator/memory/types';
 
-/** Host Int32 wake word for `wfi` (`Atomics.wait` / `notify`). */
-const HART_WAKE_HOST_SIZE = 4;
+/** Host Int32: OR of device IRQ levels for `wfi` (`Atomics.waitAsync` / `notify`). */
+const HART_WAKE_HOST_SIZE = WAKE_HOST_SIZE;
 
-const hartWakeWords = (memory: Memory): Int32Array =>
-  new Int32Array(memory.bytes.buffer, memory.hartWakeHostIndex, 1);
+/** Hart-wake level bits (match `mip` interrupt numbers for clarity). */
+const IRQ_LEVEL_MSIP = 1 << 3;
+const IRQ_LEVEL_MTIP = 1 << 7;
+const IRQ_LEVEL_SEIP = 1 << 9;
+const IRQ_LEVEL_MEIP = 1 << 11;
 
-/** Read the shared wake word (for tests). */
-const readHartWake = (memory: Memory): number => Atomics.load(hartWakeWords(memory), 0);
+const hartIrqLevelWords = (memory: Memory): Int32Array =>
+  bytesToInt32Array(memory.bytes, memory.hartWakeHostIndex);
+
+/** Current published OR of device IRQ level bits (host wake word). */
+const loadHartIrqLevel = (memory: Memory): number => Atomics.load(hartIrqLevelWords(memory), 0);
 
 /**
- * Signal a hart waiting in `wfi` that an interrupt source may now be pending.
- * Devices call this on a 0→1 IRQ-wire transition (CLINT today; PLIC later).
+ * Drive a level-sensitive IRQ wire byte and publish it into the hart-wake Int32.
+ * Notifies when the published level word changes.
  */
-const notifyHartWake = (memory: Memory): void => {
-  const wake = hartWakeWords(memory);
-  Atomics.add(wake, 0, 1);
-  Atomics.notify(wake, 0);
+const setIrqWire = (
+  memory: Memory,
+  hostByteIndex: number,
+  pending: boolean,
+  levelBit: number
+): void => {
+  Atomics.store(memory.bytes, hostByteIndex, pending ? 1 : 0);
+  const wake = hartIrqLevelWords(memory);
+  let previous = Atomics.load(wake, 0);
+  for (;;) {
+    const next = pending ? previous | levelBit : previous & ~levelBit;
+    const current = Atomics.compareExchange(wake, 0, previous, next);
+    if (current === previous) {
+      if (next !== previous) {
+        Atomics.notify(wake, 0);
+      }
+      return;
+    }
+    previous = current;
+  }
 };
 
 /**
- * Snapshot the wake word, then wait while it still equals that value (`Atomics.wait`).
- * Callers must sample IRQ state before calling.
+ * Sleep until the hart IRQ-level word differs from `fromLevel`.
+ * Callers double-check `mip ∧ mie` around loading `fromLevel` (see `wfi`).
  */
-const waitHartWake = (memory: Memory): void => {
-  const wake = hartWakeWords(memory);
-  Atomics.wait(wake, 0, Atomics.load(wake, 0));
-};
+const waitHartWake = (memory: Memory, fromLevel: number): Promise<void> =>
+  waitWake({ bytes: memory.bytes, index: memory.hartWakeHostIndex, fromLevel });
 
-export { HART_WAKE_HOST_SIZE, readHartWake, notifyHartWake, waitHartWake };
+export {
+  HART_WAKE_HOST_SIZE,
+  IRQ_LEVEL_MEIP,
+  IRQ_LEVEL_MSIP,
+  IRQ_LEVEL_MTIP,
+  IRQ_LEVEL_SEIP,
+  loadHartIrqLevel,
+  setIrqWire,
+  waitHartWake,
+};

@@ -229,7 +229,7 @@ const function7Of = (instructionWord: number): number => (instructionWord >>> 25
  */
 const decode = (
   instructionWord: ReadonlyUint8Array
-): ((registers: Registers, memory: Memory) => void) => {
+): ((registers: Registers, memory: Memory) => void | Promise<void>) => {
   const encodedInstructionWord = bytesToNumber(instructionWord);
   const opcode = encodedInstructionWord & 0x7f;
 

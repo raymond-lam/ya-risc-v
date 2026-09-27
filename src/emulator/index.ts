@@ -40,6 +40,12 @@ const DEFAULT_CLINT_BASE = unsignedBigIntToBytes(
   0x0200_0000n
 ) as ReadonlyUint8Array;
 
+/** Fixed PLIC MMIO base (UART IRQ = source 10). */
+const DEFAULT_PLIC_BASE = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  0x0c00_0000n
+) as ReadonlyUint8Array;
+
 /* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
 class Emulator implements EmulatorHandle {
   readonly [Symbol.toStringTag] = 'Promise';
@@ -66,11 +72,13 @@ class Emulator implements EmulatorHandle {
     const ramBaseAddress = DEFAULT_RAM_BASE;
     const uartBaseAddress = DEFAULT_UART_BASE;
     const clintBaseAddress = DEFAULT_CLINT_BASE;
+    const plicBaseAddress = DEFAULT_PLIC_BASE;
     const memory = createMemory({
       ramBaseAddress,
       ramSize,
       uartBaseAddress,
       clintBaseAddress,
+      plicBaseAddress,
     });
     const dramHostIndex = ramAddressToHostIndex(memory, ramBaseAddress);
     if (dramHostIndex === null) {

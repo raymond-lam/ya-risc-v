@@ -96,19 +96,28 @@ const MSTATUS_KEEP_OUTSIDE_SSTATUS = Uint8Array.of(
 const MIE_MASK_BYTES = Uint8Array.of(0xaa, 0x0a, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
 /**
- * Software-writable mip bits: SSI, STI, SEI, MEIP (bits 1, 5, 9, 11) → 0xa22.
- * MSIP and MTIP are hardware-driven by the CLINT and preserved across CSR writes.
+ * Software-writable mip bits: SSI, STI (bits 1, 5) → 0x22.
+ * MSIP/MTIP (CLINT) and SEIP/MEIP (PLIC) are hardware-driven and preserved across CSR writes.
  */
-const MIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0x0a, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+const MIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
-/** mip bits driven by devices: MSIP (3) + MTIP (7) → 0x88. (MEIP stays CSR-writable until PLIC.) */
-const MIP_HARDWARE_MASK_BYTES = Uint8Array.of(0x88, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+/** mip bits driven by devices: MSIP (3) + MTIP (7) + SEIP (9) + MEIP (11) → 0xa88. */
+const MIP_HARDWARE_MASK_BYTES = Uint8Array.of(0x88, 0x0a, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/** sip software-writable pending bits (SSIP/STIP only; SEIP is PLIC-driven). */
+const SIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
 /** mip.MTIP — machine timer interrupt pending (byte0 bit 7). */
 const MIP_BYTE0_MTIP = 0x80;
 
 /** mip.MSIP — machine software interrupt pending (byte0 bit 3). */
 const MIP_BYTE0_MSIP = 0x08;
+
+/** mip.MEIP — machine external interrupt pending (byte1 bit 3). */
+const MIP_BYTE1_MEIP = 0x08;
+
+/** mip.SEIP — supervisor external interrupt pending (byte1 bit 1). */
+const MIP_BYTE1_SEIP = 0x02;
 
 /** Bits of mie/mip outside the sie/sip view (inverse of SIE_SIP_MASK). */
 const MIE_MIP_KEEP_OUTSIDE_SIE_SIP = Uint8Array.of(
@@ -323,12 +332,17 @@ const writeControlAndStatusRegister = (
       );
     }
     case SIP: {
+      // Clear only SSIP/STIP; preserve SEIP (PLIC) and all non-S pending bits.
       const mip = snapshotControlAndStatusRegister(registers, MIP);
-      const cleared = andBytes(new Uint8Array(8), mip, MIE_MIP_KEEP_OUTSIDE_SIE_SIP);
-      const incoming = andBytes(new Uint8Array(8), value, SIE_SIP_MASK_BYTES);
+      const keep = orBytes(
+        new Uint8Array(8),
+        andBytes(new Uint8Array(8), mip, MIE_MIP_KEEP_OUTSIDE_SIE_SIP),
+        andBytes(new Uint8Array(8), mip, MIP_HARDWARE_MASK_BYTES)
+      );
+      const incoming = andBytes(new Uint8Array(8), value, SIP_WRITABLE_MASK_BYTES);
       return copyBytes(
         registers.controlAndStatus[MIP]!,
-        orBytes(new Uint8Array(8), cleared, incoming)
+        orBytes(new Uint8Array(8), keep, incoming)
       );
     }
     case MSTATUS:
@@ -343,7 +357,7 @@ const writeControlAndStatusRegister = (
         andBytes(new Uint8Array(8), value, MIE_MASK_BYTES)
       );
     case MIP: {
-      // Preserve device-driven MTIP/MEIP; only software-writable pending bits update.
+      // Preserve device-driven MSIP/MTIP/SEIP/MEIP; only software-writable pending bits update.
       const previous = registers.controlAndStatus[MIP]!;
       const writable = andBytes(new Uint8Array(8), value, MIP_WRITABLE_MASK_BYTES);
       const hardware = andBytes(new Uint8Array(8), previous, MIP_HARDWARE_MASK_BYTES);
@@ -402,6 +416,26 @@ const setMachineSoftwareInterruptPending = (registers: Registers, pending: boole
   }
 };
 
+/** Set or clear mip.MEIP from the PLIC machine context (not a guest CSR write). */
+const setMachineExternalInterruptPending = (registers: Registers, pending: boolean): void => {
+  const mip = registers.controlAndStatus[MIP]!;
+  if (pending) {
+    mip[1]! |= MIP_BYTE1_MEIP;
+  } else {
+    mip[1]! &= ~MIP_BYTE1_MEIP;
+  }
+};
+
+/** Set or clear mip.SEIP from the PLIC supervisor context (not a guest CSR write). */
+const setSupervisorExternalInterruptPending = (registers: Registers, pending: boolean): void => {
+  const mip = registers.controlAndStatus[MIP]!;
+  if (pending) {
+    mip[1]! |= MIP_BYTE1_SEIP;
+  } else {
+    mip[1]! &= ~MIP_BYTE1_SEIP;
+  }
+};
+
 export {
   PRIVILEGE_USER,
   PRIVILEGE_SUPERVISOR,
@@ -438,4 +472,6 @@ export {
   mppBitsFromPrivilegeMode,
   setMachineTimerInterruptPending,
   setMachineSoftwareInterruptPending,
+  setMachineExternalInterruptPending,
+  setSupervisorExternalInterruptPending,
 };
