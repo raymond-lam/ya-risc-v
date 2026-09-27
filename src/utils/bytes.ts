@@ -310,6 +310,30 @@ const bytesToInt32Array = (bytes: Uint8Array, index: number): Int32Array => {
   return new Int32Array(bytes.buffer, byteOffset, 1);
 };
 
+/**
+ * One-element `BigInt64Array` view of `bytes` at host byte `index`
+ * (`index` must be 8-byte aligned relative to the underlying `ArrayBuffer`).
+ */
+const bytesToBigInt64Array = (bytes: Uint8Array, index: number): BigInt64Array => {
+  const byteOffset = bytes.byteOffset + index;
+  if (byteOffset % 8 !== 0) {
+    throw new RangeError('bytesToBigInt64Array index must be 8-byte aligned.');
+  }
+  return new BigInt64Array(bytes.buffer, byteOffset, 1);
+};
+
+/**
+ * One-element `BigUint64Array` view of `bytes` at host byte `index`
+ * (`index` must be 8-byte aligned relative to the underlying `ArrayBuffer`).
+ */
+const bytesToBigUint64Array = (bytes: Uint8Array, index: number): BigUint64Array => {
+  const byteOffset = bytes.byteOffset + index;
+  if (byteOffset % 8 !== 0) {
+    throw new RangeError('bytesToBigUint64Array index must be 8-byte aligned.');
+  }
+  return new BigUint64Array(bytes.buffer, byteOffset, 1);
+};
+
 export {
   copyBytes,
   addBytes,
@@ -334,4 +358,6 @@ export {
   signExtendBytes,
   zeroExtendBytes,
   bytesToInt32Array,
+  bytesToBigInt64Array,
+  bytesToBigUint64Array,
 };

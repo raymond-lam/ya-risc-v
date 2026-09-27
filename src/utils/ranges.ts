@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-/* eslint-disable import/prefer-default-export -- named export matches call-site style */
-
 /** Half-open guest or host range `[base, base + size)` with a label for diagnostics. */
 type NamedRange = {
   name: string;
@@ -55,4 +53,5 @@ const findOverlappingPair = (
   return null;
 };
 
-export { findOverlappingPair };
+export { findOverlappingPair, rangesOverlap };
+export type { NamedRange };

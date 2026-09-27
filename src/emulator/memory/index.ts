@@ -31,6 +31,7 @@ import {
   storePlicByte,
 } from '#emulator/memory/plic';
 import { loadRamByte, ramAddressToHostIndex, storeRamByte } from '#emulator/memory/ram';
+import { invalidateOverlappingReservations } from '#emulator/memory/reservation';
 import {
   UART_REGISTER_WINDOW,
   loadUartRegister,
@@ -80,6 +81,7 @@ const createMemory = ({
     uartTxWakeHostIndex,
     clintHostBaseIndex,
     plicHostBaseIndex,
+    reservationMonitorHostIndex,
     hartWakeHostIndex,
     packedByteLength,
   } = guestMemoryHostLayout(ramSize);
@@ -97,6 +99,7 @@ const createMemory = ({
     uartTxWakeHostIndex,
     clintHostBaseIndex,
     plicHostBaseIndex,
+    reservationMonitorHostIndex,
     hartWakeHostIndex,
   };
   initializeClint(memory);
@@ -155,6 +158,7 @@ const storeBytes = ({
   source: ReadonlyUint8Array;
   byteLength: number;
 }): void => {
+  invalidateOverlappingReservations(memory, address, byteLength);
   const addressCursor = copyBytes(new Uint8Array(8), address);
   for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
     const value = source[byteIndex] ?? 0;
@@ -192,6 +196,8 @@ export {
   ramAddressToHostIndex,
   waitUartTransmit,
 };
+export { atomicRamCompareExchange, atomicRamLoad, atomicRamStore } from '#emulator/memory/ram';
+export { setReservation, tryTakeReservation } from '#emulator/memory/reservation';
 export {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,

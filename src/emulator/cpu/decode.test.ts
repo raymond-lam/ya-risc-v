@@ -267,6 +267,22 @@ describe('decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 
+  it('executes amoadd.w and advances pc', () => {
+    const registers = createRegisters();
+    const memory = testMemory(64n);
+    memory.bytes[8] = 5;
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 8, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
+    // amoadd.w x3, x2, (x1)
+    decode(instructionBytes(0x0020_a1af))(registers, memory);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 5, 32)
+    );
+    assert.equal(memory.bytes[8], 12);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
   it('traps on an illegal encoding and records mtval', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
