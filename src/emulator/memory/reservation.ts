@@ -27,6 +27,11 @@ import type { ReadonlyUint8Array } from '#types';
  *     containing its address; a store that overlaps that line clears the claim.
  *   - **slot** — host SAB record for one hart (valid / width / LR address). Indexed by
  *     `mhartid`; not a guest address.
+ *
+ * Updates run under a SAB spinlock so clearing other harts / arming a slot is
+ * transactional. A successful `tryTakeReservation` keeps the reservation held and
+ * retains the monitor lock until the matching `storeBytes` / `atomicRamStore`
+ * releases it (SC store window).
  */
 
 /** Bytes in one reservation line (guest address granule). */
@@ -43,8 +48,23 @@ const RESERVATION_HART_COUNT = 8;
  */
 const RESERVATION_SLOT_SIZE = 16;
 
-/** Host bytes for the shared LR/SC monitor. */
-const RESERVATION_MONITOR_HOST_SIZE = RESERVATION_HART_COUNT * RESERVATION_SLOT_SIZE;
+/** Host Int32 lock at the monitor base (0 = free, 1 = held). */
+const RESERVATION_LOCK_BYTES = 4;
+/** Pad so slots stay 8-byte aligned after the lock. */
+const RESERVATION_LOCK_PAD = 4;
+
+/** Host bytes for the shared LR/SC monitor (lock + pad + slots). */
+const RESERVATION_MONITOR_HOST_SIZE =
+  RESERVATION_LOCK_BYTES + RESERVATION_LOCK_PAD + RESERVATION_HART_COUNT * RESERVATION_SLOT_SIZE;
+
+/** Per-worker reentry depth for the monitor lock (SC holds across tryTake→store). */
+let monitorLockDepth = 0;
+
+/** True when this worker's successful tryTake still holds the lock for the SC store. */
+let scMonitorHeld = false;
+
+const reservationLockInt32 = (memory: Memory): Int32Array =>
+  bytesToInt32Array(memory.bytes, memory.reservationMonitorHostIndex);
 
 /** Guest-physical base of the reservation line that contains `guestAddress`. */
 const reservationLineBase = (guestAddress: bigint): bigint =>
@@ -52,7 +72,10 @@ const reservationLineBase = (guestAddress: bigint): bigint =>
 
 /** Host byte index of hart `hartId`'s monitor slot. */
 const reservationSlotHostIndex = (memory: Memory, hartId: number): number =>
-  memory.reservationMonitorHostIndex + hartId * RESERVATION_SLOT_SIZE;
+  memory.reservationMonitorHostIndex +
+  RESERVATION_LOCK_BYTES +
+  RESERVATION_LOCK_PAD +
+  hartId * RESERVATION_SLOT_SIZE;
 
 const reservationSlotValidInt32 = (memory: Memory, hartId: number): Int32Array =>
   bytesToInt32Array(memory.bytes, reservationSlotHostIndex(memory, hartId));
@@ -66,12 +89,87 @@ const reservationSlotAddressUint64 = (memory: Memory, hartId: number): BigUint64
 const isValidHartId = (hartId: number): boolean =>
   Number.isInteger(hartId) && hartId >= 0 && hartId < RESERVATION_HART_COUNT;
 
+const acquireMonitorLock = (memory: Memory): void => {
+  if (monitorLockDepth > 0) {
+    monitorLockDepth += 1;
+    return;
+  }
+  const lock = reservationLockInt32(memory);
+  for (;;) {
+    if (Atomics.compareExchange(lock, 0, 0, 1) === 0) {
+      monitorLockDepth = 1;
+      return;
+    }
+    Atomics.wait(lock, 0, 1);
+  }
+};
+
+const releaseMonitorLock = (memory: Memory): void => {
+  if (monitorLockDepth <= 0) {
+    return;
+  }
+  monitorLockDepth -= 1;
+  if (monitorLockDepth > 0) {
+    return;
+  }
+  const lock = reservationLockInt32(memory);
+  Atomics.store(lock, 0, 0);
+  Atomics.notify(lock, 0, 1);
+};
+
+/**
+ * Release a monitor lock held across a successful SC `tryTakeReservation`.
+ * Called at the end of `storeBytes` / `atomicRamStore`.
+ */
+const releaseScMonitorIfHeld = (memory: Memory): void => {
+  if (!scMonitorHeld) {
+    return;
+  }
+  scMonitorHeld = false;
+  releaseMonitorLock(memory);
+};
+
+const withMonitorLock = <T>(memory: Memory, run: () => T): T => {
+  acquireMonitorLock(memory);
+  try {
+    return run();
+  } finally {
+    releaseMonitorLock(memory);
+  }
+};
+
+/** Clear hart `hartId`'s monitor slot (caller must hold the monitor lock). */
+const clearReservationLocked = (memory: Memory, hartId: number): void => {
+  Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 0);
+};
+
 /** Clear hart `hartId`'s monitor slot. */
 const clearReservation = (memory: Memory, hartId: number): void => {
   if (!isValidHartId(hartId)) {
     return;
   }
-  Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 0);
+  withMonitorLock(memory, () => {
+    clearReservationLocked(memory, hartId);
+  });
+};
+
+/**
+ * True when hart `hartId`'s slot still holds a reservation for exact `address` / `byteLength`.
+ * Caller must hold the monitor lock.
+ */
+const reservationHoldsLocked = (
+  memory: Memory,
+  hartId: number,
+  address: ReadonlyUint8Array,
+  byteLength: number
+): boolean => {
+  if (Atomics.load(reservationSlotValidInt32(memory, hartId), 0) === 0) {
+    return false;
+  }
+  if (Atomics.load(reservationSlotWidthInt32(memory, hartId), 0) !== byteLength) {
+    return false;
+  }
+  return Atomics.load(reservationSlotAddressUint64(memory, hartId), 0) === bytesToBigInt(address);
 };
 
 /**
@@ -87,29 +185,32 @@ const setReservation = (
   if (!isValidHartId(hartId)) {
     return;
   }
-  const guestAddress = bytesToBigInt(address);
-  const lineBase = reservationLineBase(guestAddress);
-  for (let otherHartId = 0; otherHartId < RESERVATION_HART_COUNT; otherHartId += 1) {
-    if (otherHartId === hartId) {
-      continue;
+  withMonitorLock(memory, () => {
+    const guestAddress = bytesToBigInt(address);
+    const lineBase = reservationLineBase(guestAddress);
+    for (let otherHartId = 0; otherHartId < RESERVATION_HART_COUNT; otherHartId += 1) {
+      if (otherHartId === hartId) {
+        continue;
+      }
+      if (Atomics.load(reservationSlotValidInt32(memory, otherHartId), 0) === 0) {
+        continue;
+      }
+      const otherAddress = Atomics.load(reservationSlotAddressUint64(memory, otherHartId), 0);
+      if (reservationLineBase(otherAddress) === lineBase) {
+        clearReservationLocked(memory, otherHartId);
+      }
     }
-    if (Atomics.load(reservationSlotValidInt32(memory, otherHartId), 0) === 0) {
-      continue;
-    }
-    const otherAddress = Atomics.load(reservationSlotAddressUint64(memory, otherHartId), 0);
-    if (reservationLineBase(otherAddress) === lineBase) {
-      Atomics.store(reservationSlotValidInt32(memory, otherHartId), 0, 0);
-    }
-  }
-  Atomics.store(reservationSlotAddressUint64(memory, hartId), 0, guestAddress);
-  Atomics.store(reservationSlotWidthInt32(memory, hartId), 0, byteLength);
-  Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 1);
+    Atomics.store(reservationSlotAddressUint64(memory, hartId), 0, guestAddress);
+    Atomics.store(reservationSlotWidthInt32(memory, hartId), 0, byteLength);
+    Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 1);
+  });
 };
 
 /**
- * True when hart `hartId`'s slot still holds a reservation for exact `address` / `byteLength`.
+ * If this hart's slot still matches, keep the reservation held and retain the monitor
+ * lock until `releaseScMonitorIfHeld` (SC store path). Otherwise clear and return false.
  */
-const reservationHolds = (
+const tryTakeReservation = (
   memory: Memory,
   hartId: number,
   address: ReadonlyUint8Array,
@@ -118,32 +219,15 @@ const reservationHolds = (
   if (!isValidHartId(hartId)) {
     return false;
   }
-  if (Atomics.load(reservationSlotValidInt32(memory, hartId), 0) === 0) {
+  acquireMonitorLock(memory);
+  if (!reservationHoldsLocked(memory, hartId, address, byteLength)) {
+    clearReservationLocked(memory, hartId);
+    releaseMonitorLock(memory);
     return false;
   }
-  if (Atomics.load(reservationSlotWidthInt32(memory, hartId), 0) !== byteLength) {
-    return false;
-  }
-  return Atomics.load(reservationSlotAddressUint64(memory, hartId), 0) === bytesToBigInt(address);
-};
-
-/**
- * If this hart's slot still matches, clear it atomically and return true (SC may proceed).
- * Otherwise return false.
- */
-const tryTakeReservation = (
-  memory: Memory,
-  hartId: number,
-  address: ReadonlyUint8Array,
-  byteLength: number
-): boolean => {
-  if (!reservationHolds(memory, hartId, address, byteLength)) {
-    clearReservation(memory, hartId);
-    return false;
-  }
-  const valid = reservationSlotValidInt32(memory, hartId);
-  const previous = Atomics.compareExchange(valid, 0, 1, 0);
-  return previous === 1;
+  // Keep valid=1 across the store; hold the lock so other harts cannot invalidate mid-window.
+  scMonitorHeld = true;
+  return true;
 };
 
 /**
@@ -158,23 +242,26 @@ const invalidateOverlappingReservations = (
   if (byteLength <= 0) {
     return;
   }
-  const storeBase = bytesToBigInt(address);
-  const storeSize = BigInt(byteLength);
-  for (let hartId = 0; hartId < RESERVATION_HART_COUNT; hartId += 1) {
-    if (Atomics.load(reservationSlotValidInt32(memory, hartId), 0) === 0) {
-      continue;
+  withMonitorLock(memory, () => {
+    const storeBase = bytesToBigInt(address);
+    const storeSize = BigInt(byteLength);
+    for (let hartId = 0; hartId < RESERVATION_HART_COUNT; hartId += 1) {
+      if (Atomics.load(reservationSlotValidInt32(memory, hartId), 0) === 0) {
+        continue;
+      }
+      const reservedAddress = Atomics.load(reservationSlotAddressUint64(memory, hartId), 0);
+      const lineBase = reservationLineBase(reservedAddress);
+      if (rangesOverlap(lineBase, BigInt(RESERVATION_LINE_SIZE), storeBase, storeSize)) {
+        clearReservationLocked(memory, hartId);
+      }
     }
-    const reservedAddress = Atomics.load(reservationSlotAddressUint64(memory, hartId), 0);
-    const lineBase = reservationLineBase(reservedAddress);
-    if (rangesOverlap(lineBase, BigInt(RESERVATION_LINE_SIZE), storeBase, storeSize)) {
-      Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 0);
-    }
-  }
+  });
 };
 
 export {
   RESERVATION_MONITOR_HOST_SIZE,
   setReservation,
   invalidateOverlappingReservations,
+  releaseScMonitorIfHeld,
   tryTakeReservation,
 };

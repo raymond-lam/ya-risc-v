@@ -34,14 +34,13 @@ import {
   snapshotControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
+import { CAUSE_STORE_AMO_ADDRESS_MISALIGNED, enterTrap } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
 import {
   atomicRamCompareExchange,
   atomicRamLoad,
   atomicRamStore,
-  loadBytes,
   setReservation,
-  storeBytes,
   tryTakeReservation,
   type Memory,
 } from '#emulator/memory';
@@ -62,55 +61,57 @@ const MHARTID = 0xf14;
 const hartIdOf = (registers: Registers): number =>
   bytesToNumber(snapshotControlAndStatusRegister(registers, MHARTID));
 
-const loadAmoValue = (
-  memory: Memory,
-  address: ReadonlyUint8Array,
-  byteLength: 4 | 8,
-  destination: Uint8Array
-): void => {
-  if (!atomicRamLoad({ destination, memory, address, byteLength })) {
-    loadBytes({ destination, memory, address, byteLength });
-  }
+/** Trap Store/AMO address misaligned (cause 6); do not fall back to non-atomic R/W. */
+const trapStoreAmoMisaligned = (registers: Registers, address: ReadonlyUint8Array): void => {
+  enterTrap(registers, CAUSE_STORE_AMO_ADDRESS_MISALIGNED, copyBytes(new Uint8Array(8), address));
 };
 
-const storeAmoValue = (
-  memory: Memory,
-  address: ReadonlyUint8Array,
-  source: ReadonlyUint8Array,
-  byteLength: 4 | 8
-): void => {
-  if (!atomicRamStore({ memory, address, source, byteLength })) {
-    storeBytes({ memory, address, source, byteLength });
-  }
-};
-
-/** lr.w: rd = sext(mem[rs1]); reserve 32 bits. */
+/** lr.w: rd = sext(mem[rs1]); reserve 32 bits. Misaligned / non-RAM → trap (no reservation). */
 const lrW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const oldValue = new Uint8Array(8);
-  loadAmoValue(memory, address, 4, oldValue);
+  if (!atomicRamLoad({ destination: oldValue, memory, address, byteLength: 4 })) {
+    trapStoreAmoMisaligned(registers, address);
+    return;
+  }
   signExtendBytes(oldValue, 4);
   setReservation(memory, hartIdOf(registers), address, 4);
   writeGeneralPurposeRegister(registers, args.destinationRegister, oldValue);
   advanceProgramCounter(registers);
 };
 
-/** lr.d: rd = mem[rs1]; reserve 64 bits. */
+/** lr.d: rd = mem[rs1]; reserve 64 bits. Misaligned / non-RAM → trap (no reservation). */
 const lrD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const oldValue = new Uint8Array(8);
-  loadAmoValue(memory, address, 8, oldValue);
+  if (!atomicRamLoad({ destination: oldValue, memory, address, byteLength: 8 })) {
+    trapStoreAmoMisaligned(registers, address);
+    return;
+  }
   setReservation(memory, hartIdOf(registers), address, 8);
   writeGeneralPurposeRegister(registers, args.destinationRegister, oldValue);
   advanceProgramCounter(registers);
 };
 
-/** sc.w: if reservation matches, mem[rs1] = rs2[31:0], rd = 0; else rd ≠ 0. */
+/**
+ * sc.w: if reservation matches, mem[rs1] = rs2[31:0], rd = 0; else rd ≠ 0.
+ * Misaligned / non-RAM → trap before taking the reservation.
+ */
 const scW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
+  const probe = new Uint8Array(8);
+  if (!atomicRamLoad({ destination: probe, memory, address, byteLength: 4 })) {
+    trapStoreAmoMisaligned(registers, address);
+    return;
+  }
   const success = tryTakeReservation(memory, hartIdOf(registers), address, 4);
   if (success) {
-    storeAmoValue(memory, address, readGeneralPurposeRegister(registers, args.sourceRegister2), 4);
+    atomicRamStore({
+      memory,
+      address,
+      source: readGeneralPurposeRegister(registers, args.sourceRegister2),
+      byteLength: 4,
+    });
   }
   writeGeneralPurposeRegister(
     registers,
@@ -120,12 +121,25 @@ const scW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   advanceProgramCounter(registers);
 };
 
-/** sc.d: if reservation matches, mem[rs1] = rs2, rd = 0; else rd ≠ 0. */
+/**
+ * sc.d: if reservation matches, mem[rs1] = rs2, rd = 0; else rd ≠ 0.
+ * Misaligned / non-RAM → trap before taking the reservation.
+ */
 const scD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
+  const probe = new Uint8Array(8);
+  if (!atomicRamLoad({ destination: probe, memory, address, byteLength: 8 })) {
+    trapStoreAmoMisaligned(registers, address);
+    return;
+  }
   const success = tryTakeReservation(memory, hartIdOf(registers), address, 8);
   if (success) {
-    storeAmoValue(memory, address, readGeneralPurposeRegister(registers, args.sourceRegister2), 8);
+    atomicRamStore({
+      memory,
+      address,
+      source: readGeneralPurposeRegister(registers, args.sourceRegister2),
+      byteLength: 8,
+    });
   }
   writeGeneralPurposeRegister(
     registers,
@@ -153,30 +167,24 @@ const amoReadModifyWrite = (
   const oldValue = new Uint8Array(8);
   const observed = new Uint8Array(8);
   if (!atomicRamLoad({ destination: oldValue, memory, address, byteLength })) {
-    loadBytes({ destination: oldValue, memory, address, byteLength });
-    storeBytes({
-      memory,
-      address,
-      source: combine(oldValue, source, byteLength),
-      byteLength,
-    });
-  } else {
-    for (;;) {
-      const next = combine(oldValue, source, byteLength);
-      if (
-        atomicRamCompareExchange({
-          destination: observed,
-          memory,
-          address,
-          byteLength,
-          expected: oldValue,
-          desired: next,
-        })
-      ) {
-        break;
-      }
-      copyBytes(oldValue, observed);
+    trapStoreAmoMisaligned(registers, address);
+    return;
+  }
+  for (;;) {
+    const next = combine(oldValue, source, byteLength);
+    if (
+      atomicRamCompareExchange({
+        destination: observed,
+        memory,
+        address,
+        byteLength,
+        expected: oldValue,
+        desired: next,
+      })
+    ) {
+      break;
     }
+    copyBytes(oldValue, observed);
   }
   if (byteLength === 4) {
     signExtendBytes(oldValue, 4);

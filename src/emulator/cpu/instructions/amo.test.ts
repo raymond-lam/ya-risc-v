@@ -33,8 +33,12 @@ import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
+  setProgramCounter,
+  snapshotControlAndStatusRegister,
+  writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
+import { CAUSE_STORE_AMO_ADDRESS_MISALIGNED } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 describe('amo', () => {
@@ -262,5 +266,105 @@ describe('amo', () => {
     );
     assert.deepEqual(guest.bytes.slice(64, 72), new Uint8Array(8));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('misaligned lr.w traps with cause 6 and does not arm a reservation', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      0x305,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 2, 32));
+
+    lrW(registers, guest, {
+      destinationRegister: 3,
+      sourceRegister1: 1,
+      sourceRegister2: 0,
+    });
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x342),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ADDRESS_MISALIGNED, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x343),
+      signedNumberToBytes(new Uint8Array(8), 2, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+
+    // A subsequent aligned sc must fail — no reservation was armed.
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 16, 32));
+    writeGeneralPurposeRegister(
+      registers,
+      2,
+      signedNumberToBytes(new Uint8Array(8), 0x11111111, 32)
+    );
+    scW(registers, guest, {
+      destinationRegister: 4,
+      sourceRegister1: 1,
+      sourceRegister2: 2,
+    });
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 4),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.deepEqual(guest.bytes.slice(16, 20), new Uint8Array(4));
+  });
+
+  it('misaligned amoadd.w traps with cause 6 and leaves memory unchanged', () => {
+    const guest = testMemory(256n);
+    guest.bytes[2] = 0xaa;
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      0x305,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 2, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
+
+    amoaddW(registers, guest, {
+      destinationRegister: 3,
+      sourceRegister1: 1,
+      sourceRegister2: 2,
+    });
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x342),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ADDRESS_MISALIGNED, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x343),
+      signedNumberToBytes(new Uint8Array(8), 2, 32)
+    );
+    assert.equal(guest.bytes[2], 0xaa);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+  });
+
+  it('misaligned sc.d traps with cause 6', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      0x305,
+      signedNumberToBytes(new Uint8Array(8), 0x3000, 32)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 4, 32));
+
+    scD(registers, guest, {
+      destinationRegister: 3,
+      sourceRegister1: 1,
+      sourceRegister2: 2,
+    });
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x342),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ADDRESS_MISALIGNED, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x3000);
   });
 });

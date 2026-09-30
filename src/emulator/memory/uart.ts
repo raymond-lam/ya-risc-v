@@ -50,18 +50,16 @@ const LSR_TEMT = 0x40;
 /** Enable Received Data Available Interrupt (ERBFI): IRQ when LSR.DR is set. */
 const IER_ERBFI = 0x01;
 /**
- * Enable Transmitter Holding Register Empty Interrupt (ETBEI). On a real 16550
- * this asserts the UART IRQ when THRE is set (room for one more TX byte). Here
- * it asserts only when TEMT is set (TX queue fully empty), so the guest sees
- * the IRQ after the host has drained the last byte.
+ * Enable Transmitter Holding Register Empty Interrupt (ETBEI). Asserts when
+ * LSR.THRE is set (room for one more TX byte), via a sticky THRE IRQ bit that
+ * clears on IIR read or THR write (16550).
  */
 const IER_ETBEI = 0x02;
 
 /**
  * Interrupt Identification Register (IIR) — guest-readable only (writes are
- * ignored). Encodes which UART IRQ is pending, or “none”. The value changes
- * when the guest clears the underlying condition (e.g. read RBR, write THR),
- * not by writing IIR.
+ * ignored). Encodes which UART IRQ is pending, or “none”. Reading IIR when the
+ * identity is THRE clears the sticky THRE IRQ bit.
  */
 /** No interrupt pending (bit 0 set). */
 const IIR_NO_INTERRUPT = 0x01;
@@ -86,6 +84,12 @@ const META_TX_HEAD = 2;
 const META_TX_TAIL = 3;
 /** Host bytes reserved for UART queue head/tail indices. */
 const META_BYTE_COUNT = 4;
+
+/**
+ * Host slot for the sticky THRE IRQ bit (IIR is derived; this byte is not guest
+ * IIR storage). 1 = THRE interrupt pending until IIR read or THR write.
+ */
+const THRE_IRQ_STICKY_REGISTER = 2;
 
 /** Host Int32: UART TX nonempty level (`0` empty / `1` nonempty) for the terminal pump. */
 const UART_TX_WAKE_HOST_SIZE = WAKE_HOST_SIZE;
@@ -114,6 +118,9 @@ const uartAddressToRegisterIndex = (memory: Memory, address: ReadonlyUint8Array)
 };
 
 const metaIndex = (memory: Memory, offset: number): number => memory.uartMetaHostIndex + offset;
+
+const registerHostIndex = (memory: Memory, registerIndex: number): number =>
+  memory.uartRegistersHostIndex + registerIndex;
 
 /** True when the TX ring has at least one byte to drain. */
 const uartTransmitPending = (memory: Memory): boolean => {
@@ -144,7 +151,11 @@ const waitUartTransmit = async (memory: Memory): Promise<void> => {
 };
 
 const uartRegisterByte = (memory: Memory, registerIndex: number): number =>
-  memory.bytes[memory.uartRegistersHostIndex + registerIndex] ?? 0;
+  Atomics.load(memory.bytes, registerHostIndex(memory, registerIndex));
+
+const storeUartRegisterByte = (memory: Memory, registerIndex: number, value: number): void => {
+  Atomics.store(memory.bytes, registerHostIndex(memory, registerIndex), value & 0xff);
+};
 
 const queueLength = (head: number, tail: number): number =>
   (tail - head + UART_QUEUE_CAPACITY) % UART_QUEUE_CAPACITY;
@@ -170,9 +181,38 @@ const readLineStatus = (memory: Memory): number => {
   return lsr;
 };
 
+const threIrqSticky = (memory: Memory): boolean =>
+  Atomics.load(memory.bytes, registerHostIndex(memory, THRE_IRQ_STICKY_REGISTER)) !== 0;
+
+const setThreIrqSticky = (memory: Memory, value: boolean): void => {
+  Atomics.store(memory.bytes, registerHostIndex(memory, THRE_IRQ_STICKY_REGISTER), value ? 1 : 0);
+};
+
+/**
+ * Arm the sticky THRE IRQ on a rising THRE edge while ETBEI is enabled.
+ * Enabling ETBEI while THRE is already set also arms (16550).
+ */
+const armThreIrqOnRisingEdge = (memory: Memory, threBefore: boolean, threAfter: boolean): void => {
+  if (threBefore || !threAfter) {
+    return;
+  }
+  if ((uartRegisterByte(memory, 1) & IER_ETBEI) !== 0) {
+    setThreIrqSticky(memory, true);
+  }
+};
+
+/** Arm sticky THRE when ETBEI is enabled while LSR.THRE is already set. */
+const armThreIrqIfEnabledAndReady = (memory: Memory): void => {
+  const ier = uartRegisterByte(memory, 1);
+  const lsr = readLineStatus(memory);
+  if ((ier & IER_ETBEI) !== 0 && (lsr & LSR_THRE) !== 0) {
+    setThreIrqSticky(memory, true);
+  }
+};
+
 /**
  * Highest-priority pending UART interrupt id (IIR), or `IIR_NO_INTERRUPT`.
- * RX data outranks THR-empty. ETBEI uses TX-empty (queue empty), not merely THRE/has-room.
+ * RX data outranks THRE. ETBEI uses sticky THRE (cleared by IIR read / THR write).
  */
 const readInterruptIdentity = (memory: Memory): number => {
   const ier = uartRegisterByte(memory, 1);
@@ -180,13 +220,13 @@ const readInterruptIdentity = (memory: Memory): number => {
   if ((ier & IER_ERBFI) !== 0 && (lsr & LSR_DR) !== 0) {
     return IIR_RDA;
   }
-  if ((ier & IER_ETBEI) !== 0 && (lsr & LSR_TEMT) !== 0) {
+  if ((ier & IER_ETBEI) !== 0 && threIrqSticky(memory) && (lsr & LSR_THRE) !== 0) {
     return IIR_THRE;
   }
   return IIR_NO_INTERRUPT;
 };
 
-/** Drive PLIC UART source 10 from IER ∧ (RX ready / TX empty). */
+/** Drive PLIC UART source 10 from IER ∧ (RX ready / sticky THRE). */
 const refreshUartIrq = (memory: Memory): void => {
   setPlicSourcePending(
     memory,
@@ -219,10 +259,13 @@ const popUartTransmit = (memory: Memory): number | null => {
   if (head === tail) {
     return null;
   }
+  const threBefore = !queueIsFull(head, tail);
   const value = memory.bytes[memory.uartTxDataHostIndex + head] ?? 0;
   const nextHead = (head + 1) % UART_QUEUE_CAPACITY;
   Atomics.store(memory.bytes, metaIndex(memory, META_TX_HEAD), nextHead);
   publishUartTransmitLevel(memory, nextHead !== tail);
+  const threAfter = !queueIsFull(nextHead, tail);
+  armThreIrqOnRisingEdge(memory, threBefore, threAfter);
   refreshUartIrq(memory);
   return value;
 };
@@ -252,7 +295,7 @@ const pushTransmit = (memory: Memory, value: number): boolean => {
 
 /**
  * Guest load of UART register `registerIndex` (0..7). RBR pops RX; IIR/LSR are derived;
- * with LCR.DLAB set, offsets 0/1 are divisor latches.
+ * with LCR.DLAB set, offsets 0/1 are divisor latches. Reading IIR clears sticky THRE.
  */
 const loadUartRegister = (memory: Memory, registerIndex: number): number => {
   const dlab = (uartRegisterByte(memory, 3) & LCR_DLAB) !== 0;
@@ -262,7 +305,12 @@ const loadUartRegister = (memory: Memory, registerIndex: number): number => {
     return value;
   }
   if (registerIndex === 2) {
-    return readInterruptIdentity(memory);
+    const identity = readInterruptIdentity(memory);
+    if (identity === IIR_THRE) {
+      setThreIrqSticky(memory, false);
+      refreshUartIrq(memory);
+    }
+    return identity;
   }
   if (registerIndex === 5) {
     return readLineStatus(memory);
@@ -271,23 +319,26 @@ const loadUartRegister = (memory: Memory, registerIndex: number): number => {
 };
 
 /**
- * Guest store to UART register `registerIndex` (0..7). THR pushes TX (dropped if full);
- * IER refreshes PLIC source 10; IIR/FCR and LSR writes are ignored (FCR unimplemented);
+ * Guest store to UART register `registerIndex` (0..7). THR pushes TX (dropped if full)
+ * and clears sticky THRE; IER refreshes PLIC source 10; IIR/FCR and LSR writes are ignored;
  * with LCR.DLAB set, offsets 0/1 are divisor latches.
  */
 const storeUartRegister = (memory: Memory, registerIndex: number, value: number): void => {
   const byte = value & 0xff;
   const dlab = (uartRegisterByte(memory, 3) & LCR_DLAB) !== 0;
   if (registerIndex === 0 && !dlab) {
+    setThreIrqSticky(memory, false);
     pushTransmit(memory, byte);
+    // THRE may still be set (queue not full); do not re-arm until THRE falls then rises.
     refreshUartIrq(memory);
     return;
   }
   if (registerIndex === 2 || registerIndex === 5) {
     return;
   }
-  memory.bytes[memory.uartRegistersHostIndex + registerIndex] = byte;
+  storeUartRegisterByte(memory, registerIndex, byte);
   if (registerIndex === 1 && !dlab) {
+    armThreIrqIfEnabledAndReady(memory);
     refreshUartIrq(memory);
   }
 };

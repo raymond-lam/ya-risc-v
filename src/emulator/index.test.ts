@@ -18,6 +18,34 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import { create } from '#emulator';
+import { create as createClint } from '#emulator/clint';
+import { create as createTerminal } from '#emulator/terminal';
+import createTestMemory from '#test/guest-memory';
+
+/** Minimal thenable handle that can reject like a worker lifetime. */
+const createFailingHandle = (
+  message: string
+): PromiseLike<void> & {
+  start: () => void;
+  stop: () => void;
+} => {
+  const lifetime = Promise.withResolvers<void>();
+  let stopped = false;
+  return {
+    start: (): void => {
+      queueMicrotask(() => {
+        if (!stopped) {
+          lifetime.reject(new Error(message));
+        }
+      });
+    },
+    stop: (): void => {
+      stopped = true;
+      lifetime.resolve();
+    },
+    then: lifetime.promise.then.bind(lifetime.promise),
+  };
+};
 
 describe('emulator create', () => {
   it('rejects an image that does not fit in ramSize', () => {
@@ -33,5 +61,50 @@ describe('emulator create', () => {
         }),
       { name: 'RangeError', message: /does not fit in ramSize/ }
     );
+  });
+
+  it('start then stop joins without leaving workers hanging', async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    // Single `wfi` encoding; hart advances PC then waits until host stop terminates it.
+    const image = new Uint8Array([0x73, 0x00, 0x50, 0x10]);
+    const emulator = create({
+      image,
+      stdin,
+      stdout,
+      ramSize: 4096n,
+    });
+    emulator.start();
+    emulator.stop();
+    await emulator;
+  });
+
+  it('stops live CLINT and terminal workers when a sibling rejects', async () => {
+    const memory = createTestMemory(256n);
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const clint = createClint({ memory });
+    const terminal = createTerminal({ memory, stdin, stdout });
+    const failing = createFailingHandle('forced worker failure');
+
+    clint.start();
+    terminal.start();
+    failing.start();
+
+    await assert.rejects(
+      async () => {
+        try {
+          await Promise.all([failing, clint, terminal]);
+        } finally {
+          failing.stop();
+          clint.stop();
+          terminal.stop();
+        }
+      },
+      { message: 'forced worker failure' }
+    );
+
+    // Siblings must have been stopped; otherwise these awaits hang.
+    await Promise.all([clint, terminal]);
   });
 });

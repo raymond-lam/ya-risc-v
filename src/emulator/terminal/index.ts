@@ -65,8 +65,12 @@ class Terminal implements TerminalHandle {
     worker.once('error', (error) => {
       this.#lifetime.reject(error);
     });
-    worker.once('exit', () => {
-      this.#lifetime.resolve();
+    worker.once('exit', (code) => {
+      if (this.#stopped || code === 0) {
+        this.#lifetime.resolve();
+        return;
+      }
+      this.#lifetime.reject(new Error(`Terminal worker exited with code ${code}`));
     });
   };
 

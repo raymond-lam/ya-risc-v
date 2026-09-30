@@ -24,7 +24,10 @@ import {
   unsignedBigIntToBytes,
 } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
-import { invalidateOverlappingReservations } from '#emulator/memory/reservation';
+import {
+  invalidateOverlappingReservations,
+  releaseScMonitorIfHeld,
+} from '#emulator/memory/reservation';
 import type { Memory } from '#emulator/memory/types';
 
 /**
@@ -116,13 +119,17 @@ const atomicRamStore = ({
   if (hostIndex === null) {
     return false;
   }
-  if (byteLength === 4) {
-    Atomics.store(bytesToInt32Array(memory.bytes, hostIndex), 0, bytesToNumber(source) | 0);
-  } else {
-    Atomics.store(bytesToBigInt64Array(memory.bytes, hostIndex), 0, signedBytesToBigInt(source));
+  try {
+    if (byteLength === 4) {
+      Atomics.store(bytesToInt32Array(memory.bytes, hostIndex), 0, bytesToNumber(source) | 0);
+    } else {
+      Atomics.store(bytesToBigInt64Array(memory.bytes, hostIndex), 0, signedBytesToBigInt(source));
+    }
+    invalidateOverlappingReservations(memory, address, byteLength);
+    return true;
+  } finally {
+    releaseScMonitorIfHeld(memory);
   }
-  invalidateOverlappingReservations(memory, address, byteLength);
-  return true;
 };
 
 /**

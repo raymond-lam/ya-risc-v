@@ -55,8 +55,12 @@ class Clint implements ClintHandle {
     worker.once('error', (error) => {
       this.#lifetime.reject(error);
     });
-    worker.once('exit', () => {
-      this.#lifetime.resolve();
+    worker.once('exit', (code) => {
+      if (this.#stopped || code === 0) {
+        this.#lifetime.resolve();
+        return;
+      }
+      this.#lifetime.reject(new Error(`CLINT worker exited with code ${code}`));
     });
   };
 
@@ -96,5 +100,4 @@ class Clint implements ClintHandle {
 const create = (options: ClintCreateOptions): ClintHandle => new Clint(options);
 
 export { create };
-/** Re-export so unused host `create`/`Worker` can tree-shake out of workers. */
 export type { ClintCreateOptions, ClintHandle } from '#emulator/clint/types';

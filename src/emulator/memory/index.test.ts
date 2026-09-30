@@ -395,7 +395,7 @@ describe('uart queues', () => {
     assert.equal(lsr[0], LSR_THRE | LSR_TEMT);
   });
 
-  it('IER/IIR drive PLIC source 10 for RX and TX-empty', () => {
+  it('IER/IIR drive PLIC source 10 for RX and THRE (sticky clears on IIR read)', () => {
     const memory = createTestMemory(64n);
     const IER_ERBFI = 0x01;
     const IER_ETBEI = 0x02;
@@ -412,26 +412,38 @@ describe('uart queues', () => {
     assert.equal(iir[0], IIR_NO_INTERRUPT);
     assert.equal(isPlicMachineExternalPending(memory), false);
 
-    // ETBEI + empty TX → THRE identity and MEIP.
+    // ETBEI + THRE (TX has room) → sticky THRE IRQ and MEIP.
     storeBytes({
       memory,
       address: uartAddress(1),
       source: new Uint8Array([IER_ETBEI]),
       byteLength: 1,
     });
+    assert.equal(isPlicMachineExternalPending(memory), true);
     loadBytes({ destination: iir, memory, address: uartAddress(2), byteLength: 1 });
     assert.equal(iir[0], IIR_THRE);
-    assert.equal(isPlicMachineExternalPending(memory), true);
+    // Reading IIR clears the sticky THRE interrupt.
+    assert.equal(isPlicMachineExternalPending(memory), false);
+    loadBytes({ destination: iir, memory, address: uartAddress(2), byteLength: 1 });
+    assert.equal(iir[0], IIR_NO_INTERRUPT);
 
+    // THR write clears sticky; THRE stays set but does not re-fire until it falls then rises.
+    storeBytes({
+      memory,
+      address: uartAddress(1),
+      source: new Uint8Array([IER_ETBEI]),
+      byteLength: 1,
+    });
+    assert.equal(isPlicMachineExternalPending(memory), true);
     storeBytes({
       memory,
       address: uartAddress(0),
       source: new Uint8Array([0x41]),
       byteLength: 1,
     });
+    assert.equal(isPlicMachineExternalPending(memory), false);
     loadBytes({ destination: iir, memory, address: uartAddress(2), byteLength: 1 });
     assert.equal(iir[0], IIR_NO_INTERRUPT);
-    assert.equal(isPlicMachineExternalPending(memory), false);
 
     // ERBFI + RX byte → RDA outranks; RBR clears RX pending (TX still holds 0x41).
     storeBytes({
@@ -441,21 +453,57 @@ describe('uart queues', () => {
       byteLength: 1,
     });
     assert.equal(pushUartReceive(memory, 0xab), true);
+    assert.equal(isPlicMachineExternalPending(memory), true);
     loadBytes({ destination: iir, memory, address: uartAddress(2), byteLength: 1 });
     assert.equal(iir[0], IIR_RDA);
-    assert.equal(isPlicMachineExternalPending(memory), true);
 
     const rbr = new Uint8Array(8);
     loadBytes({ destination: rbr, memory, address: uartAddress(0), byteLength: 1 });
     assert.equal(rbr[0], 0xab);
+    // IER write armed sticky THRE while TX still had room; after RDA clears, THRE is next.
+    assert.equal(isPlicMachineExternalPending(memory), true);
+    loadBytes({ destination: iir, memory, address: uartAddress(2), byteLength: 1 });
+    assert.equal(iir[0], IIR_THRE);
+    assert.equal(isPlicMachineExternalPending(memory), false);
+
+    // Pop while THRE already set does not re-arm (needs a rising edge).
+    assert.equal(popUartTransmit(memory), 0x41);
     loadBytes({ destination: iir, memory, address: uartAddress(2), byteLength: 1 });
     assert.equal(iir[0], IIR_NO_INTERRUPT);
     assert.equal(isPlicMachineExternalPending(memory), false);
+  });
 
-    assert.equal(popUartTransmit(memory), 0x41);
+  it('ETBEI fires on THRE (queue not full), not only TEMT', () => {
+    const memory = createTestMemory(64n);
+    const IER_ETBEI = 0x02;
+    const IIR_THRE = 0x02;
+
+    storePlicUint32(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+    storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
+    storePlicUint32(memory, 0x200000n, 0);
+
+    // Fill TX until not empty but still has room (THRE set, TEMT clear).
+    storeBytes({
+      memory,
+      address: uartAddress(0),
+      source: new Uint8Array([0x11]),
+      byteLength: 1,
+    });
+    const lsr = new Uint8Array(8);
+    loadBytes({ destination: lsr, memory, address: uartAddress(5), byteLength: 1 });
+    assert.equal(lsr[0]! & LSR_TEMT, 0);
+    assert.equal(lsr[0]! & LSR_THRE, LSR_THRE);
+
+    storeBytes({
+      memory,
+      address: uartAddress(1),
+      source: new Uint8Array([IER_ETBEI]),
+      byteLength: 1,
+    });
+    assert.equal(isPlicMachineExternalPending(memory), true);
+    const iir = new Uint8Array(8);
     loadBytes({ destination: iir, memory, address: uartAddress(2), byteLength: 1 });
     assert.equal(iir[0], IIR_THRE);
-    assert.equal(isPlicMachineExternalPending(memory), true);
   });
 });
 
@@ -556,6 +604,69 @@ describe('clint', () => {
     });
     assert.deepEqual(destination, value);
   });
+
+  it('aligned mtime/mtimecmp ld/sd use a single atomic u64', () => {
+    const memory = createTestMemory(64n);
+    const value = unsignedBigIntToBytes(new Uint8Array(8), 0x1111_2222_3333_4444n);
+    storeBytes({
+      memory,
+      address: clintAddress(CLINT_MTIMECMP_OFFSET),
+      source: value,
+      byteLength: 8,
+    });
+    const destination = new Uint8Array(8);
+    loadBytes({
+      destination,
+      memory,
+      address: clintAddress(CLINT_MTIMECMP_OFFSET),
+      byteLength: 8,
+    });
+    assert.deepEqual(destination, value);
+
+    // Partial multi-byte store merges via one atomic u64 write (no mid-store tear).
+    storeBytes({
+      memory,
+      address: clintAddress(CLINT_MTIMECMP_OFFSET),
+      source: new Uint8Array([0xaa, 0xbb]),
+      byteLength: 2,
+    });
+    const afterPartial = new Uint8Array(8);
+    loadBytes({
+      destination: afterPartial,
+      memory,
+      address: clintAddress(CLINT_MTIMECMP_OFFSET),
+      byteLength: 8,
+    });
+    assert.equal(afterPartial[0], 0xaa);
+    assert.equal(afterPartial[1], 0xbb);
+    assert.equal(afterPartial[2], value[2]);
+    assert.equal(afterPartial[7], value[7]);
+
+    // mtime store reseats epoch once; a subsequent load syncs from the host clock.
+    storeBytes({
+      memory,
+      address: clintAddress(CLINT_MTIME_OFFSET),
+      source: unsignedBigIntToBytes(new Uint8Array(8), 0n),
+      byteLength: 8,
+    });
+    const mtime = new Uint8Array(8);
+    loadBytes({
+      destination: mtime,
+      memory,
+      address: clintAddress(CLINT_MTIME_OFFSET),
+      byteLength: 8,
+    });
+    const loaded =
+      BigInt(mtime[0]!) |
+      (BigInt(mtime[1]!) << 8n) |
+      (BigInt(mtime[2]!) << 16n) |
+      (BigInt(mtime[3]!) << 24n) |
+      (BigInt(mtime[4]!) << 32n) |
+      (BigInt(mtime[5]!) << 40n) |
+      (BigInt(mtime[6]!) << 48n) |
+      (BigInt(mtime[7]!) << 56n);
+    assert.ok(loaded >= 0n);
+  });
 });
 
 describe('plic', () => {
@@ -572,17 +683,35 @@ describe('plic', () => {
     assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 1 << PLIC_SOURCE_UART);
   });
 
-  it('claim returns the UART id and clears the MEIP wire until complete', () => {
+  it('claim returns the UART id, clears pending, and complete re-arms from level', () => {
     const memory = createTestMemory(64n);
     setUartPlicPending(memory, true);
     assert.equal(isPlicMachineExternalPending(memory), true);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 1 << PLIC_SOURCE_UART);
 
     assert.equal(loadPlicUint32(memory, 0x200004n), PLIC_SOURCE_UART);
     assert.equal(isPlicMachineExternalPending(memory), false);
+    // Claim clears the global pending bit (SiFive/QEMU).
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 0);
 
-    // Still pending at the source, but claimed — complete re-arms the wire.
+    // Complete clears the gateway; input level still high → pending and MEIP return.
     storePlicUint32(memory, 0x200004n, PLIC_SOURCE_UART);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 1 << PLIC_SOURCE_UART);
     assert.equal(isPlicMachineExternalPending(memory), true);
+  });
+
+  it('only one context successfully claims a pending source', () => {
+    const memory = createTestMemory(64n);
+    storePlicUint32(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+    storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART); // enable M
+    storePlicUint32(memory, 0x2080n, 1 << PLIC_SOURCE_UART); // enable S
+    storePlicUint32(memory, 0x200000n, 0);
+    storePlicUint32(memory, 0x201000n, 0);
+    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+
+    assert.equal(loadPlicUint32(memory, 0x200004n), PLIC_SOURCE_UART);
+    assert.equal(loadPlicUint32(memory, 0x201004n), 0);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 0);
   });
 
   it('source pending publishes MEIP into the hart-wake level word', () => {

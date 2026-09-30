@@ -72,10 +72,10 @@ const MIMPID = 0xf13; // implementation id (hardwired 0)
 const MHARTID = 0xf14; // hardware thread id (hardwired 0)
 
 /**
- * sstatus is a restricted view of mstatus. Masked fields: SIE, SPIE, SPP, SUM, MXR.
- * (FS/XS/SD/UXL omitted until FP / wider WARL work lands. TW/TSR/TVM are M-only.)
+ * sstatus is a restricted view of mstatus. Masked fields: SIE, SPIE, SPP, SUM, MXR, UXL.
+ * (FS/XS/SD omitted until FP work lands. TW/TSR/TVM/SXL are M-only.)
  */
-const SSTATUS_MASK_BYTES = Uint8Array.of(0x22, 0x01, 0x0c, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+const SSTATUS_MASK_BYTES = Uint8Array.of(0x22, 0x01, 0x0c, 0, 0x03, 0, 0, 0) as ReadonlyUint8Array;
 
 /** Bits of mstatus outside the sstatus view (inverse of {@link SSTATUS_MASK_BYTES}). */
 const MSTATUS_KEEP_OUTSIDE_SSTATUS = Uint8Array.of(
@@ -83,11 +83,18 @@ const MSTATUS_KEEP_OUTSIDE_SSTATUS = Uint8Array.of(
   0xfe,
   0xf3,
   0xff,
-  0xff,
+  0xfc,
   0xff,
   0xff,
   0xff
 ) as ReadonlyUint8Array;
+
+/**
+ * mstatus.UXL (bits 33:32) and SXL (bits 35:34) hardwired to 64 (`2`).
+ * Little-endian byte4: UXL → bits 1:0, SXL → bits 3:2 → 0b1010 = 0x0a.
+ */
+const MSTATUS_BYTE4_UXL_SXL_MASK = 0x0f;
+const MSTATUS_BYTE4_UXL_SXL_64 = 0x0a;
 
 /**
  * Implemented interrupt enable bits in mie: SSI, MSI, STI, MTI, SEI, MEI
@@ -96,16 +103,20 @@ const MSTATUS_KEEP_OUTSIDE_SSTATUS = Uint8Array.of(
 const MIE_MASK_BYTES = Uint8Array.of(0xaa, 0x0a, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
 /**
- * Software-writable mip bits: SSI, STI (bits 1, 5) → 0x22.
- * MSIP/MTIP (CLINT) and SEIP/MEIP (PLIC) are hardware-driven and preserved across CSR writes.
+ * Software-writable mip bits: SSI, STI, SEIP (bits 1, 5, 9) → 0x222.
+ * MSIP/MTIP (CLINT) and MEIP (PLIC) are hardware-driven and preserved across CSR writes.
+ * Readable SEIP is soft bit OR PLIC wire (see {@link readControlAndStatusRegister}).
  */
-const MIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+const MIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0x02, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
-/** mip bits driven by devices: MSIP (3) + MTIP (7) + SEIP (9) + MEIP (11) → 0xa88. */
-const MIP_HARDWARE_MASK_BYTES = Uint8Array.of(0x88, 0x0a, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+/** mip bits driven by devices in the CSR slot: MSIP (3) + MTIP (7) + MEIP (11) → 0x888. */
+const MIP_HARDWARE_MASK_BYTES = Uint8Array.of(0x88, 0x08, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
-/** sip software-writable pending bits (SSIP/STIP only; SEIP is PLIC-driven). */
+/** sip software-writable pending bits (SSIP/STIP only; SEIP is read-only in sip). */
 const SIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/** IALIGN=32: mepc/sepc WARL clears bits [1:0] on write. */
+const XEPC_IALIGN_MASK_BYTE0 = 0xfc;
 
 /** mip.MTIP — machine timer interrupt pending (byte0 bit 7). */
 const MIP_BYTE0_MTIP = 0x80;
@@ -225,11 +236,15 @@ const createRegisters = (): Registers => {
     () => new Uint8Array(8)
   );
 
+  // Hardwire mstatus.UXL/SXL to 64 on reset.
+  controlAndStatus[MSTATUS]![4] = MSTATUS_BYTE4_UXL_SXL_64;
+
   return {
     generalPurpose: generalPurpose as unknown as Registers['generalPurpose'],
     programCounter: new Uint8Array(8),
     controlAndStatus: controlAndStatus as unknown as Registers['controlAndStatus'],
     privilegeMode: copyBytes(new Uint8Array(8), PRIVILEGE_MACHINE),
+    plicSupervisorExternalPending: false,
   };
 };
 
@@ -275,13 +290,30 @@ const advanceProgramCounter = (registers: Registers): Uint8Array =>
 /**
  * Keep mstatus.MPP legal on write. `mret` restores privilege from MPP, so a reserved
  * encoding (10, old H) must not stick — turn it into U so return always has a real mode.
+ * Hardwire UXL/SXL to 64 (RV64).
  */
 const legalizeMstatus = (mstatus: Uint8Array): Uint8Array => {
   const mppBits = mstatus[1]! & MSTATUS_BYTE1_MPP_MASK;
   if (mppBits === MSTATUS_BYTE1_MPP_RESERVED) {
     mstatus[1] = (mstatus[1]! & ~MSTATUS_BYTE1_MPP_MASK) | MSTATUS_BYTE1_MPP_USER;
   }
+  mstatus[4] = (mstatus[4]! & ~MSTATUS_BYTE4_UXL_SXL_MASK) | MSTATUS_BYTE4_UXL_SXL_64;
   return mstatus;
+};
+
+/** IALIGN=32: clear low 2 bits of mepc/sepc on CSR write. */
+const legalizeXepc = (xepc: Uint8Array): Uint8Array => {
+  xepc[0]! &= XEPC_IALIGN_MASK_BYTE0;
+  return xepc;
+};
+
+/** Readable mip: CSR slot ORed with the PLIC supervisor-external wire into SEIP. */
+const readMipWithPlicSeip = (registers: Registers): Uint8Array => {
+  const mip = copyBytes(new Uint8Array(8), registers.controlAndStatus[MIP]!);
+  if (registers.plicSupervisorExternalPending) {
+    mip[1]! |= MIP_BYTE1_SEIP;
+  }
+  return mip;
 };
 
 const readControlAndStatusRegister = (registers: Registers, index: number): ReadonlyUint8Array => {
@@ -291,7 +323,9 @@ const readControlAndStatusRegister = (registers: Registers, index: number): Read
     case SIE:
       return andBytes(new Uint8Array(8), registers.controlAndStatus[MIE]!, SIE_SIP_MASK_BYTES);
     case SIP:
-      return andBytes(new Uint8Array(8), registers.controlAndStatus[MIP]!, SIE_SIP_MASK_BYTES);
+      return andBytes(new Uint8Array(8), readMipWithPlicSeip(registers), SIE_SIP_MASK_BYTES);
+    case MIP:
+      return readMipWithPlicSeip(registers);
     default:
       return registers.controlAndStatus[index]!;
   }
@@ -313,13 +347,13 @@ const writeControlAndStatusRegister = (
   switch (index) {
     case SSTATUS: {
       // sstatus has no slot of its own: merge the writable S-visible bits into mstatus
-      // and leave M-only fields (MIE, MPIE, MPP, …) unchanged.
+      // and leave M-only fields (MIE, MPIE, MPP, …) unchanged; legalize hardwires UXL/SXL.
       const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
       const cleared = andBytes(new Uint8Array(8), mstatus, MSTATUS_KEEP_OUTSIDE_SSTATUS);
       const incoming = andBytes(new Uint8Array(8), value, SSTATUS_MASK_BYTES);
       return copyBytes(
         registers.controlAndStatus[MSTATUS]!,
-        orBytes(new Uint8Array(8), cleared, incoming)
+        legalizeMstatus(orBytes(new Uint8Array(8), cleared, incoming))
       );
     }
     case SIE: {
@@ -332,13 +366,15 @@ const writeControlAndStatusRegister = (
       );
     }
     case SIP: {
-      // Clear only SSIP/STIP; preserve SEIP (PLIC) and all non-S pending bits.
-      const mip = snapshotControlAndStatusRegister(registers, MIP);
+      // Clear only SSIP/STIP; preserve soft SEIP and all non-S pending bits (PLIC wire is separate).
+      const mip = registers.controlAndStatus[MIP]!;
       const keep = orBytes(
         new Uint8Array(8),
         andBytes(new Uint8Array(8), mip, MIE_MIP_KEEP_OUTSIDE_SIE_SIP),
         andBytes(new Uint8Array(8), mip, MIP_HARDWARE_MASK_BYTES)
       );
+      // Also preserve soft SEIP (writable only via mip, not sip).
+      keep[1]! |= mip[1]! & MIP_BYTE1_SEIP;
       const incoming = andBytes(new Uint8Array(8), value, SIP_WRITABLE_MASK_BYTES);
       return copyBytes(
         registers.controlAndStatus[MIP]!,
@@ -346,7 +382,7 @@ const writeControlAndStatusRegister = (
       );
     }
     case MSTATUS:
-      // Store mstatus after forcing MPP to a legal encoding.
+      // Store mstatus after forcing MPP and UXL/SXL to legal encodings.
       return copyBytes(
         registers.controlAndStatus[MSTATUS]!,
         legalizeMstatus(copyBytes(new Uint8Array(8), value))
@@ -357,7 +393,7 @@ const writeControlAndStatusRegister = (
         andBytes(new Uint8Array(8), value, MIE_MASK_BYTES)
       );
     case MIP: {
-      // Preserve device-driven MSIP/MTIP/SEIP/MEIP; only software-writable pending bits update.
+      // Soft SEIP is writable; preserve device-driven MSIP/MTIP/MEIP. PLIC SEIP is not in the slot.
       const previous = registers.controlAndStatus[MIP]!;
       const writable = andBytes(new Uint8Array(8), value, MIP_WRITABLE_MASK_BYTES);
       const hardware = andBytes(new Uint8Array(8), previous, MIP_HARDWARE_MASK_BYTES);
@@ -370,6 +406,12 @@ const writeControlAndStatusRegister = (
       return copyBytes(
         registers.controlAndStatus[MIDELEG]!,
         andBytes(new Uint8Array(8), value, MIDELEG_MASK_BYTES)
+      );
+    case MEPC:
+    case SEPC:
+      return copyBytes(
+        registers.controlAndStatus[index]!,
+        legalizeXepc(copyBytes(new Uint8Array(8), value))
       );
     default:
       return copyBytes(registers.controlAndStatus[index]!, value);
@@ -426,14 +468,9 @@ const setMachineExternalInterruptPending = (registers: Registers, pending: boole
   }
 };
 
-/** Set or clear mip.SEIP from the PLIC supervisor context (not a guest CSR write). */
+/** Set or clear the PLIC supervisor-external wire (not a guest CSR write). */
 const setSupervisorExternalInterruptPending = (registers: Registers, pending: boolean): void => {
-  const mip = registers.controlAndStatus[MIP]!;
-  if (pending) {
-    mip[1]! |= MIP_BYTE1_SEIP;
-  } else {
-    mip[1]! &= ~MIP_BYTE1_SEIP;
-  }
+  registers.plicSupervisorExternalPending = pending;
 };
 
 export {

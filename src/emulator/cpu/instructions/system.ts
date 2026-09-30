@@ -78,6 +78,12 @@ const WFI_INSTRUCTION_WORD = 0x10500073;
  */
 const MSTATUS_BYTE2_TW = 0x20;
 
+/**
+ * mstatus.TSR (Trap SRET), bit 22 → little-endian bytes[2] bit 6.
+ * When set, `sret` in M-mode raises illegal-instruction.
+ */
+const MSTATUS_BYTE2_TSR = 0x40;
+
 const trapIllegalCsrAccess = (registers: Registers, instructionWord: number): void => {
   enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(instructionWord));
 };
@@ -109,11 +115,18 @@ const mret = (registers: Registers, _memory: Memory): void => {
   returnFromMachineTrap(registers);
 };
 
-/** sret: return from S-mode trap handler (illegal in U-mode). */
+/** sret: return from S-mode trap handler (illegal in U-mode; TSR traps SRET in M). */
 const sret = (registers: Registers, _memory: Memory): void => {
   if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR) < 0) {
     enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(0x10200073));
     return;
+  }
+  if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_MACHINE) === 0) {
+    const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
+    if ((mstatus[2]! & MSTATUS_BYTE2_TSR) !== 0) {
+      enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(0x10200073));
+      return;
+    }
   }
   returnFromSupervisorTrap(registers);
 };

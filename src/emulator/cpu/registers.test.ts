@@ -20,6 +20,7 @@ import {
   MIDELEG,
   MIE,
   MIP,
+  MSTATUS,
   PRIVILEGE_MACHINE,
   advanceProgramCounter,
   createRegisters,
@@ -35,10 +36,14 @@ import {
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 const SIE = 0x104;
 const SIP = 0x144;
+
+/** mstatus low fields with hardwired UXL/SXL=64 (byte4 = 0x0a). */
+const mstatusBytes = (low32: number): Uint8Array =>
+  unsignedBigIntToBytes(new Uint8Array(8), BigInt(low32 >>> 0) | (0xan << 32n));
 
 describe('registers', () => {
   it('resets in machine mode', () => {
@@ -107,7 +112,7 @@ describe('registers', () => {
     );
   });
 
-  it('mstatus WARL forces reserved MPP to U', () => {
+  it('mstatus WARL forces reserved MPP to U and hardwires UXL/SXL to 64', () => {
     const registers = createRegisters();
     // bits 12:11 = 10 (reserved)
     writeControlAndStatusRegister(
@@ -115,10 +120,7 @@ describe('registers', () => {
       0x300,
       signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
     );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, 0x300),
-      signedNumberToBytes(new Uint8Array(8), 0, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, 0x300), mstatusBytes(0));
   });
 
   it('mie WARL keeps implemented enables; mip CSR writes leave MSIP/MTIP alone', () => {
@@ -137,10 +139,10 @@ describe('registers', () => {
       snapshotControlAndStatusRegister(registers, MIE),
       signedNumberToBytes(new Uint8Array(8), 0x0aaa, 32)
     );
-    // Writable pending bits only (SSIP/STIP; no MSIP/MTIP/SEIP/MEIP from CSR).
+    // Writable pending bits (SSIP/STIP/SEIP); no MSIP/MTIP/MEIP from CSR.
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MIP),
-      signedNumberToBytes(new Uint8Array(8), 0x0022, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x0222, 32)
     );
 
     setMachineTimerInterruptPending(registers, true);
@@ -208,6 +210,73 @@ describe('registers', () => {
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, SIP),
       signedNumberToBytes(new Uint8Array(8), 0x0220, 32)
+    );
+  });
+
+  it('hardwires mstatus.UXL and SXL to 64 on create', () => {
+    assert.deepEqual(snapshotControlAndStatusRegister(createRegisters(), MSTATUS), mstatusBytes(0));
+  });
+
+  it('mip.SEIP is soft OR PLIC; CSR writes update only the soft bit', () => {
+    const registers = createRegisters();
+    // Soft SEIP via mip write.
+    writeControlAndStatusRegister(
+      registers,
+      MIP,
+      signedNumberToBytes(new Uint8Array(8), 1 << 9, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      signedNumberToBytes(new Uint8Array(8), 0x0200, 32)
+    );
+
+    // PLIC wire alone also shows as SEIP.
+    writeControlAndStatusRegister(registers, MIP, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    setSupervisorExternalInterruptPending(registers, true);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      signedNumberToBytes(new Uint8Array(8), 0x0200, 32)
+    );
+
+    // Soft + PLIC; clearing PLIC leaves soft SEIP.
+    writeControlAndStatusRegister(
+      registers,
+      MIP,
+      signedNumberToBytes(new Uint8Array(8), 1 << 9, 32)
+    );
+    setSupervisorExternalInterruptPending(registers, false);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      signedNumberToBytes(new Uint8Array(8), 0x0200, 32)
+    );
+
+    // sip cannot clear soft SEIP.
+    writeControlAndStatusRegister(registers, SIP, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      signedNumberToBytes(new Uint8Array(8), 0x0200, 32)
+    );
+  });
+
+  it('mepc and sepc WARL clear bits below IALIGN=32', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      0x341,
+      signedNumberToBytes(new Uint8Array(8), 0x123, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      0x141,
+      signedNumberToBytes(new Uint8Array(8), 0x456, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x341),
+      signedNumberToBytes(new Uint8Array(8), 0x120, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x141),
+      signedNumberToBytes(new Uint8Array(8), 0x454, 32)
     );
   });
 });
