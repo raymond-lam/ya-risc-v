@@ -25,7 +25,8 @@ today's ISA is all there will ever be.
 
 Worker bundles are tree-shaken (`sideEffects: false`, esbuild `--tree-shaking`): the hart worker may
 import `isClintMachineTimerPending` / `isClintMachineSoftwarePending` from `#emulator/memory` without
-keeping the host CLINT `create` / `Worker` path (enforced by `scripts/assert-cpu-worker-tree-shake.mjs`).
+keeping the host CLINT `create` / `Worker` path. ESLint bans `#emulator/clint`, `#emulator/terminal`,
+and `Worker` from `node:worker_threads` under `src/emulator/cpu/**` (except host `cpu/index.ts`).
 
 Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 

@@ -41,6 +41,11 @@ type Registers = {
    * Internal hart state, not a CSR; reset = M.
    */
   privilegeMode: Uint8Array;
+  /**
+   * PLIC supervisor-external wire (host-only). Readable `mip.SEIP` / `sip.SEIP` is the OR of
+   * this level and the software-writable SEIP bit in the `mip` CSR slot.
+   */
+  plicSupervisorExternalPending: boolean;
 };
 
 /**

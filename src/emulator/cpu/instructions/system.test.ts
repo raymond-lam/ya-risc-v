@@ -93,6 +93,10 @@ const SSTATUS = 0x100;
 const CAUSE_ECALL_FROM_U = 8;
 const CAUSE_ECALL_FROM_S = 9;
 const CAUSE_ECALL_FROM_M = 11;
+
+/** mstatus low fields with hardwired UXL/SXL=64 (byte4 = 0x0a). */
+const mstatusBytes = (low32: number): Uint8Array =>
+  unsignedBigIntToBytes(new Uint8Array(8), BigInt(low32 >>> 0) | (0xan << 32n));
 /** Unimplemented CSR address used in illegal-access tests. */
 const UNIMPLEMENTED_CSR = 0x400;
 
@@ -124,10 +128,7 @@ describe('system', () => {
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
     // MPIE set, MIE clear, MPP = M → 0x1880.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x1880, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x1880));
   });
 
   it('ebreak traps to mtvec with cause 3', () => {
@@ -172,10 +173,7 @@ describe('system', () => {
 
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
     // MIE set, MPIE set, MPP = U → 0x0088.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x0088, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x0088));
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
   });
 
@@ -267,10 +265,7 @@ describe('system', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x88);
     // SIE set, SPIE set, SPP cleared → 0x22 (SPP was set → return to S).
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x22, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x22));
   });
 
   it('ecall from U and S use causes 8 and 9', () => {
@@ -305,9 +300,10 @@ describe('system', () => {
       MSTATUS,
       signedNumberToBytes(new Uint8Array(8), 0x188a, 32)
     );
+    // SIE + hardwired UXL=64 (SXL is M-only and masked out of sstatus).
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, SSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x0002, 32)
+      unsignedBigIntToBytes(new Uint8Array(8), 0x02n | (0x2n << 32n))
     );
     writeControlAndStatusRegister(
       registers,
@@ -315,10 +311,7 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0x20, 32)
     );
     // SIE cleared, SPIE set; MIE/MPIE/MPP preserved → 0x18a8.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x18a8, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x18a8));
   });
 
   it('CSR access from U to an M-mode CSR is illegal', () => {
@@ -355,14 +348,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 1),
-      signedNumberToBytes(new Uint8Array(8), 0x11, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x22, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), mstatusBytes(0x11));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x22));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
@@ -380,14 +367,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 1),
-      signedNumberToBytes(new Uint8Array(8), 0x11, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x22, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), mstatusBytes(0x11));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x22));
   });
 
   it('csrrw with rd = x0 still updates the CSR', () => {
@@ -403,10 +384,7 @@ describe('system', () => {
       [...readGeneralPurposeRegister(registers, 0)],
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x22, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x22));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
@@ -425,14 +403,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 2),
-      signedNumberToBytes(new Uint8Array(8), 0b1100, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0b1110, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), mstatusBytes(0b1100));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0b1110));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
 
     csrrc(registers, testMemory(256n), {
@@ -441,14 +413,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 3),
-      signedNumberToBytes(new Uint8Array(8), 0b1110, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0b0100, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 3), mstatusBytes(0b1110));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0b0100));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
   });
 
@@ -466,14 +432,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 1),
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), mstatusBytes(0x5));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
 
     csrrc(registers, testMemory(256n), {
       destinationRegister: 2,
@@ -481,14 +441,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 2),
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), mstatusBytes(0x5));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
   });
 
   it('csrrwi, csrrsi, and csrrci use a zero-extended immediate', () => {
@@ -505,14 +459,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 1),
-      signedNumberToBytes(new Uint8Array(8), 0b1100, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0b1010, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), mstatusBytes(0b1100));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0b1010));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
 
     csrrsi(registers, testMemory(256n), {
@@ -521,14 +469,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 2),
-      signedNumberToBytes(new Uint8Array(8), 0b1010, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0b1111, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), mstatusBytes(0b1010));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0b1111));
 
     csrrci(registers, testMemory(256n), {
       destinationRegister: 3,
@@ -536,14 +478,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 3),
-      signedNumberToBytes(new Uint8Array(8), 0b1111, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0b1100, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 3), mstatusBytes(0b1111));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0b1100));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 12);
   });
 
@@ -561,14 +497,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 1),
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), mstatusBytes(0x5));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
 
     csrrci(registers, testMemory(256n), {
       destinationRegister: 2,
@@ -576,14 +506,8 @@ describe('system', () => {
       controlAndStatusRegister: MSTATUS,
       instructionWord: 0,
     });
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 2),
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), mstatusBytes(0x5));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
   });
 
   it('csrrw to an identity CSR raises illegal-instruction', () => {
@@ -664,5 +588,64 @@ describe('system', () => {
       [...readGeneralPurposeRegister(registers, 1)],
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
+  });
+
+  it('sret in M-mode with mstatus.TSR set raises illegal-instruction', () => {
+    const registers = createRegisters();
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    // TSR = bit 22 → 0x40_0000
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x40_0000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      SEPC,
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
+
+    sret(registers, testMemory(256n));
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedNumberToBytes(new Uint8Array(8), 0x10200073)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+    // sepc unchanged — sret did not complete.
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
+  });
+
+  it('sret in S-mode ignores mstatus.TSR', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    writeControlAndStatusRegister(
+      registers,
+      SEPC,
+      signedNumberToBytes(new Uint8Array(8), 0x90, 32)
+    );
+    // TSR set; SPP = U, SPIE set.
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x40_0020, 32)
+    );
+
+    sret(registers, testMemory(256n));
+
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x90);
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_USER);
   });
 });

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { bytesToBigInt } from '#utils/bytes';
+import { bytesToBigInt, unsignedBigIntToBytes } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 import { setIrqWire, IRQ_LEVEL_MSIP, IRQ_LEVEL_MTIP } from '#emulator/memory/hart-wake';
 import type { Memory } from '#emulator/memory/types';
@@ -109,42 +109,6 @@ const clintHostUint64s = (memory: Memory): BigUint64Array =>
 const timeRegisterUint64Index = (register: ClintTimeRegister): number =>
   register === 'mtime' ? CLINT_HOST_MTIME_UINT64 : CLINT_HOST_MTIMECMP_UINT64;
 
-const timeRegisterByteIndex = (
-  memory: Memory,
-  register: ClintTimeRegister,
-  byteOffset: number
-): number => memory.clintHostBaseIndex + timeRegisterUint64Index(register) * 8 + byteOffset;
-
-const loadTimeRegisterByte = (
-  memory: Memory,
-  register: ClintTimeRegister,
-  byteOffset: number
-): number => Atomics.load(memory.bytes, timeRegisterByteIndex(memory, register, byteOffset));
-
-const storeTimeRegisterByte = (
-  memory: Memory,
-  register: ClintTimeRegister,
-  byteOffset: number,
-  value: number
-): void => {
-  Atomics.store(memory.bytes, timeRegisterByteIndex(memory, register, byteOffset), value & 0xff);
-};
-
-/** Guest msip byte: only byte 0 bit 0 is defined (software IRQ wire). */
-const loadMsipByte = (memory: Memory, byteOffset: number): number => {
-  if (byteOffset !== 0) {
-    return 0;
-  }
-  return isClintMachineSoftwarePending(memory) ? 1 : 0;
-};
-
-const storeMsipByte = (memory: Memory, byteOffset: number, value: number): void => {
-  if (byteOffset !== 0) {
-    return;
-  }
-  setClintSoftwareWire(memory, (value & 1) !== 0);
-};
-
 const readTimeRegister = (memory: Memory, register: ClintTimeRegister): bigint =>
   Atomics.load(clintHostUint64s(memory), timeRegisterUint64Index(register));
 
@@ -175,6 +139,17 @@ const reseatEpochFromMtime = (memory: Memory): void => {
   writeEpochNs(memory, process.hrtime.bigint() - (mtime * NS_PER_SECOND) / CLINT_TIMEBASE_HZ);
 };
 
+/**
+ * Advance free-running `mtime` from the host clock and refresh the timer IRQ wire.
+ * Called by the CLINT timebase worker and on guest `mtime` reads (sync-on-read).
+ */
+const tickClint = (memory: Memory): void => {
+  const elapsedNs = process.hrtime.bigint() - readEpochNs(memory);
+  const ticks = (elapsedNs * CLINT_TIMEBASE_HZ) / NS_PER_SECOND;
+  writeTimeRegister(memory, 'mtime', ticks);
+  updateTimerWireFromCompare(memory);
+};
+
 /** Initialize CLINT shadows: mtime = 0, mtimecmp = all-ones, wires clear. */
 const initializeClint = (memory: Memory): void => {
   writeTimeRegister(memory, 'mtime', 0n);
@@ -184,24 +159,78 @@ const initializeClint = (memory: Memory): void => {
   setClintSoftwareWire(memory, false);
 };
 
+/** Atomic u64 snapshot of `mtime` / `mtimecmp` into `destination` (no host-clock sync). */
+const peekClintTimeRegister = (
+  memory: Memory,
+  register: ClintTimeRegister,
+  destination: Uint8Array
+): void => {
+  unsignedBigIntToBytes(destination, readTimeRegister(memory, register));
+};
+
 /**
- * Advance free-running `mtime` from the host clock and refresh the timer IRQ wire.
- * Called by the CLINT timebase worker (host packing only; not a guest load/store).
+ * Atomic u64 load of `mtime` / `mtimecmp` into `destination` (8 bytes).
+ * Syncs `mtime` from the host clock first so visible time is not only tick-stepped.
  */
-const tickClint = (memory: Memory): void => {
-  const elapsedNs = process.hrtime.bigint() - readEpochNs(memory);
-  const ticks = (elapsedNs * CLINT_TIMEBASE_HZ) / NS_PER_SECOND;
-  writeTimeRegister(memory, 'mtime', ticks);
+const loadClintTimeRegister = (
+  memory: Memory,
+  register: ClintTimeRegister,
+  destination: Uint8Array
+): void => {
+  if (register === 'mtime') {
+    tickClint(memory);
+  }
+  peekClintTimeRegister(memory, register, destination);
+};
+
+/**
+ * Atomic u64 store of `mtime` / `mtimecmp` from `source` (8 little-endian bytes).
+ * Reseats the epoch once after a full `mtime` write.
+ */
+const storeClintTimeRegister = (
+  memory: Memory,
+  register: ClintTimeRegister,
+  source: ReadonlyUint8Array
+): void => {
+  writeTimeRegister(memory, register, bytesToBigInt(source));
+  if (register === 'mtime') {
+    reseatEpochFromMtime(memory);
+  }
+  updateTimerWireFromCompare(memory);
+};
+
+/**
+ * RMW one byte inside a time register via a single atomic u64 load/store
+ * (avoids torn mid-word views vs `tickClint`). Full `mtime` writes reseat once.
+ */
+const storeClintTimeRegisterByte = (
+  memory: Memory,
+  register: ClintTimeRegister,
+  byteOffset: number,
+  value: number
+): void => {
+  const previous = readTimeRegister(memory, register);
+  const shift = BigInt(byteOffset * 8);
+  const next = (previous & ~(0xffn << shift)) | (BigInt(value & 0xff) << shift);
+  writeTimeRegister(memory, register, next);
+  if (register === 'mtime') {
+    reseatEpochFromMtime(memory);
+  }
   updateTimerWireFromCompare(memory);
 };
 
 const loadClintByte = (memory: Memory, register: ClintRegister, byteOffset: number): number => {
   switch (register) {
     case 'msip':
-      return loadMsipByte(memory, byteOffset);
+      // Only byte 0 bit 0 is defined (software IRQ wire).
+      return byteOffset === 0 && isClintMachineSoftwarePending(memory) ? 1 : 0;
     case 'mtime':
+      if (byteOffset === 0) {
+        tickClint(memory);
+      }
+      return Number((readTimeRegister(memory, register) >> BigInt(byteOffset * 8)) & 0xffn);
     case 'mtimecmp':
-      return loadTimeRegisterByte(memory, register, byteOffset);
+      return Number((readTimeRegister(memory, register) >> BigInt(byteOffset * 8)) & 0xffn);
   }
 };
 
@@ -213,16 +242,14 @@ const storeClintByte = (
 ): void => {
   switch (register) {
     case 'msip':
-      storeMsipByte(memory, byteOffset, value);
+      // Only byte 0 bit 0 is defined (software IRQ wire).
+      if (byteOffset === 0) {
+        setClintSoftwareWire(memory, (value & 1) !== 0);
+      }
       return;
     case 'mtime':
-      storeTimeRegisterByte(memory, register, byteOffset, value);
-      reseatEpochFromMtime(memory);
-      updateTimerWireFromCompare(memory);
-      return;
     case 'mtimecmp':
-      storeTimeRegisterByte(memory, register, byteOffset, value);
-      updateTimerWireFromCompare(memory);
+      storeClintTimeRegisterByte(memory, register, byteOffset, value);
       return;
   }
 };
@@ -236,5 +263,8 @@ export {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
   loadClintByte,
+  loadClintTimeRegister,
+  peekClintTimeRegister,
   storeClintByte,
+  storeClintTimeRegister,
 };

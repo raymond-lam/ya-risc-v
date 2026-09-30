@@ -19,12 +19,14 @@ import { describe, it } from 'node:test';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ILLEGAL_INSTRUCTION,
+  CAUSE_INSTRUCTION_ADDRESS_MISALIGNED,
   enterTrap,
   instructionWordTrapValue,
   isPendingEnabledInterrupt,
   returnFromMachineTrap,
   returnFromSupervisorTrap,
   takeInterruptIfAny,
+  trapIfInstructionAddressMisaligned,
 } from '#emulator/cpu/trap';
 import {
   MCAUSE,
@@ -70,6 +72,10 @@ const CAUSE_MACHINE_TIMER_INTERRUPT = 7;
 const interruptCauseBytes = (code: number): Uint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), (1n << 63n) | BigInt(code));
 
+/** mstatus low fields with hardwired UXL/SXL=64 (byte4 = 0x0a). */
+const mstatusBytes = (low32: number): Uint8Array =>
+  unsignedBigIntToBytes(new Uint8Array(8), BigInt(low32 >>> 0) | (0xan << 32n));
+
 describe('trap', () => {
   it('enterTrap saves mepc/mcause/mtval, updates mstatus, and jumps to mtvec', () => {
     const registers = createRegisters();
@@ -101,10 +107,7 @@ describe('trap', () => {
       signedNumberToBytes(new Uint8Array(8), 0, 32)
     );
     // MPIE set, MIE clear, MPP = M → 0x1880.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x1880, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x1880));
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
     // Direct mode: low 2 bits of mtvec cleared.
     assert.deepEqual(
@@ -125,10 +128,7 @@ describe('trap', () => {
     enterTrap(registers, CAUSE_BREAKPOINT);
 
     // MPIE clear, MIE clear, MPP = S → 0x0800.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x0800, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x0800));
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
   });
 
@@ -148,10 +148,7 @@ describe('trap', () => {
     enterTrap(registers, CAUSE_BREAKPOINT);
 
     // MPIE clear, MIE clear, MPP = M → 0x1800.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x1800, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x1800));
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_BREAKPOINT, 32)
@@ -207,10 +204,7 @@ describe('trap', () => {
       signedNumberToBytes(new Uint8Array(8), CAUSE_ECALL_FROM_U, 32)
     );
     // SPIE set, SIE clear, SPP = U → 0x20.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x20, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x20));
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x3000);
   });
@@ -305,10 +299,7 @@ describe('trap', () => {
       signedNumberToBytes(new Uint8Array(8), 0, 32)
     );
     // MPIE set, MIE clear, MPP = M → 0x1880.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x1880, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x1880));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
   });
 
@@ -355,10 +346,7 @@ describe('trap', () => {
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
     // MPP = S → 0x0800.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x0800, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x0800));
   });
 
   it('takeInterruptIfAny delegates a supervisor timer interrupt via mideleg', () => {
@@ -399,10 +387,7 @@ describe('trap', () => {
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x6000);
     // SPIE clear (SIE was clear in U), SIE clear, SPP = U → 0.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0));
   });
 
   it('takeInterruptIfAny takes a delegated STIP in S-mode when SIE is set', () => {
@@ -448,10 +433,7 @@ describe('trap', () => {
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x6100);
     // SPIE set, SIE clear, SPP = S → 0x120.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x120, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x120));
   });
 
   it('takeInterruptIfAny ignores a delegated STIP in S-mode when SIE is clear', () => {
@@ -550,10 +532,7 @@ describe('trap', () => {
     returnFromMachineTrap(registers);
 
     // MIE set, MPIE set, MPP = U → 0x0088.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x0088, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x0088));
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
     assert.deepEqual(
       readProgramCounter(registers),
@@ -577,10 +556,7 @@ describe('trap', () => {
     returnFromMachineTrap(registers);
 
     // MIE clear, MPIE set, MPP = U → 0x0080.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x0080, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x0080));
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_USER);
   });
 
@@ -602,11 +578,81 @@ describe('trap', () => {
     returnFromSupervisorTrap(registers);
 
     // SIE set, SPIE set, SPP = U → 0x22.
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MSTATUS),
-      signedNumberToBytes(new Uint8Array(8), 0x22, 32)
-    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x22));
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_USER);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x60);
+  });
+
+  it('trapIfInstructionAddressMisaligned traps when PC is 2 mod 4', () => {
+    const registers = createRegisters();
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x102, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x8000, 32)
+    );
+
+    assert.equal(trapIfInstructionAddressMisaligned(registers), true);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_INSTRUCTION_ADDRESS_MISALIGNED, 32)
+    );
+    // mtval holds the faulting PC; mepc is IALIGN-legalized on write.
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      signedNumberToBytes(new Uint8Array(8), 0x102, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x100, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x8000);
+  });
+
+  it('trapIfInstructionAddressMisaligned is a no-op for 4-byte-aligned PC', () => {
+    const registers = createRegisters();
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x104, 32));
+    assert.equal(trapIfInstructionAddressMisaligned(registers), false);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x104);
+  });
+
+  it('vectored mtvec jumps to BASE + 4*cause for interrupts only', () => {
+    const registers = createRegisters();
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
+    // MODE = 1 (vectored), BASE = 0x4000
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x4001, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x08, 32)
+    );
+    setMachineExternalInterruptPending(registers, true);
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), 1 << 11, 32)
+    );
+
+    assert.equal(takeInterruptIfAny(registers), true);
+    // MEI cause 11 → 0x4000 + 4*11 = 0x402c
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x402c);
+  });
+
+  it('vectored mtvec still uses BASE for synchronous exceptions', () => {
+    const registers = createRegisters();
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x4001, 32)
+    );
+
+    enterTrap(registers, CAUSE_BREAKPOINT);
+
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
   });
 });

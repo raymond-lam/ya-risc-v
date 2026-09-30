@@ -21,7 +21,10 @@ import {
   CLINT_WINDOW_SIZE,
   initializeClint,
   loadClintByte,
+  loadClintTimeRegister,
+  peekClintTimeRegister,
   storeClintByte,
+  storeClintTimeRegister,
 } from '#emulator/memory/clint';
 import { guestMemoryHostLayout, locationFromGuestAddress } from '#emulator/memory/layout';
 import {
@@ -31,7 +34,10 @@ import {
   storePlicByte,
 } from '#emulator/memory/plic';
 import { loadRamByte, ramAddressToHostIndex, storeRamByte } from '#emulator/memory/ram';
-import { invalidateOverlappingReservations } from '#emulator/memory/reservation';
+import {
+  invalidateOverlappingReservations,
+  releaseScMonitorIfHeld,
+} from '#emulator/memory/reservation';
 import {
   UART_REGISTER_WINDOW,
   loadUartRegister,
@@ -107,6 +113,75 @@ const createMemory = ({
   return memory;
 };
 
+type ClintTimeRegisterLocation = {
+  region: 'clint';
+  register: 'mtime' | 'mtimecmp';
+  byteOffset: number;
+};
+
+/** True when `byteLength` bytes from `location` are inside `mtime` or `mtimecmp`. */
+const isClintTimeRegister = (
+  location: ReturnType<typeof locationFromGuestAddress>,
+  byteLength: number
+): location is ClintTimeRegisterLocation =>
+  byteLength > 0 &&
+  location.region === 'clint' &&
+  (location.register === 'mtime' || location.register === 'mtimecmp') &&
+  location.byteOffset + byteLength <= 8;
+
+/** Store into `mtime`/`mtimecmp` via one atomic u64 write (full or partial merge). */
+const storeClintTimeBytes = ({
+  memory,
+  register,
+  byteOffset,
+  source,
+  byteLength,
+}: {
+  memory: Memory;
+  register: 'mtime' | 'mtimecmp';
+  byteOffset: number;
+  source: ReadonlyUint8Array;
+  byteLength: number;
+}): void => {
+  const full = new Uint8Array(8);
+  if (byteLength === 8 && byteOffset === 0) {
+    for (let byteIndex = 0; byteIndex < 8; byteIndex += 1) {
+      full[byteIndex] = source[byteIndex] ?? 0;
+    }
+  } else {
+    peekClintTimeRegister(memory, register, full);
+    for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
+      full[byteOffset + byteIndex] = source[byteIndex] ?? 0;
+    }
+  }
+  storeClintTimeRegister(memory, register, full);
+};
+
+/** Store one guest byte at `address` into the matching MMIO/RAM region. */
+const storeGuestByte = (memory: Memory, address: ReadonlyUint8Array, value: number): void => {
+  const location = locationFromGuestAddress(memory, address);
+  switch (location.region) {
+    case 'uart':
+      storeUartRegister(memory, location.registerIndex, value);
+      return;
+    case 'clint':
+      storeClintByte(memory, location.register, location.byteOffset, value);
+      return;
+    case 'plic':
+      storePlicByte(memory, address, value);
+      return;
+    case 'ram': {
+      const hostIndex = ramAddressToHostIndex(memory, address);
+      if (hostIndex !== null) {
+        storeRamByte(memory, hostIndex, value);
+      }
+      return;
+    }
+    case 'unmapped':
+      return;
+  }
+};
+
 /** Copy `byteLength` bytes from `memory` at guest `address` into `destination` (high bytes cleared). */
 const loadBytes = ({
   destination,
@@ -120,15 +195,28 @@ const loadBytes = ({
   byteLength: number;
 }): void => {
   destination.fill(0);
+  const location = locationFromGuestAddress(memory, address);
+  if (isClintTimeRegister(location, byteLength)) {
+    const full = new Uint8Array(8);
+    loadClintTimeRegister(memory, location.register, full);
+    for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
+      destination[byteIndex] = full[location.byteOffset + byteIndex] ?? 0;
+    }
+    return;
+  }
   const addressCursor = copyBytes(new Uint8Array(8), address);
   for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
-    const location = locationFromGuestAddress(memory, addressCursor);
-    switch (location.region) {
+    const cursorLocation = locationFromGuestAddress(memory, addressCursor);
+    switch (cursorLocation.region) {
       case 'uart':
-        destination[byteIndex] = loadUartRegister(memory, location.registerIndex);
+        destination[byteIndex] = loadUartRegister(memory, cursorLocation.registerIndex);
         break;
       case 'clint':
-        destination[byteIndex] = loadClintByte(memory, location.register, location.byteOffset);
+        destination[byteIndex] = loadClintByte(
+          memory,
+          cursorLocation.register,
+          cursorLocation.byteOffset
+        );
         break;
       case 'plic':
         destination[byteIndex] = loadPlicByte(memory, addressCursor);
@@ -158,32 +246,26 @@ const storeBytes = ({
   source: ReadonlyUint8Array;
   byteLength: number;
 }): void => {
-  invalidateOverlappingReservations(memory, address, byteLength);
-  const addressCursor = copyBytes(new Uint8Array(8), address);
-  for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
-    const value = source[byteIndex] ?? 0;
-    const location = locationFromGuestAddress(memory, addressCursor);
-    switch (location.region) {
-      case 'uart':
-        storeUartRegister(memory, location.registerIndex, value);
-        break;
-      case 'clint':
-        storeClintByte(memory, location.register, location.byteOffset, value);
-        break;
-      case 'plic':
-        storePlicByte(memory, addressCursor, value);
-        break;
-      case 'ram': {
-        const hostIndex = ramAddressToHostIndex(memory, addressCursor);
-        if (hostIndex !== null) {
-          storeRamByte(memory, hostIndex, value);
-        }
-        break;
-      }
-      case 'unmapped':
-        break;
+  try {
+    invalidateOverlappingReservations(memory, address, byteLength);
+    const location = locationFromGuestAddress(memory, address);
+    if (isClintTimeRegister(location, byteLength)) {
+      storeClintTimeBytes({
+        memory,
+        register: location.register,
+        byteOffset: location.byteOffset,
+        source,
+        byteLength,
+      });
+      return;
     }
-    addBytes(addressCursor, addressCursor, ONE_BYTE);
+    const addressCursor = copyBytes(new Uint8Array(8), address);
+    for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
+      storeGuestByte(memory, addressCursor, source[byteIndex] ?? 0);
+      addBytes(addressCursor, addressCursor, ONE_BYTE);
+    }
+  } finally {
+    releaseScMonitorIfHeld(memory);
   }
 };
 

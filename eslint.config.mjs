@@ -102,6 +102,50 @@ const eslintConfig = [
       '@typescript-eslint/no-floating-promises': 'off',
     },
   },
+  {
+    /**
+     * Hart worker entry (`cpu/run.ts`) and its graph must sample CLINT/PLIC via
+     * `#emulator/memory` only — never pull host `#emulator/clint` / `terminal` or import `Worker`.
+     * Host `cpu/index.ts` is excluded (it owns `new Worker`).
+     */
+    files: ['src/emulator/cpu/**/*.ts'],
+    ignores: ['src/emulator/cpu/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Only the CPU host (cpu/index.ts) may spawn workers; hart code must not import Worker.',
+            },
+          ],
+          patterns: [
+            {
+              group: ['./*', '../*', '../**', './**'],
+              message: 'Use # package imports (see package.json "imports"), not relative paths.',
+            },
+            {
+              group: ['#*.js', '#*/*.js', '#*/*/*.js', '#*/*/*/*.js'],
+              message: 'Omit the file extension; #specifiers resolve like a bundler.',
+            },
+            {
+              group: [
+                '#emulator/clint',
+                '#emulator/clint/*',
+                '#emulator/terminal',
+                '#emulator/terminal/*',
+              ],
+              message:
+                'Hart code samples devices via #emulator/memory; do not import host device packages.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
 
 export default eslintConfig;

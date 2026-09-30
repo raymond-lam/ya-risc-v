@@ -271,6 +271,12 @@ const decode = (
   instructionWord: ReadonlyUint8Array
 ): ((registers: Registers, memory: Memory) => void | Promise<void>) => {
   const encodedInstructionWord = bytesToNumber(instructionWord);
+
+  // Without the C extension, only 32-bit encodings (inst[1:0] = 0b11) are legal.
+  if ((encodedInstructionWord & 0x3) !== 0x3) {
+    return (registers, _memory) => illegalInstruction(registers, encodedInstructionWord);
+  }
+
   const opcode = encodedInstructionWord & 0x7f;
 
   switch (opcode) {
@@ -394,6 +400,10 @@ const decode = (
         case FUNCT3_AMO_W:
           switch (function5) {
             case FUNCT5_LR:
+              if (sourceRegister2 !== 0) {
+                return (registers, _memory) =>
+                  illegalInstruction(registers, encodedInstructionWord);
+              }
               return (registers, memory) => lrW(registers, memory, args);
             case FUNCT5_SC:
               return (registers, memory) => scW(registers, memory, args);
@@ -421,6 +431,10 @@ const decode = (
         case FUNCT3_AMO_D:
           switch (function5) {
             case FUNCT5_LR:
+              if (sourceRegister2 !== 0) {
+                return (registers, _memory) =>
+                  illegalInstruction(registers, encodedInstructionWord);
+              }
               return (registers, memory) => lrD(registers, memory, args);
             case FUNCT5_SC:
               return (registers, memory) => scD(registers, memory, args);
@@ -709,8 +723,16 @@ const decode = (
         case FUNCT3_SYSTEM:
           switch (controlAndStatusRegister) {
             case FUNCT12_ECALL:
+              if (destinationRegister !== 0 || sourceRegister1 !== 0) {
+                return (registers, _memory) =>
+                  illegalInstruction(registers, encodedInstructionWord);
+              }
               return (registers, memory) => ecall(registers, memory);
             case FUNCT12_EBREAK:
+              if (destinationRegister !== 0 || sourceRegister1 !== 0) {
+                return (registers, _memory) =>
+                  illegalInstruction(registers, encodedInstructionWord);
+              }
               return (registers, memory) => ebreak(registers, memory);
             case FUNCT12_SRET:
               if (destinationRegister !== 0 || sourceRegister1 !== 0) {

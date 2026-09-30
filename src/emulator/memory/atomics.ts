@@ -34,6 +34,22 @@ const atomicLoadBit = ({
 const atomicLoad32 = ({ bytes, index }: { bytes: Uint8Array; index: number }): number =>
   Atomics.load(bytesToInt32Array(bytes, index), 0) >>> 0;
 
+/**
+ * Atomically store 32 little-endian bits at `index`
+ * (`index` must be 4-byte aligned; `value` is taken as unsigned).
+ */
+const atomicStore32 = ({
+  bytes,
+  index,
+  value,
+}: {
+  bytes: Uint8Array;
+  index: number;
+  value: number;
+}): void => {
+  Atomics.store(bytesToInt32Array(bytes, index), 0, value | 0);
+};
+
 /** Atomically set bit `bit` (0..7) in the byte at `index` to `value` (CAS-retry). */
 const atomicUpdateBit = ({
   bytes,
@@ -117,4 +133,12 @@ const waitWake = async ({
   }
 };
 
-export { WAKE_HOST_SIZE, atomicLoad32, atomicLoadBit, atomicUpdateBit, publishWakeLevel, waitWake };
+export {
+  WAKE_HOST_SIZE,
+  atomicLoad32,
+  atomicStore32,
+  atomicLoadBit,
+  atomicUpdateBit,
+  publishWakeLevel,
+  waitWake,
+};

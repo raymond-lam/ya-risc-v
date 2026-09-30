@@ -60,9 +60,12 @@ const main = async (imagePath: string, ramSize: bigint): Promise<void> => {
 
   tui.start();
   emulator.start();
-  await emulator;
-  tui.stop();
-  await tui;
+  try {
+    await emulator;
+  } finally {
+    tui.stop();
+    await tui;
+  }
 };
 
 const program = new Command();

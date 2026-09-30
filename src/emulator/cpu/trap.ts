@@ -15,8 +15,10 @@
  */
 
 import {
+  addBytes,
   bytesToBigInt,
   compareUnsignedBytes,
+  copyBytes,
   signedNumberToBytes,
   unsignedBigIntToBytes,
   unsignedNumberToBytes,
@@ -53,8 +55,10 @@ import type { Registers } from '#emulator/cpu/types';
 import type { ReadonlyUint8Array } from '#types';
 
 /** Synchronous exception codes (mcause/scause with interrupt bit clear). */
+const CAUSE_INSTRUCTION_ADDRESS_MISALIGNED = 0;
 const CAUSE_ILLEGAL_INSTRUCTION = 2;
 const CAUSE_BREAKPOINT = 3;
+const CAUSE_STORE_AMO_ADDRESS_MISALIGNED = 6;
 const CAUSE_ECALL_FROM_U = 8;
 const CAUSE_ECALL_FROM_S = 9;
 const CAUSE_ECALL_FROM_M = 11;
@@ -193,6 +197,30 @@ const applySupervisorReturnToSstatus = (registers: Registers): void => {
   setPrivilegeMode(registers, previous);
 };
 
+/** xtvec MODE field (bits [1:0]): 0 = Direct, 1 = Vectored. */
+const XTVEC_MODE_MASK = 0x03;
+const XTVEC_MODE_VECTORED = 0x01;
+
+/**
+ * Compute the trap handler PC from xtvec. Direct: BASE. Vectored interrupts: BASE + 4×cause.
+ * Exceptions always use BASE regardless of MODE.
+ */
+const trapHandlerProgramCounter = (
+  xtvec: ReadonlyUint8Array,
+  cause: ReadonlyUint8Array
+): Uint8Array => {
+  const handler = copyBytes(new Uint8Array(8), xtvec);
+  const mode = handler[0]! & XTVEC_MODE_MASK;
+  handler[0]! &= ~XTVEC_MODE_MASK;
+  const causeValue = bytesToBigInt(cause);
+  const isInterrupt = (causeValue & INTERRUPT_CAUSE_BIT) !== 0n;
+  if (mode === XTVEC_MODE_VECTORED && isInterrupt) {
+    const causeCode = Number(causeValue & 0xffn);
+    addBytes(handler, handler, signedNumberToBytes(new Uint8Array(8), causeCode * 4, 32));
+  }
+  return handler;
+};
+
 const enterMachineTrap = (
   registers: Registers,
   cause: ReadonlyUint8Array,
@@ -203,9 +231,10 @@ const enterMachineTrap = (
   writeControlAndStatusRegister(registers, MTVAL, trapValue);
   applyTrapEntryToMstatus(registers);
   setPrivilegeMode(registers, PRIVILEGE_MACHINE);
-  const handler = snapshotControlAndStatusRegister(registers, MTVEC);
-  handler[0]! &= ~0x03;
-  setProgramCounter(registers, handler);
+  setProgramCounter(
+    registers,
+    trapHandlerProgramCounter(snapshotControlAndStatusRegister(registers, MTVEC), cause)
+  );
 };
 
 const enterSupervisorTrap = (
@@ -218,15 +247,16 @@ const enterSupervisorTrap = (
   writeControlAndStatusRegister(registers, STVAL, trapValue);
   applyTrapEntryToSstatus(registers);
   setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
-  const handler = snapshotControlAndStatusRegister(registers, STVEC);
-  handler[0]! &= ~0x03;
-  setProgramCounter(registers, handler);
+  setProgramCounter(
+    registers,
+    trapHandlerProgramCounter(snapshotControlAndStatusRegister(registers, STVEC), cause)
+  );
 };
 
 /**
  * Enter a synchronous exception trap: save PC/cause/tval, update status, jump to xtvec.
  * Delegates to S when `medeleg` allows and the hart is not already in M.
- * Direct mode only — MODE bits in xtvec are cleared.
+ * Supports Direct (MODE=0) and Vectored (MODE=1) xtvec; exceptions always use BASE.
  */
 const enterTrap = (
   registers: Registers,
@@ -239,6 +269,19 @@ const enterTrap = (
     return;
   }
   enterMachineTrap(registers, causeBytes, trapValue);
+};
+
+/**
+ * IALIGN=32: without the C extension, PC[1:0] must be 0. If misaligned, enter trap cause 0
+ * with xtval = PC and return true so the run loop can skip fetch.
+ */
+const trapIfInstructionAddressMisaligned = (registers: Registers): boolean => {
+  const pc = readProgramCounter(registers);
+  if ((pc[0]! & 0x03) === 0) {
+    return false;
+  }
+  enterTrap(registers, CAUSE_INSTRUCTION_ADDRESS_MISALIGNED, copyBytes(new Uint8Array(8), pc));
+  return true;
 };
 
 type TakeableInterrupt = {
@@ -355,9 +398,12 @@ const instructionWordTrapValue = (instructionWord: number): ReadonlyUint8Array =
   unsignedNumberToBytes(new Uint8Array(8), instructionWord);
 
 export {
+  CAUSE_INSTRUCTION_ADDRESS_MISALIGNED,
   CAUSE_ILLEGAL_INSTRUCTION,
   CAUSE_BREAKPOINT,
+  CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
   enterTrap,
+  trapIfInstructionAddressMisaligned,
   isPendingEnabledInterrupt,
   takeInterruptIfAny,
   returnFromMachineTrap,

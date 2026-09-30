@@ -32,7 +32,7 @@ import {
   setProgramCounter,
   setSupervisorExternalInterruptPending,
 } from '#emulator/cpu/registers';
-import { takeInterruptIfAny } from '#emulator/cpu/trap';
+import { takeInterruptIfAny, trapIfInstructionAddressMisaligned } from '#emulator/cpu/trap';
 import type { CpuWorkerData } from '#emulator/cpu/types';
 
 const main = async (): Promise<void> => {
@@ -48,6 +48,9 @@ const main = async (): Promise<void> => {
     setMachineExternalInterruptPending(registers, isPlicMachineExternalPending(memory));
     setSupervisorExternalInterruptPending(registers, isPlicSupervisorExternalPending(memory));
     if (takeInterruptIfAny(registers)) {
+      continue;
+    }
+    if (trapIfInstructionAddressMisaligned(registers)) {
       continue;
     }
     loadBytes({

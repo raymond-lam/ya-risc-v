@@ -100,7 +100,11 @@ class Emulator implements EmulatorHandle {
     this.#clint = clint;
     this.#terminal = terminal;
     this.#done = (async () => {
-      await Promise.all([cpu, clint, terminal]);
+      try {
+        await Promise.all([cpu, clint, terminal]);
+      } finally {
+        this.stop();
+      }
     })();
   }
 

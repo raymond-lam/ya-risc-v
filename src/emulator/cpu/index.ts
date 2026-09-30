@@ -56,8 +56,12 @@ class Cpu implements CpuHandle {
     worker.once('error', (error) => {
       this.#lifetime.reject(error);
     });
-    worker.once('exit', () => {
-      this.#lifetime.resolve();
+    worker.once('exit', (code) => {
+      if (this.#stopped || code === 0) {
+        this.#lifetime.resolve();
+        return;
+      }
+      this.#lifetime.reject(new Error(`CPU worker exited with code ${code}`));
     });
   };
 

@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
-import { bytesToBigInt } from '#utils/bytes';
+import { bytesToBigInt, bytesToNumber, unsignedNumberToBytes } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
-import { atomicLoad32, atomicLoadBit, atomicUpdateBit } from '#emulator/memory/atomics';
+import {
+  atomicLoad32,
+  atomicLoadBit,
+  atomicStore32,
+  atomicUpdateBit,
+} from '#emulator/memory/atomics';
 import { setIrqWire, IRQ_LEVEL_MEIP, IRQ_LEVEL_SEIP } from '#emulator/memory/hart-wake';
 import type { Memory } from '#emulator/memory/types';
 
@@ -32,6 +37,10 @@ import type { Memory } from '#emulator/memory/types';
  *   claim/complete S@ +0x201004
  *
  * UART IRQ line is source 10. Guest holes in the window read as 0 / ignore stores.
+ *
+ * Claim clears the global pending bit (SiFive/QEMU). A per-source gateway
+ * (`claimed`) suppresses re-pending until complete; complete re-arms when the
+ * device input level is still high.
  */
 const PLIC_PENDING_OFFSET = 0x1000n;
 const PLIC_ENABLE_M_OFFSET = 0x2000n;
@@ -47,7 +56,7 @@ const PLIC_MAX_SOURCE = 31;
 /**
  * Host packing (byte Atomics on bitfields/wires; Int32 u32 loads for priority/threshold):
  *   [priority×32 × 4][pending 4][enableM 4][enableS 4][thresholdM 4][thresholdS 4]
- *   [claimedM 4][claimedS 4][meipWire 1][seipWire 1][pad 2]
+ *   [claimed 4][inputLevel 4][meipWire 1][seipWire 1][pad 2]
  */
 const PLIC_HOST_PRIORITY_COUNT = 32;
 const PLIC_HOST_PENDING = PLIC_HOST_PRIORITY_COUNT * 4;
@@ -55,9 +64,9 @@ const PLIC_HOST_ENABLE_M = PLIC_HOST_PENDING + 4;
 const PLIC_HOST_ENABLE_S = PLIC_HOST_ENABLE_M + 4;
 const PLIC_HOST_THRESHOLD_M = PLIC_HOST_ENABLE_S + 4;
 const PLIC_HOST_THRESHOLD_S = PLIC_HOST_THRESHOLD_M + 4;
-const PLIC_HOST_CLAIMED_M = PLIC_HOST_THRESHOLD_S + 4;
-const PLIC_HOST_CLAIMED_S = PLIC_HOST_CLAIMED_M + 4;
-const PLIC_HOST_MEIP_WIRE_OFFSET = PLIC_HOST_CLAIMED_S + 4;
+const PLIC_HOST_CLAIMED = PLIC_HOST_THRESHOLD_S + 4;
+const PLIC_HOST_INPUT_LEVEL = PLIC_HOST_CLAIMED + 4;
+const PLIC_HOST_MEIP_WIRE_OFFSET = PLIC_HOST_INPUT_LEVEL + 4;
 const PLIC_HOST_SEIP_WIRE_OFFSET = PLIC_HOST_MEIP_WIRE_OFFSET + 1;
 const PLIC_HOST_SIZE = PLIC_HOST_MEIP_WIRE_OFFSET + 4;
 
@@ -77,9 +86,6 @@ const enableHostOffset = (context: PlicContext): number =>
 
 const thresholdHostOffset = (context: PlicContext): number =>
   context === 'machine' ? PLIC_HOST_THRESHOLD_M : PLIC_HOST_THRESHOLD_S;
-
-const claimedHostOffset = (context: PlicContext): number =>
-  context === 'machine' ? PLIC_HOST_CLAIMED_M : PLIC_HOST_CLAIMED_S;
 
 const contextWireOffset = (context: PlicContext): number =>
   context === 'machine' ? PLIC_HOST_MEIP_WIRE_OFFSET : PLIC_HOST_SEIP_WIRE_OFFSET;
@@ -110,6 +116,24 @@ const isSourceBitSet = (memory: Memory, hostOffset: number, source: number): boo
     index: plicHostIndexForSourceBit(memory, hostOffset, source),
     bit: source & 7,
   });
+
+/** Aligned host index of a 32-bit shadow for priority / enable / threshold. */
+const plicWordHostIndex = (
+  memory: Memory,
+  location: Exclude<PlicLocation, { kind: 'claim' | 'pending' }>
+): number | null => {
+  if (location.byteOffset !== 0) {
+    return null;
+  }
+  switch (location.kind) {
+    case 'priority':
+      return plicHostIndex(memory, location.source * 4);
+    case 'enable':
+      return plicHostIndex(memory, enableHostOffset(location.context));
+    case 'threshold':
+      return plicHostIndex(memory, thresholdHostOffset(location.context));
+  }
+};
 
 const plicHostIndexForLocation = (
   memory: Memory,
@@ -174,12 +198,11 @@ const setPlicContextWire = (memory: Memory, context: PlicContext, pending: boole
 };
 
 /**
- * Highest-priority pending∧enabled∧not-claimed source above `threshold`, or 0.
+ * Highest-priority pending∧enabled source above `threshold`, or 0.
  * Tie-break: lowest source id wins. Reads host shadows (not guest MMIO).
  */
 const selectClaimableSource = (memory: Memory, context: PlicContext): number => {
   const enableOffset = enableHostOffset(context);
-  const claimedOffset = claimedHostOffset(context);
   const threshold = atomicLoad32({
     bytes: memory.bytes,
     index: plicHostIndex(memory, thresholdHostOffset(context)),
@@ -189,8 +212,7 @@ const selectClaimableSource = (memory: Memory, context: PlicContext): number => 
   for (let source = 1; source <= PLIC_MAX_SOURCE; source += 1) {
     if (
       !isSourceBitSet(memory, PLIC_HOST_PENDING, source) ||
-      !isSourceBitSet(memory, enableOffset, source) ||
-      isSourceBitSet(memory, claimedOffset, source)
+      !isSourceBitSet(memory, enableOffset, source)
     ) {
       continue;
     }
@@ -226,14 +248,42 @@ const refreshAllContextWires = (memory: Memory): void => {
 const PLIC_SOURCE_UART = 10;
 
 /**
- * Device-driven pending bit for `source` (1..31). Refreshes M/S context wires
- * (and publishes MEIP/SEIP into the hart-wake level word).
+ * Device-driven input level for `source` (1..31). Updates guest-visible pending
+ * through the claim gateway, then refreshes M/S context wires.
  */
 const setPlicSourcePending = (memory: Memory, source: number, pending: boolean): void => {
   if (!isValidSource(source)) {
     return;
   }
-  updateSourceBit(memory, PLIC_HOST_PENDING, source, pending);
+  updateSourceBit(memory, PLIC_HOST_INPUT_LEVEL, source, pending);
+  if (!pending) {
+    updateSourceBit(memory, PLIC_HOST_PENDING, source, false);
+  } else if (!isSourceBitSet(memory, PLIC_HOST_CLAIMED, source)) {
+    updateSourceBit(memory, PLIC_HOST_PENDING, source, true);
+  }
+  refreshAllContextWires(memory);
+};
+
+/** Claim: return id and clear global pending; mark gateway claimed. */
+const claimPlicSource = (memory: Memory, context: PlicContext): number => {
+  const source = selectClaimableSource(memory, context);
+  if (source !== 0) {
+    updateSourceBit(memory, PLIC_HOST_PENDING, source, false);
+    updateSourceBit(memory, PLIC_HOST_CLAIMED, source, true);
+  }
+  refreshAllContextWires(memory);
+  return source;
+};
+
+/** Complete: release gateway; re-pending when the device input level is still high. */
+const completePlicSource = (memory: Memory, source: number): void => {
+  if (!isValidSource(source)) {
+    return;
+  }
+  updateSourceBit(memory, PLIC_HOST_CLAIMED, source, false);
+  if (isSourceBitSet(memory, PLIC_HOST_INPUT_LEVEL, source)) {
+    updateSourceBit(memory, PLIC_HOST_PENDING, source, true);
+  }
   refreshAllContextWires(memory);
 };
 
@@ -248,17 +298,48 @@ const loadPlicByte = (memory: Memory, address: ReadonlyUint8Array): number => {
     if (location.byteOffset !== 0) {
       return 0;
     }
-    const source = selectClaimableSource(memory, location.context);
-    if (source !== 0) {
-      updateSourceBit(memory, claimedHostOffset(location.context), source, true);
-    }
-    refreshContextWire(memory, location.context);
-    return source & 0xff;
+    return claimPlicSource(memory, location.context) & 0xff;
   }
   if (location.kind === 'priority' && location.source === 0) {
     return 0;
   }
   return Atomics.load(memory.bytes, plicHostIndexForLocation(memory, location));
+};
+
+/**
+ * Load an aligned 32-bit PLIC register (priority / enable / threshold / pending / claim).
+ * Returns false when `address` is not an aligned mapped word.
+ */
+const loadPlicUint32 = (
+  memory: Memory,
+  address: ReadonlyUint8Array,
+  destination: Uint8Array
+): boolean => {
+  const location = plicAddressToLocation(memory, address);
+  if (location === null || location.byteOffset !== 0) {
+    return false;
+  }
+  if (location.kind === 'claim') {
+    unsignedNumberToBytes(destination, claimPlicSource(memory, location.context));
+    return true;
+  }
+  if (location.kind === 'priority' && location.source === 0) {
+    unsignedNumberToBytes(destination, 0);
+    return true;
+  }
+  if (location.kind === 'pending') {
+    unsignedNumberToBytes(
+      destination,
+      atomicLoad32({ bytes: memory.bytes, index: plicHostIndex(memory, PLIC_HOST_PENDING) })
+    );
+    return true;
+  }
+  const wordIndex = plicWordHostIndex(memory, location);
+  if (wordIndex === null) {
+    return false;
+  }
+  unsignedNumberToBytes(destination, atomicLoad32({ bytes: memory.bytes, index: wordIndex }));
+  return true;
 };
 
 /** Store one guest PLIC byte at `address`. Pending is device-driven (stores ignored). */
@@ -294,10 +375,59 @@ const storePlicByte = (memory: Memory, address: ReadonlyUint8Array, value: numbe
       if (location.byteOffset !== 0 || !isValidSource(byte)) {
         return;
       }
-      updateSourceBit(memory, claimedHostOffset(location.context), byte, false);
-      refreshContextWire(memory, location.context);
+      completePlicSource(memory, byte);
       return;
     }
+  }
+};
+
+/**
+ * Store an aligned 32-bit PLIC register in one atomic word write (no torn mid-store reads).
+ * Returns false when `address` is not an aligned mapped word.
+ */
+const storePlicUint32 = (
+  memory: Memory,
+  address: ReadonlyUint8Array,
+  source: ReadonlyUint8Array
+): boolean => {
+  const location = plicAddressToLocation(memory, address);
+  if (location === null || location.byteOffset !== 0) {
+    return false;
+  }
+  const value = bytesToNumber(source);
+  switch (location.kind) {
+    case 'pending':
+      return true;
+    case 'claim':
+      completePlicSource(memory, value & 0xff);
+      return true;
+    case 'priority':
+      if (location.source === 0) {
+        return true;
+      }
+      atomicStore32({
+        bytes: memory.bytes,
+        index: plicHostIndex(memory, location.source * 4),
+        value,
+      });
+      refreshAllContextWires(memory);
+      return true;
+    case 'enable':
+      atomicStore32({
+        bytes: memory.bytes,
+        index: plicHostIndex(memory, enableHostOffset(location.context)),
+        value: value & ~1,
+      });
+      refreshContextWire(memory, location.context);
+      return true;
+    case 'threshold':
+      atomicStore32({
+        bytes: memory.bytes,
+        index: plicHostIndex(memory, thresholdHostOffset(location.context)),
+        value,
+      });
+      refreshContextWire(memory, location.context);
+      return true;
   }
 };
 
@@ -328,7 +458,9 @@ export {
   isPlicMachineExternalPending,
   isPlicSupervisorExternalPending,
   loadPlicByte,
+  loadPlicUint32,
   plicAddressToLocation,
   setPlicSourcePending,
   storePlicByte,
+  storePlicUint32,
 };
