@@ -120,8 +120,9 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   bits remain software-writable until more devices exist.
 - **Zicsr checks CSR existence and privilege.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live
   in `system.ts` (SYSTEM opcode group). Only the implemented set is accessible (`mstatus`/
-  `sstatus`, `medeleg`/`mideleg`, `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mepc`/`sepc`,
-  `mcause`/`scause`, `mtval`/`stval`, and the identity CSRs); any other index or an access above
+  `sstatus`, `medeleg`/`mideleg`, `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/
+  `sscratch`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, and the identity CSRs); any
+  other index or an access above
   the current privilege raises illegal-instruction. Writes to read-only CSRs also illegal;
   `csrrs`/`csrrc` with `rs1` = `x0` and `csrrsi`/`csrrci` with a zero immediate are read-only and
   may touch identity CSRs. `sstatus`/`sie`/`sip` are masked aliases of `mstatus`/`mie`/`mip`;

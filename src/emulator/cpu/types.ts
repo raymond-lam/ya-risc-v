@@ -29,6 +29,7 @@ type Registers = {
    * Dense CSR file keyed by 12-bit index. Only the implemented set is guest-accessible;
    * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only. `sstatus`/`sie`/`sip`
    * are aliases of `mstatus`/`mie`/`mip` (handled in the register helpers, not separate slots).
+   * `sscratch`/`mscratch` are ordinary XLEND scratch slots for trap handlers.
    */
   controlAndStatus: readonly Uint8Array[] & {
     readonly 0xf11: ReadonlyUint8Array; // mvendorid
