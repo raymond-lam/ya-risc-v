@@ -33,7 +33,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   the source is zero. `sstatus`/`sie`/`sip` are masked views of `mstatus`/`mie`/`mip`. WARL:
   `misa` hardwired (RV64IMA + S/U); MPP legalization; `mie`/`mideleg` to implemented IRQ bits;
   `mip` preserves hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`. `satp` is stored (OpenSBI clears it);
-  Sv39 walks are not implemented yet.
+  Sv39 walks are not implemented yet. With `mstatus.TVM` set, S-mode `satp` access is illegal.
 - **Privilege modes:** the hart tracks U/S/M (reset = M). Traps record `MPP`/`SPP`, switch mode,
   and vector through `mtvec` or `stvec` when `medeleg`/`mideleg` delegates. `mret`/`sret` restore
   the previous mode; `ecall` uses causes 8/9/11 by mode. `mret` is M-only; `sret` is illegal in U.

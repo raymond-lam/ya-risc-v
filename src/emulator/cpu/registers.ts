@@ -213,8 +213,15 @@ const controlAndStatusRegisterRequiredPrivilege = (index: number): ReadonlyUint8
   PRIVILEGE_BY_CSR_LEVEL[(index >>> 8) & 0x3]!;
 
 /**
+ * mstatus.TVM (Timeout Wait for Virtual Memory), bit 20 → little-endian bytes[2] bit 4.
+ * When set, S-mode read/write of `satp` raises illegal-instruction (M still allowed).
+ */
+const MSTATUS_BYTE2_TVM = 0x10;
+
+/**
  * Whether a CSR instruction may complete. Non-existent indices and insufficient
  * privilege are illegal on any access; read-only CSRs are illegal only when writing.
+ * With `mstatus.TVM` set, S-mode access to `satp` is also illegal.
  */
 const isControlAndStatusRegisterAccessAllowed = (
   registers: Registers,
@@ -233,6 +240,13 @@ const isControlAndStatusRegisterAccessAllowed = (
     return false;
   }
   if (writes && isReadOnlyControlAndStatusRegister(index)) {
+    return false;
+  }
+  if (
+    index === SATP &&
+    compareUnsignedBytes(registers.privilegeMode, PRIVILEGE_SUPERVISOR) === 0 &&
+    (registers.controlAndStatus[MSTATUS]![2]! & MSTATUS_BYTE2_TVM) !== 0
+  ) {
     return false;
   }
   return true;

@@ -667,6 +667,84 @@ describe('system', () => {
     );
   });
 
+  it('satp from S-mode with mstatus.TVM set raises illegal-instruction', () => {
+    const registers = createRegisters();
+    const instructionWord = 0x180010f3;
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    // TVM = bit 20 → 0x10_0000
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x10_0000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      signedNumberToBytes(new Uint8Array(8), 0x55, 32)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: SATP,
+      instructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SATP),
+      signedNumberToBytes(new Uint8Array(8), 0x55, 32)
+    );
+    assert.deepEqual(
+      [...readGeneralPurposeRegister(registers, 2)],
+      [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
+    );
+  });
+
+  it('satp from M-mode with mstatus.TVM set still succeeds', () => {
+    const registers = createRegisters();
+    // TVM = bit 20 → 0x10_0000
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x10_0000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      signedNumberToBytes(new Uint8Array(8), 0x55, 32)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: SATP,
+      instructionWord: 0,
+    });
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 2),
+      signedNumberToBytes(new Uint8Array(8), 0x55, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SATP),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
   it('csrrw can read and write mscratch and sscratch at sufficient privilege', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0x55aa, 32));
