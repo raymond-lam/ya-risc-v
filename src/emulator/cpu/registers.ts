@@ -22,6 +22,7 @@ import {
   copyBytes,
   orBytes,
   signedNumberToBytes,
+  unsignedBigIntToBytes,
 } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 
@@ -54,9 +55,11 @@ const SEPC = 0x141; // PC saved on trap to S
 const SCAUSE = 0x142; // exception/interrupt code for S traps
 const STVAL = 0x143; // faulting address/instruction for S traps
 const SIP = 0x144; // S-visible interrupt pending (masked view of mip)
+const SATP = 0x180; // address translation / protection (stub until Sv39)
 
 /** Machine-mode CSRs used by trap entry, `mret`, and delegation. */
 const MSTATUS = 0x300; // global status / interrupt enables / prior privilege
+const MISA = 0x301; // ISA and extensions (hardwired WARL)
 const MEDELEG = 0x302; // which exceptions are delegated to S
 const MIDELEG = 0x303; // which interrupts are delegated to S
 const MIE = 0x304; // machine interrupt-enable bits
@@ -72,6 +75,16 @@ const MVENDORID = 0xf11; // JEDEC vendor id (hardwired 0)
 const MARCHID = 0xf12; // architecture id (hardwired 0)
 const MIMPID = 0xf13; // implementation id (hardwired 0)
 const MHARTID = 0xf14; // hardware thread id (hardwired 0)
+
+/**
+ * Hardwired misa: MXL=64 (bits 63:62 = 2) and extensions A, I, M, S, U.
+ * Update when C (or F/D/…) lands. WARL writes are ignored (value stays fixed).
+ */
+const MISA_HARDWIRED_BYTES = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  // MXL=2 at [63:62] | U | S | M | I | A
+  (2n << 62n) | (1n << 20n) | (1n << 18n) | (1n << 12n) | (1n << 8n) | (1n << 0n)
+) as ReadonlyUint8Array;
 
 /**
  * sstatus is a restricted view of mstatus. Masked fields: SIE, SPIE, SPP, SUM, MXR, UXL.
@@ -178,7 +191,9 @@ const isImplementedControlAndStatusRegister = (index: number): boolean =>
   index === SCAUSE ||
   index === STVAL ||
   index === SIP ||
+  index === SATP ||
   index === MSTATUS ||
+  index === MISA ||
   index === MEDELEG ||
   index === MIDELEG ||
   index === MIE ||
@@ -198,8 +213,15 @@ const controlAndStatusRegisterRequiredPrivilege = (index: number): ReadonlyUint8
   PRIVILEGE_BY_CSR_LEVEL[(index >>> 8) & 0x3]!;
 
 /**
+ * mstatus.TVM (Timeout Wait for Virtual Memory), bit 20 → little-endian bytes[2] bit 4.
+ * When set, S-mode read/write of `satp` raises illegal-instruction (M still allowed).
+ */
+const MSTATUS_BYTE2_TVM = 0x10;
+
+/**
  * Whether a CSR instruction may complete. Non-existent indices and insufficient
  * privilege are illegal on any access; read-only CSRs are illegal only when writing.
+ * With `mstatus.TVM` set, S-mode access to `satp` is also illegal.
  */
 const isControlAndStatusRegisterAccessAllowed = (
   registers: Registers,
@@ -218,6 +240,13 @@ const isControlAndStatusRegisterAccessAllowed = (
     return false;
   }
   if (writes && isReadOnlyControlAndStatusRegister(index)) {
+    return false;
+  }
+  if (
+    index === SATP &&
+    compareUnsignedBytes(registers.privilegeMode, PRIVILEGE_SUPERVISOR) === 0 &&
+    (registers.controlAndStatus[MSTATUS]![2]! & MSTATUS_BYTE2_TVM) !== 0
+  ) {
     return false;
   }
   return true;
@@ -240,8 +269,9 @@ const createRegisters = (): Registers => {
     () => new Uint8Array(8)
   );
 
-  // Hardwire mstatus.UXL/SXL to 64 on reset.
+  // Hardwire mstatus.UXL/SXL to 64 and misa (RV64IMA + S/U) on reset.
   controlAndStatus[MSTATUS]![4] = MSTATUS_BYTE4_UXL_SXL_64;
+  copyBytes(controlAndStatus[MISA]!, MISA_HARDWIRED_BYTES);
 
   return {
     generalPurpose: generalPurpose as unknown as Registers['generalPurpose'],
@@ -391,6 +421,9 @@ const writeControlAndStatusRegister = (
         registers.controlAndStatus[MSTATUS]!,
         legalizeMstatus(copyBytes(new Uint8Array(8), value))
       );
+    case MISA:
+      // WARL: extensions/MXL are fixed for this hart; ignore the written value.
+      return copyBytes(registers.controlAndStatus[MISA]!, MISA_HARDWIRED_BYTES);
     case MIE:
       return copyBytes(
         registers.controlAndStatus[MIE]!,
@@ -486,7 +519,9 @@ export {
   SEPC,
   SCAUSE,
   STVAL,
+  SATP,
   MSTATUS,
+  MISA,
   MEDELEG,
   MIDELEG,
   MIE,

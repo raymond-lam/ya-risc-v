@@ -27,9 +27,10 @@ type Registers = {
   programCounter: Uint8Array;
   /**
    * Dense CSR file keyed by 12-bit index. Only the implemented set is guest-accessible;
-   * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only. `sstatus`/`sie`/`sip`
-   * are aliases of `mstatus`/`mie`/`mip` (handled in the register helpers, not separate slots).
-   * `sscratch`/`mscratch` are ordinary XLEND scratch slots for trap handlers.
+   * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only. `misa` is hardwired
+   * WARL (RV64IMA + S/U). `sstatus`/`sie`/`sip` are aliases of `mstatus`/`mie`/`mip`
+   * (handled in the register helpers, not separate slots). `sscratch`/`mscratch` are ordinary
+   * XLEND scratch slots. `satp` is stored but paging is not implemented yet.
    */
   controlAndStatus: readonly Uint8Array[] & {
     readonly 0xf11: ReadonlyUint8Array; // mvendorid
