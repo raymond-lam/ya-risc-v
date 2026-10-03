@@ -34,6 +34,7 @@ import {
   MCAUSE,
   MEPC,
   MIE,
+  MISA,
   MSCRATCH,
   MSTATUS,
   MTVAL,
@@ -41,6 +42,7 @@ import {
   PRIVILEGE_MACHINE,
   PRIVILEGE_SUPERVISOR,
   PRIVILEGE_USER,
+  SATP,
   SEPC,
   SSCRATCH,
   createRegisters,
@@ -589,6 +591,79 @@ describe('system', () => {
     assert.deepEqual(
       [...readGeneralPurposeRegister(registers, 1)],
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
+    );
+  });
+
+  it('csrrw reads hardwired misa and WARL-ignores writes', () => {
+    const registers = createRegisters();
+    const hardwired = snapshotControlAndStatusRegister(registers, MISA);
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0xffff, 32));
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: MISA,
+      instructionWord: 0,
+    });
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), hardwired);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MISA), hardwired);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('csrrw can clear satp from M-mode (OpenSBI path)', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_0001n)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: SATP,
+      instructionWord: 0,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SATP),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('satp from U-mode raises illegal-instruction', () => {
+    const registers = createRegisters();
+    const instructionWord = 0x180010f3;
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      signedNumberToBytes(new Uint8Array(8), 0x55, 32)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: SATP,
+      instructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SATP),
+      signedNumberToBytes(new Uint8Array(8), 0x55, 32)
     );
   });
 

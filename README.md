@@ -26,13 +26,14 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   reservation monitor (line granule) is cleared by overlapping stores/AMOs; aligned RAM AMOs use host
   `Atomics` RMW. `aq`/`rl` are accepted and ignored.
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
-  Only implemented CSRs are accessible (`mstatus`/`sstatus`, `medeleg`/`mideleg`, `mie`/`mip`,
-  `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/`sscratch`, `mepc`/`sepc`, `mcause`/`scause`,
-  `mtval`/`stval`, identity);
-  other indices, insufficient privilege, and writes to read-only CSRs raise illegal-instruction.
-  `csrrs`/`csrrc` skip the write when the source is zero. `sstatus`/`sie`/`sip` are masked views
-  of `mstatus`/`mie`/`mip`. WARL: MPP legalization; `mie`/`mideleg` to implemented IRQ bits;
-  `mip` preserves hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`.
+  Only implemented CSRs are accessible (`mstatus`/`sstatus`, `misa`, `medeleg`/`mideleg`,
+  `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/`sscratch`, `mepc`/`sepc`,
+  `mcause`/`scause`, `mtval`/`stval`, `satp`, identity); other indices, insufficient privilege,
+  and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the write when
+  the source is zero. `sstatus`/`sie`/`sip` are masked views of `mstatus`/`mie`/`mip`. WARL:
+  `misa` hardwired (RV64IMA + S/U); MPP legalization; `mie`/`mideleg` to implemented IRQ bits;
+  `mip` preserves hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`. `satp` is stored (OpenSBI clears it);
+  Sv39 walks are not implemented yet.
 - **Privilege modes:** the hart tracks U/S/M (reset = M). Traps record `MPP`/`SPP`, switch mode,
   and vector through `mtvec` or `stvec` when `medeleg`/`mideleg` delegates. `mret`/`sret` restore
   the previous mode; `ecall` uses causes 8/9/11 by mode. `mret` is M-only; `sret` is illegal in U.
@@ -74,7 +75,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 ### Not yet implemented
 
 - **Extensions.** No F/D (floating point) or C (compressed).
-- **Virtual memory.** No paging (`satp` / Sv39).
+- **Virtual memory.** `satp` is stored; Sv39 page walks are not implemented yet.
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
 - **Program loading.** Images are flat binaries copied to the RAM base (`0x80000000`); there is no

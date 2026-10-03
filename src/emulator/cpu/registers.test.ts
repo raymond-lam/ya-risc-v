@@ -20,9 +20,11 @@ import {
   MIDELEG,
   MIE,
   MIP,
+  MISA,
   MSCRATCH,
   MSTATUS,
   PRIVILEGE_MACHINE,
+  SATP,
   SSCRATCH,
   advanceProgramCounter,
   createRegisters,
@@ -39,6 +41,12 @@ import {
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
+
+/** Hardwired misa: MXL=64 and extensions A, I, M, S, U. */
+const MISA_HARDWIRED = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  (2n << 62n) | (1n << 20n) | (1n << 18n) | (1n << 12n) | (1n << 8n) | (1n << 0n)
+);
 
 const SIE = 0x104;
 const SIP = 0x144;
@@ -94,6 +102,28 @@ describe('registers', () => {
     const value = signedNumberToBytes(new Uint8Array(8), 0x1234, 32);
     writeControlAndStatusRegister(registers, 0x305, value);
     assert.deepEqual(snapshotControlAndStatusRegister(registers, 0x305), value);
+  });
+
+  it('misa is hardwired RV64IMA+S/U and WARL-ignores writes', () => {
+    const registers = createRegisters();
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MISA), MISA_HARDWIRED);
+    writeControlAndStatusRegister(
+      registers,
+      MISA,
+      signedNumberToBytes(new Uint8Array(8), 0xffff, 32)
+    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MISA), MISA_HARDWIRED);
+  });
+
+  it('satp round-trips XLEND writes (paging not enabled yet)', () => {
+    const registers = createRegisters();
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SATP),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    const value = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_1234n);
+    writeControlAndStatusRegister(registers, SATP, value);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, SATP), value);
   });
 
   it('mscratch and sscratch reset to zero and hold XLEND writes', () => {
