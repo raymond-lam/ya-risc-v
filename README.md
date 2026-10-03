@@ -27,7 +27,8 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   `Atomics` RMW. `aq`/`rl` are accepted and ignored.
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
   Only implemented CSRs are accessible (`mstatus`/`sstatus`, `medeleg`/`mideleg`, `mie`/`mip`,
-  `sie`/`sip`, `mtvec`/`stvec`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, identity);
+  `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/`sscratch`, `mepc`/`sepc`, `mcause`/`scause`,
+  `mtval`/`stval`, identity);
   other indices, insufficient privilege, and writes to read-only CSRs raise illegal-instruction.
   `csrrs`/`csrrc` skip the write when the source is zero. `sstatus`/`sie`/`sip` are masked views
   of `mstatus`/`mie`/`mip`. WARL: MPP legalization; `mie`/`mideleg` to implemented IRQ bits;

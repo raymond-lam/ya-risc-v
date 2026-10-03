@@ -49,6 +49,7 @@ const PRIVILEGE_BY_CSR_LEVEL = [
 const SSTATUS = 0x100; // S-visible status (masked view of mstatus)
 const SIE = 0x104; // S-visible interrupt enables (masked view of mie)
 const STVEC = 0x105; // S-mode trap handler address
+const SSCRATCH = 0x140; // scratch for S-mode trap handlers
 const SEPC = 0x141; // PC saved on trap to S
 const SCAUSE = 0x142; // exception/interrupt code for S traps
 const STVAL = 0x143; // faulting address/instruction for S traps
@@ -60,6 +61,7 @@ const MEDELEG = 0x302; // which exceptions are delegated to S
 const MIDELEG = 0x303; // which interrupts are delegated to S
 const MIE = 0x304; // machine interrupt-enable bits
 const MTVEC = 0x305; // M-mode trap handler address
+const MSCRATCH = 0x340; // scratch for M-mode trap handlers
 const MEPC = 0x341; // PC saved on trap to M
 const MCAUSE = 0x342; // exception/interrupt code for M traps
 const MTVAL = 0x343; // faulting address/instruction for M traps
@@ -171,6 +173,7 @@ const isImplementedControlAndStatusRegister = (index: number): boolean =>
   index === SSTATUS ||
   index === SIE ||
   index === STVEC ||
+  index === SSCRATCH ||
   index === SEPC ||
   index === SCAUSE ||
   index === STVAL ||
@@ -180,6 +183,7 @@ const isImplementedControlAndStatusRegister = (index: number): boolean =>
   index === MIDELEG ||
   index === MIE ||
   index === MTVEC ||
+  index === MSCRATCH ||
   index === MEPC ||
   index === MCAUSE ||
   index === MTVAL ||
@@ -478,6 +482,7 @@ export {
   PRIVILEGE_SUPERVISOR,
   PRIVILEGE_MACHINE,
   STVEC,
+  SSCRATCH,
   SEPC,
   SCAUSE,
   STVAL,
@@ -486,6 +491,7 @@ export {
   MIDELEG,
   MIE,
   MTVEC,
+  MSCRATCH,
   MEPC,
   MCAUSE,
   MTVAL,

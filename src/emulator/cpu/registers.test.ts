@@ -20,8 +20,10 @@ import {
   MIDELEG,
   MIE,
   MIP,
+  MSCRATCH,
   MSTATUS,
   PRIVILEGE_MACHINE,
+  SSCRATCH,
   advanceProgramCounter,
   createRegisters,
   snapshotControlAndStatusRegister,
@@ -92,6 +94,33 @@ describe('registers', () => {
     const value = signedNumberToBytes(new Uint8Array(8), 0x1234, 32);
     writeControlAndStatusRegister(registers, 0x305, value);
     assert.deepEqual(snapshotControlAndStatusRegister(registers, 0x305), value);
+  });
+
+  it('mscratch and sscratch reset to zero and hold XLEND writes', () => {
+    const registers = createRegisters();
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MSCRATCH),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SSCRATCH),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+
+    const mValue = signedNumberToBytes(new Uint8Array(8), 0x1111_2222, 32);
+    const sValue = unsignedBigIntToBytes(new Uint8Array(8), 0x8899_aabb_ccdd_eeffn);
+    writeControlAndStatusRegister(registers, MSCRATCH, mValue);
+    writeControlAndStatusRegister(registers, SSCRATCH, sValue);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSCRATCH), mValue);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, SSCRATCH), sValue);
+
+    // Scratch slots are independent.
+    writeControlAndStatusRegister(
+      registers,
+      MSCRATCH,
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, SSCRATCH), sValue);
   });
 
   it('x0 ignores writes at runtime', () => {

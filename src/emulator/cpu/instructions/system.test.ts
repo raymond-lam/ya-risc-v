@@ -34,6 +34,7 @@ import {
   MCAUSE,
   MEPC,
   MIE,
+  MSCRATCH,
   MSTATUS,
   MTVAL,
   MTVEC,
@@ -41,6 +42,7 @@ import {
   PRIVILEGE_SUPERVISOR,
   PRIVILEGE_USER,
   SEPC,
+  SSCRATCH,
   createRegisters,
   snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
@@ -587,6 +589,116 @@ describe('system', () => {
     assert.deepEqual(
       [...readGeneralPurposeRegister(registers, 1)],
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
+    );
+  });
+
+  it('csrrw can read and write mscratch and sscratch at sufficient privilege', () => {
+    const registers = createRegisters();
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0x55aa, 32));
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: MSCRATCH,
+      instructionWord: 0,
+    });
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 2),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MSCRATCH),
+      signedNumberToBytes(new Uint8Array(8), 0x55aa, 32)
+    );
+
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 0x1234, 32));
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 4,
+      sourceRegister1: 3,
+      controlAndStatusRegister: SSCRATCH,
+      instructionWord: 0,
+    });
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 4),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SSCRATCH),
+      signedNumberToBytes(new Uint8Array(8), 0x1234, 32)
+    );
+  });
+
+  it('mscratch from S-mode and sscratch from U-mode raise illegal-instruction', () => {
+    const registers = createRegisters();
+    const mscratchInstructionWord = 0x340010f3;
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MSCRATCH,
+      signedNumberToBytes(new Uint8Array(8), 0x99, 32)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 1, 32));
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 2,
+      sourceRegister1: 1,
+      controlAndStatusRegister: MSCRATCH,
+      instructionWord: mscratchInstructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      mscratchInstructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MSCRATCH),
+      signedNumberToBytes(new Uint8Array(8), 0x99, 32)
+    );
+    assert.deepEqual(
+      [...readGeneralPurposeRegister(registers, 2)],
+      [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
+    );
+
+    const sscratchInstructionWord = 0x140010f3;
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      SSCRATCH,
+      signedNumberToBytes(new Uint8Array(8), 0x77, 32)
+    );
+    csrrw(registers, testMemory(256n), {
+      destinationRegister: 3,
+      sourceRegister1: 1,
+      controlAndStatusRegister: SSCRATCH,
+      instructionWord: sscratchInstructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      sscratchInstructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SSCRATCH),
+      signedNumberToBytes(new Uint8Array(8), 0x77, 32)
     );
   });
 
