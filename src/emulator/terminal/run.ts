@@ -17,8 +17,8 @@
 import { once } from 'node:events';
 import { Readable, Writable } from 'node:stream';
 import { parentPort, workerData } from 'node:worker_threads';
-import { popUartTransmit, pushUartReceive, waitUartTransmit } from '#emulator/memory';
 import type { TerminalWorkerData } from '#emulator/terminal/types';
+import { popUartTransmit, pushUartReceive, waitUartTransmit } from '#emulator/uart';
 
 const pumpTransmit = async (
   memory: TerminalWorkerData['memory'],

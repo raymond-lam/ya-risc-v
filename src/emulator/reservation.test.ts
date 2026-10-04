@@ -16,17 +16,15 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import {
-  atomicRamStore,
-  setReservation,
-  storeBytes,
-  tryTakeReservation,
-  type Memory,
-} from '#emulator/memory';
+import { atomicStoreBytes, storeBytes, type Memory } from '#emulator/memory';
 import {
   invalidateOverlappingReservations,
   releaseScMonitorIfHeld,
-} from '#emulator/memory/reservation';
+  RESERVATION_REGION_ID,
+  setReservation,
+  tryTakeReservation,
+} from '#emulator/reservation';
+import { bigIntAsNumber } from '#utils/int';
 import createTestMemory from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
 import { signedNumberToBytes } from '#utils/bytes';
@@ -37,7 +35,9 @@ const addressAt = (offset: number): ReadonlyUint8Array =>
 /** Observe whether hart `hartId`'s slot is valid (test-only). */
 const slotValid = (memory: Memory, hartId: number): boolean => {
   // Layout: lock(4)+pad(4)+slots; slot valid Int32 at slot base.
-  const slotBase = memory.reservationMonitorHostIndex + 8 + hartId * 16;
+  const region = memory.regions.get(RESERVATION_REGION_ID);
+  assert.ok(region);
+  const slotBase = bigIntAsNumber(region.hostIndex) + 8 + hartId * 16;
   return Atomics.load(new Int32Array(memory.bytes.buffer, slotBase, 1), 0) !== 0;
 };
 
@@ -59,7 +59,7 @@ describe('reservation monitor', () => {
     assert.equal(tryTakeReservation(memory, 0, address, 8), true);
     assert.equal(slotValid(memory, 0), true);
     assert.equal(
-      atomicRamStore({
+      atomicStoreBytes({
         memory,
         address,
         source: signedNumberToBytes(new Uint8Array(8), 0x55, 32),

@@ -398,7 +398,6 @@ const instructionWordTrapValue = (instructionWord: number): ReadonlyUint8Array =
   unsignedNumberToBytes(new Uint8Array(8), instructionWord);
 
 export {
-  CAUSE_INSTRUCTION_ADDRESS_MISALIGNED,
   CAUSE_ILLEGAL_INSTRUCTION,
   CAUSE_BREAKPOINT,
   CAUSE_STORE_AMO_ADDRESS_MISALIGNED,

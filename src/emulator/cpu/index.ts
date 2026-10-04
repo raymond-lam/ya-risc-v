@@ -101,4 +101,4 @@ class Cpu implements CpuHandle {
 const create = (options: CpuCreateOptions): CpuHandle => new Cpu(options);
 
 export { create };
-export type { CpuCreateOptions, CpuHandle, Registers } from '#emulator/cpu/types';
+export type { CpuHandle } from '#emulator/cpu/types';

@@ -18,8 +18,8 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import { create } from '#emulator';
-import { create as createClint } from '#emulator/clint';
 import { create as createTerminal } from '#emulator/terminal';
+import { create as createTimer } from '#emulator/timer';
 import createTestMemory from '#test/guest-memory';
 
 /** Minimal thenable handle that can reject like a worker lifetime. */
@@ -79,25 +79,25 @@ describe('emulator create', () => {
     await emulator;
   });
 
-  it('stops live CLINT and terminal workers when a sibling rejects', async () => {
+  it('stops live timer and terminal workers when a sibling rejects', async () => {
     const memory = createTestMemory(256n);
     const stdin = new PassThrough();
     const stdout = new PassThrough();
-    const clint = createClint({ memory });
+    const timer = createTimer({ memory });
     const terminal = createTerminal({ memory, stdin, stdout });
     const failing = createFailingHandle('forced worker failure');
 
-    clint.start();
+    timer.start();
     terminal.start();
     failing.start();
 
     await assert.rejects(
       async () => {
         try {
-          await Promise.all([failing, clint, terminal]);
+          await Promise.all([failing, timer, terminal]);
         } finally {
           failing.stop();
-          clint.stop();
+          timer.stop();
           terminal.stop();
         }
       },
@@ -105,6 +105,6 @@ describe('emulator create', () => {
     );
 
     // Siblings must have been stopped; otherwise these awaits hang.
-    await Promise.all([clint, terminal]);
+    await Promise.all([timer, terminal]);
   });
 });

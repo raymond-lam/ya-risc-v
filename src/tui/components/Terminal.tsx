@@ -150,4 +150,3 @@ const Terminal = ({ stdin, stdout, focused, boxRef }: TerminalProps) => {
 };
 
 export default Terminal;
-export type { TerminalProps };

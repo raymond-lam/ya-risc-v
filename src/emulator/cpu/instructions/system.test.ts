@@ -34,17 +34,13 @@ import {
   MCAUSE,
   MEPC,
   MIE,
-  MISA,
-  MSCRATCH,
   MSTATUS,
   MTVAL,
   MTVEC,
   PRIVILEGE_MACHINE,
   PRIVILEGE_SUPERVISOR,
   PRIVILEGE_USER,
-  SATP,
   SEPC,
-  SSCRATCH,
   createRegisters,
   snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
@@ -56,6 +52,12 @@ import {
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
 import { CAUSE_BREAKPOINT, CAUSE_ILLEGAL_INSTRUCTION } from '#emulator/cpu/trap';
+
+/** CSR addresses used only in these tests (not part of the registers public surface). */
+const MISA = 0x301;
+const MSCRATCH = 0x340;
+const SSCRATCH = 0x140;
+const SATP = 0x180;
 import { storeBytes, type Memory } from '#emulator/memory';
 import {
   bytesToNumber,

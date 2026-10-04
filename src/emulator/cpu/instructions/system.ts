@@ -15,6 +15,7 @@
  */
 
 import { andBytes, compareUnsignedBytes, isZeroBytes, orBytes, xorBytes } from '#utils/bytes';
+import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
 import {
   MSTATUS,
   PRIVILEGE_MACHINE,
@@ -42,15 +43,9 @@ import {
   returnFromSupervisorTrap,
 } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
-import {
-  isClintMachineSoftwarePending,
-  isClintMachineTimerPending,
-  isPlicMachineExternalPending,
-  isPlicSupervisorExternalPending,
-  waitHartWake,
-  loadHartIrqLevel,
-  type Memory,
-} from '#emulator/memory';
+import { loadIrqLevel, waitIrqLevel } from '#emulator/irq-level';
+import type { Memory } from '#emulator/memory';
+import { isPlicMachineExternalPending, isPlicSupervisorExternalPending } from '#emulator/plic';
 import type { ReadonlyUint8Array } from '#types';
 
 type CsrRegisterArgs = {
@@ -161,12 +156,12 @@ const wfi = async (registers: Registers, memory: Memory): Promise<void> => {
     }
     // Snapshot the level word, then re-sample wires so a publish between the first
     // check and this load cannot leave us waiting on an already-current level.
-    const fromLevel = loadHartIrqLevel(memory);
+    const fromLevel = loadIrqLevel(memory);
     sampleDevicePending(registers, memory);
     if (isPendingEnabledInterrupt(registers)) {
       return;
     }
-    await waitHartWake(memory, fromLevel);
+    await waitIrqLevel(memory, fromLevel);
   }
 };
 

@@ -14,23 +14,23 @@
  * limitations under the License.
  */
 
-/* eslint-disable import/prefer-default-export -- clint worker payload types */
+/* eslint-disable import/prefer-default-export -- timer worker payload types */
 import type { Memory } from '#emulator/memory';
 
 /** Host arguments to create the CLINT timebase worker. */
-type ClintCreateOptions = {
-  /** Shared guest address space (CLINT shadows and timer wire live here). */
+type TimerCreateOptions = {
+  /** Shared guest address space (CLINT `mtime` / timer wire live here). */
   memory: Memory;
 };
 
-/** Startup payload handed to the CLINT worker. */
-type ClintWorkerData = ClintCreateOptions;
+/** Startup payload handed to the timer worker. */
+type TimerWorkerData = TimerCreateOptions;
 
-type ClintHandle = Promise<void> & {
-  /** Spawn the CLINT tick worker. Throws if already started or already stopped. */
+type TimerHandle = Promise<void> & {
+  /** Spawn the timebase tick worker. Throws if already started or already stopped. */
   start: () => void;
   /** Stop the worker. Throws if not started; idempotent after the first stop. */
   stop: () => void;
 };
 
-export type { ClintCreateOptions, ClintWorkerData, ClintHandle };
+export type { TimerCreateOptions, TimerWorkerData, TimerHandle };

@@ -19,7 +19,6 @@ import { describe, it } from 'node:test';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ILLEGAL_INSTRUCTION,
-  CAUSE_INSTRUCTION_ADDRESS_MISALIGNED,
   enterTrap,
   instructionWordTrapValue,
   isPendingEnabledInterrupt,
@@ -61,6 +60,9 @@ import {
   unsignedBigIntToBytes,
   unsignedNumberToBytes,
 } from '#utils/bytes';
+
+/** mcause code for instruction-address misaligned (matches trap.ts). */
+const CAUSE_INSTRUCTION_ADDRESS_MISALIGNED = 0;
 
 /** Exception causes used in these tests (not exported — production uses locals in trap.ts). */
 const CAUSE_ECALL_FROM_U = 8;

@@ -14,67 +14,14 @@
  * limitations under the License.
  */
 
+/**
+ * Shared Int32 wake / level words (`Atomics.waitAsync` / `notify`).
+ * Used by the IRQ-level aggregate and UART TX nonempty — not a generation counter.
+ */
+
 import { bytesToInt32Array } from '#utils/bytes';
 
-/** Atomically load bit `bit` (0..7) in the byte at `index`. */
-const atomicLoadBit = ({
-  bytes,
-  index,
-  bit,
-}: {
-  bytes: Uint8Array;
-  index: number;
-  bit: number;
-}): boolean => (Atomics.load(bytes, index) & (1 << bit)) !== 0;
-
-/**
- * Atomically load 32 little-endian bits at `index` as a JS `number`
- * (`index` must be 4-byte aligned).
- */
-const atomicLoad32 = ({ bytes, index }: { bytes: Uint8Array; index: number }): number =>
-  Atomics.load(bytesToInt32Array(bytes, index), 0) >>> 0;
-
-/**
- * Atomically store 32 little-endian bits at `index`
- * (`index` must be 4-byte aligned; `value` is taken as unsigned).
- */
-const atomicStore32 = ({
-  bytes,
-  index,
-  value,
-}: {
-  bytes: Uint8Array;
-  index: number;
-  value: number;
-}): void => {
-  Atomics.store(bytesToInt32Array(bytes, index), 0, value | 0);
-};
-
-/** Atomically set bit `bit` (0..7) in the byte at `index` to `value` (CAS-retry). */
-const atomicUpdateBit = ({
-  bytes,
-  index,
-  bit,
-  value,
-}: {
-  bytes: Uint8Array;
-  index: number;
-  bit: number;
-  value: boolean;
-}): void => {
-  const mask = 1 << bit;
-  let previous = Atomics.load(bytes, index);
-  for (;;) {
-    const next = (value ? previous | mask : previous & ~mask) & 0xff;
-    const current = Atomics.compareExchange(bytes, index, previous, next);
-    if (current === previous) {
-      return;
-    }
-    previous = current;
-  }
-};
-
-/** Host bytes for one Int32 wake / level word (`Atomics.waitAsync` / `notify`). */
+/** Host bytes for one Int32 wake / level word. */
 const WAKE_HOST_SIZE = 4;
 
 /** Period for the `waitWake` keepalive timer (huge so the no-op callback never fires). */
@@ -82,7 +29,6 @@ const WAIT_ASYNC_KEEPALIVE_MS = 2 ** 30;
 
 /**
  * Publish a level into the Int32 at `index` and `notify` when it changes.
- * Used for IRQ aggregates and UART TX nonempty (not a generation counter).
  */
 const publishWakeLevel = ({
   bytes,
@@ -133,12 +79,4 @@ const waitWake = async ({
   }
 };
 
-export {
-  WAKE_HOST_SIZE,
-  atomicLoad32,
-  atomicStore32,
-  atomicLoadBit,
-  atomicUpdateBit,
-  publishWakeLevel,
-  waitWake,
-};
+export { WAKE_HOST_SIZE, publishWakeLevel, waitWake };

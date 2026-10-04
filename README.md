@@ -144,18 +144,20 @@ and `tsc` over `src/`.
 src/
   index.ts                CLI: create emulator + TUI, start both, await emulator then TUI
   emulator/
-    index.ts              Host-side create(); start()/stop() forward to CPU + CLINT + terminal
-    types.ts              EmulatorCreateOptions / handle (private; re-exported)
-    memory/
-      index.ts            Public API: createMemory, loadBytes, storeBytes, Memory, …
-      types.ts            Memory type (private; re-exported from index)
-      ram.ts              RAM host mapping and byte access (private)
-      uart.ts             16550 window, RX/TX queues (private)
-      clint.ts            Guest decode, shadow R/W, tickClint, IRQ wire sample (private)
-      plic.ts             PLIC decode, claim/complete, MEIP/SEIP wires (private)
-      atomics.ts          Shared SAB Atomics helpers (bit / 32-bit load; private)
-      hart-wake.ts        wfi wake word + setIrqWire (private)
-      layout.ts           Host SAB packing + guest address → region (private)
+    index.ts              Host-side create(); start()/stop() forward to CPU + timer + terminal
+    types.ts              EmulatorCreateOptions (private); EmulatorHandle re-exported from index
+    memory.ts             createMemory, load/store (+ atomics), Memory type
+    ram.ts                Dense RAM load/store + RV64A atomics
+    plic.ts               Sparse PLIC decode, claim/complete, wires
+    reservation.ts        Host-only LR/SC monitor
+    wake.ts               Int32 wake/level publish + waitWake
+    irq-level.ts          Host-only IRQ level word + setIrqWire / waitIrqLevel
+    uart/
+      index.ts            Public API: MMIO, RX/TX queues, region sizes
+      region.ts           Guest window + host slab indexing (private)
+      queues.ts           RX/TX rings + TX-wake wait (private)
+      registers.ts        16550 register side effects + PLIC source 10 (private)
+      memory.ts           Guest loadBytes / storeBytes (private)
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute
@@ -165,9 +167,15 @@ src/
       types.ts            Architectural state types (re-exported from index)
       instructions/       One file per opcode group (op-imm.ts, load.ts, branch.ts, …)
     clint/
-      index.ts            Host-side create()/start()/stop()
-      run.ts              Worker: timebase tick loop (calls tickClint)
-      types.ts            Worker payload types (private to the package)
+      index.ts            Device API: MMIO, initializeClint, tickClint, wire samples
+      layout.ts           Guest window / host slab indexing (private)
+      memory.ts           Guest loadBytes / storeBytes (private)
+      wires.ts            Timer / software IRQ wires (private)
+      time.ts             mtime/mtimecmp shadows, tickClint (private)
+    timer/
+      index.ts            Host-side create()/start()/stop() (timebase Worker)
+      run.ts              Worker: tick loop (calls tickClint)
+      types.ts            Worker payload types (private)
     terminal/
       index.ts            Host-side create()/start()/stop(); UART↔stream bridge
       run.ts              Worker entry
@@ -176,6 +184,9 @@ src/
   types.ts                Shared architectural types (ReadonlyUint8Array)
   utils/
     bytes.ts              64-bit LE byte-array arithmetic
+    int.ts                bigint → safe JS number
+    atomics.ts            SAB byte/bit Atomics helpers
+    binary-search.ts      findLastIndex (binary search on a true…false partition)
     tty.ts                VT100 encode/paint helpers for the TUI terminal pane
 ```
 
@@ -199,7 +210,7 @@ how the ISA actually specifies control flow.
 stores are plain byte accesses rather than `Atomics`, so an unsynchronized host racing the guest
 behaves like unsynchronized access to real memory. Host-only device packing is the exception: UART
 RX/TX queue metadata, CLINT time/epoch/wires, and PLIC shadows/wires use `Atomics` (byte views,
-plus `BigUint64Array` for CLINT time). The hart-wake word is an `Int32` OR of IRQ levels so `wfi`
+plus `BigUint64Array` for CLINT time). The irq-level word is an `Int32` OR of IRQ levels so `wfi`
 can `Atomics.waitAsync` / `notify` on that level. Guest THR empty→nonempty notifies a separate UART
 TX wake word so the terminal worker can `Atomics.waitAsync` instead of polling.
 

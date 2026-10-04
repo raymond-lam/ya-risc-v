@@ -14,13 +14,8 @@
  * limitations under the License.
  */
 
-import { bytesToBigInt, bytesToBigUint64Array, bytesToInt32Array } from '#utils/bytes';
-import { rangesOverlap } from '#utils/ranges';
-import type { Memory } from '#emulator/memory/types';
-import type { ReadonlyUint8Array } from '#types';
-
 /**
- * Shared LR/SC monitor.
+ * Reservation-monitor region — host-only LR/SC state (no guestAddress).
  *
  * Vocabulary:
  *   - **line** — guest-physical address granule (64 bytes). An `lr` reserves the line
@@ -30,9 +25,18 @@ import type { ReadonlyUint8Array } from '#types';
  *
  * Updates run under a SAB spinlock so clearing other harts / arming a slot is
  * transactional. A successful `tryTakeReservation` keeps the reservation held and
- * retains the monitor lock until the matching `storeBytes` / `atomicRamStore`
+ * retains the monitor lock until the matching `storeBytes` / `atomicStoreBytes`
  * releases it (SC store window).
  */
+
+import { bytesToBigInt, bytesToBigUint64Array, bytesToInt32Array } from '#utils/bytes';
+import { rangesOverlap } from '#utils/ranges';
+import { bigIntAsNumber } from '#utils/int';
+import type { Memory } from '#emulator/memory';
+import type { ReadonlyUint8Array } from '#types';
+
+/** Packed-region id for the LR/SC monitor (`createMemory` / `regions.get`). */
+const RESERVATION_REGION_ID = 'reservation';
 
 /** Bytes in one reservation line (guest address granule). */
 const RESERVATION_LINE_SIZE = 64;
@@ -53,9 +57,10 @@ const RESERVATION_LOCK_BYTES = 4;
 /** Pad so slots stay 8-byte aligned after the lock. */
 const RESERVATION_LOCK_PAD = 4;
 
-/** Host bytes for the shared LR/SC monitor (lock + pad + slots). */
-const RESERVATION_MONITOR_HOST_SIZE =
-  RESERVATION_LOCK_BYTES + RESERVATION_LOCK_PAD + RESERVATION_HART_COUNT * RESERVATION_SLOT_SIZE;
+/** Host slab size (lock + pad + slots). */
+const RESERVATION_HOST_BYTE_LENGTH = BigInt(
+  RESERVATION_LOCK_BYTES + RESERVATION_LOCK_PAD + RESERVATION_HART_COUNT * RESERVATION_SLOT_SIZE
+);
 
 /** Per-worker reentry depth for the monitor lock (SC holds across tryTake→store). */
 let monitorLockDepth = 0;
@@ -63,28 +68,42 @@ let monitorLockDepth = 0;
 /** True when this worker's successful tryTake still holds the lock for the SC store. */
 let scMonitorHeld = false;
 
+const reservationRegion = (memory: Memory) => {
+  const region = memory.regions.get(RESERVATION_REGION_ID);
+  if (region === undefined) {
+    throw new Error(`Memory region '${RESERVATION_REGION_ID}' is not packed.`);
+  }
+  if (region.guestAddress !== null) {
+    throw new Error(
+      `Memory region '${RESERVATION_REGION_ID}' is guest-mapped; expected host-only.`
+    );
+  }
+  return region;
+};
+
 const reservationLockInt32 = (memory: Memory): Int32Array =>
-  bytesToInt32Array(memory.bytes, memory.reservationMonitorHostIndex);
+  bytesToInt32Array(memory.bytes, bigIntAsNumber(reservationRegion(memory).hostIndex));
 
 /** Guest-physical base of the reservation line that contains `guestAddress`. */
 const reservationLineBase = (guestAddress: bigint): bigint =>
   guestAddress & ~(BigInt(RESERVATION_LINE_SIZE) - 1n);
 
-/** Host byte index of hart `hartId`'s monitor slot. */
-const reservationSlotHostIndex = (memory: Memory, hartId: number): number =>
-  memory.reservationMonitorHostIndex +
-  RESERVATION_LOCK_BYTES +
-  RESERVATION_LOCK_PAD +
-  hartId * RESERVATION_SLOT_SIZE;
+/** Absolute hostIndex of hart `hartId`'s monitor slot. */
+const reservationSlotHostIndex = (memory: Memory, hartId: number): bigint =>
+  reservationRegion(memory).hostIndex +
+  BigInt(RESERVATION_LOCK_BYTES + RESERVATION_LOCK_PAD + hartId * RESERVATION_SLOT_SIZE);
 
 const reservationSlotValidInt32 = (memory: Memory, hartId: number): Int32Array =>
-  bytesToInt32Array(memory.bytes, reservationSlotHostIndex(memory, hartId));
+  bytesToInt32Array(memory.bytes, bigIntAsNumber(reservationSlotHostIndex(memory, hartId)));
 
 const reservationSlotWidthInt32 = (memory: Memory, hartId: number): Int32Array =>
-  bytesToInt32Array(memory.bytes, reservationSlotHostIndex(memory, hartId) + 4);
+  bytesToInt32Array(memory.bytes, bigIntAsNumber(reservationSlotHostIndex(memory, hartId) + 4n));
 
 const reservationSlotAddressUint64 = (memory: Memory, hartId: number): BigUint64Array =>
-  bytesToBigUint64Array(memory.bytes, reservationSlotHostIndex(memory, hartId) + 8);
+  bytesToBigUint64Array(
+    memory.bytes,
+    bigIntAsNumber(reservationSlotHostIndex(memory, hartId) + 8n)
+  );
 
 const isValidHartId = (hartId: number): boolean =>
   Number.isInteger(hartId) && hartId >= 0 && hartId < RESERVATION_HART_COUNT;
@@ -119,7 +138,7 @@ const releaseMonitorLock = (memory: Memory): void => {
 
 /**
  * Release a monitor lock held across a successful SC `tryTakeReservation`.
- * Called at the end of `storeBytes` / `atomicRamStore`.
+ * Called at the end of `storeBytes` / `atomicStoreBytes`.
  */
 const releaseScMonitorIfHeld = (memory: Memory): void => {
   if (!scMonitorHeld) {
@@ -141,16 +160,6 @@ const withMonitorLock = <T>(memory: Memory, run: () => T): T => {
 /** Clear hart `hartId`'s monitor slot (caller must hold the monitor lock). */
 const clearReservationLocked = (memory: Memory, hartId: number): void => {
   Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 0);
-};
-
-/** Clear hart `hartId`'s monitor slot. */
-const clearReservation = (memory: Memory, hartId: number): void => {
-  if (!isValidHartId(hartId)) {
-    return;
-  }
-  withMonitorLock(memory, () => {
-    clearReservationLocked(memory, hartId);
-  });
 };
 
 /**
@@ -259,7 +268,8 @@ const invalidateOverlappingReservations = (
 };
 
 export {
-  RESERVATION_MONITOR_HOST_SIZE,
+  RESERVATION_HOST_BYTE_LENGTH,
+  RESERVATION_REGION_ID,
   setReservation,
   invalidateOverlappingReservations,
   releaseScMonitorIfHeld,

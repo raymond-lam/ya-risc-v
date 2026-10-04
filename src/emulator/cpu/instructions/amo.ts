@@ -37,13 +37,12 @@ import {
 import { CAUSE_STORE_AMO_ADDRESS_MISALIGNED, enterTrap } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
 import {
-  atomicRamCompareExchange,
-  atomicRamLoad,
-  atomicRamStore,
-  setReservation,
-  tryTakeReservation,
+  atomicCompareExchangeBytes,
+  atomicLoadBytes,
+  atomicStoreBytes,
   type Memory,
 } from '#emulator/memory';
+import { setReservation, tryTakeReservation } from '#emulator/reservation';
 import type { ReadonlyUint8Array } from '#types';
 
 type AmoArgs = {
@@ -70,7 +69,7 @@ const trapStoreAmoMisaligned = (registers: Registers, address: ReadonlyUint8Arra
 const lrW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const oldValue = new Uint8Array(8);
-  if (!atomicRamLoad({ destination: oldValue, memory, address, byteLength: 4 })) {
+  if (!atomicLoadBytes({ destination: oldValue, memory, address, byteLength: 4 })) {
     trapStoreAmoMisaligned(registers, address);
     return;
   }
@@ -84,7 +83,7 @@ const lrW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
 const lrD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const oldValue = new Uint8Array(8);
-  if (!atomicRamLoad({ destination: oldValue, memory, address, byteLength: 8 })) {
+  if (!atomicLoadBytes({ destination: oldValue, memory, address, byteLength: 8 })) {
     trapStoreAmoMisaligned(registers, address);
     return;
   }
@@ -100,13 +99,13 @@ const lrD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
 const scW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const probe = new Uint8Array(8);
-  if (!atomicRamLoad({ destination: probe, memory, address, byteLength: 4 })) {
+  if (!atomicLoadBytes({ destination: probe, memory, address, byteLength: 4 })) {
     trapStoreAmoMisaligned(registers, address);
     return;
   }
   const success = tryTakeReservation(memory, hartIdOf(registers), address, 4);
   if (success) {
-    atomicRamStore({
+    atomicStoreBytes({
       memory,
       address,
       source: readGeneralPurposeRegister(registers, args.sourceRegister2),
@@ -128,13 +127,13 @@ const scW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
 const scD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const probe = new Uint8Array(8);
-  if (!atomicRamLoad({ destination: probe, memory, address, byteLength: 8 })) {
+  if (!atomicLoadBytes({ destination: probe, memory, address, byteLength: 8 })) {
     trapStoreAmoMisaligned(registers, address);
     return;
   }
   const success = tryTakeReservation(memory, hartIdOf(registers), address, 8);
   if (success) {
-    atomicRamStore({
+    atomicStoreBytes({
       memory,
       address,
       source: readGeneralPurposeRegister(registers, args.sourceRegister2),
@@ -166,14 +165,14 @@ const amoReadModifyWrite = (
   const source = readGeneralPurposeRegister(registers, args.sourceRegister2);
   const oldValue = new Uint8Array(8);
   const observed = new Uint8Array(8);
-  if (!atomicRamLoad({ destination: oldValue, memory, address, byteLength })) {
+  if (!atomicLoadBytes({ destination: oldValue, memory, address, byteLength })) {
     trapStoreAmoMisaligned(registers, address);
     return;
   }
   for (;;) {
     const next = combine(oldValue, source, byteLength);
     if (
-      atomicRamCompareExchange({
+      atomicCompareExchangeBytes({
         destination: observed,
         memory,
         address,
