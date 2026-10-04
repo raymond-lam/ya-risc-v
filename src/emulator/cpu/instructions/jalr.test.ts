@@ -24,6 +24,7 @@ import {
   readProgramCounter,
   setProgramCounter,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
@@ -32,11 +33,16 @@ describe('jalr', () => {
     const registers = createRegisters();
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x21, 32));
-    jalr(registers, testMemory(256n), {
-      destinationRegister: 1,
-      sourceRegister1: 2,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-    });
+    jalr(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 104, 32)

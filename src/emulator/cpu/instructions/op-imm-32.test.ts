@@ -22,6 +22,7 @@ import {
   createRegisters,
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { signedNumberToBytes } from '#utils/bytes';
 
@@ -33,11 +34,16 @@ describe('op-imm-32', () => {
       1,
       signedNumberToBytes(new Uint8Array(8), 0x7fffffff, 32)
     );
-    addiw(registers, testMemory(256n), {
-      destinationRegister: 2,
-      sourceRegister1: 1,
-      immediate: signedNumberToBytes(new Uint8Array(8), 1, 32),
-    });
+    addiw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 2,
+        sourceRegister1: 1,
+        immediate: signedNumberToBytes(new Uint8Array(8), 1, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 2),
       signedNumberToBytes(new Uint8Array(8), 0x80000000, 32)

@@ -39,7 +39,12 @@ const loadEffectiveAddress = (registers: Registers, args: LoadArgs): ReadonlyUin
   );
 
 /** lb: rd = sext(mem[rs1+imm], 8). */
-const lb = (registers: Registers, memory: Memory, args: LoadArgs): void => {
+const lb = (
+  registers: Registers,
+  memory: Memory,
+  args: LoadArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -48,11 +53,16 @@ const lb = (registers: Registers, memory: Memory, args: LoadArgs): void => {
     byteLength: 1,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 1));
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** lh: rd = sext(mem[rs1+imm], 16). */
-const lh = (registers: Registers, memory: Memory, args: LoadArgs): void => {
+const lh = (
+  registers: Registers,
+  memory: Memory,
+  args: LoadArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -61,11 +71,16 @@ const lh = (registers: Registers, memory: Memory, args: LoadArgs): void => {
     byteLength: 2,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 2));
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** lw: rd = sext(mem[rs1+imm], 32). */
-const lw = (registers: Registers, memory: Memory, args: LoadArgs): void => {
+const lw = (
+  registers: Registers,
+  memory: Memory,
+  args: LoadArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -74,11 +89,16 @@ const lw = (registers: Registers, memory: Memory, args: LoadArgs): void => {
     byteLength: 4,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 4));
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** ld: rd = mem[rs1+imm] (64 bits). */
-const ld = (registers: Registers, memory: Memory, args: LoadArgs): void => {
+const ld = (
+  registers: Registers,
+  memory: Memory,
+  args: LoadArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -87,11 +107,16 @@ const ld = (registers: Registers, memory: Memory, args: LoadArgs): void => {
     byteLength: 8,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, loaded);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** lbu: rd = zext(mem[rs1+imm], 8). */
-const lbu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
+const lbu = (
+  registers: Registers,
+  memory: Memory,
+  args: LoadArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -100,11 +125,16 @@ const lbu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
     byteLength: 1,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 1));
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** lhu: rd = zext(mem[rs1+imm], 16). */
-const lhu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
+const lhu = (
+  registers: Registers,
+  memory: Memory,
+  args: LoadArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -113,11 +143,16 @@ const lhu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
     byteLength: 2,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 2));
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** lwu: rd = zext(mem[rs1+imm], 32). */
-const lwu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
+const lwu = (
+  registers: Registers,
+  memory: Memory,
+  args: LoadArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
@@ -126,8 +161,7 @@ const lwu = (registers: Registers, memory: Memory, args: LoadArgs): void => {
     byteLength: 4,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 4));
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { lb, lh, lw, ld, lbu, lhu, lwu };
-export type { LoadArgs };

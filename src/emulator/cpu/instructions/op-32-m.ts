@@ -22,6 +22,7 @@ import {
 } from '#emulator/cpu/registers';
 import type { Op32Args } from '#emulator/cpu/instructions/op-32';
 import type { Registers } from '#emulator/cpu/types';
+import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
 
 const MASK32 = 0xffff_ffffn;
@@ -46,17 +47,27 @@ const writeSext32 = (registers: Registers, destinationRegister: number, value: b
 };
 
 /** mulw: rd = sext32(rs1[31:0] × rs2[31:0]). */
-const mulw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const mulw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeSext32(
     registers,
     args.destinationRegister,
     low32Signed(registers, args.sourceRegister1) * low32Signed(registers, args.sourceRegister2)
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** divw: rd = sext32(rs1[31:0]_s ÷ rs2[31:0]_s); ÷0 → −1; overflow → dividend. */
-const divw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const divw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const dividend = low32Signed(registers, args.sourceRegister1);
   const divisor = low32Signed(registers, args.sourceRegister2);
   let quotient: bigint;
@@ -68,20 +79,30 @@ const divw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
     quotient = dividend / divisor;
   }
   writeSext32(registers, args.destinationRegister, quotient);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** divuw: rd = sext32(rs1[31:0]_u ÷ rs2[31:0]_u); ÷0 → all ones. */
-const divuw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const divuw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const dividend = low32Unsigned(registers, args.sourceRegister1);
   const divisor = low32Unsigned(registers, args.sourceRegister2);
   const quotient = divisor === 0n ? MASK32 : dividend / divisor;
   writeSext32(registers, args.destinationRegister, quotient);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** remw: rd = sext32(rs1[31:0]_s % rs2[31:0]_s); ÷0 → dividend; overflow → 0. */
-const remw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const remw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const dividend = low32Signed(registers, args.sourceRegister1);
   const divisor = low32Signed(registers, args.sourceRegister2);
   let remainder: bigint;
@@ -93,16 +114,21 @@ const remw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
     remainder = dividend % divisor;
   }
   writeSext32(registers, args.destinationRegister, remainder);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** remuw: rd = sext32(rs1[31:0]_u % rs2[31:0]_u); ÷0 → dividend. */
-const remuw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const remuw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const dividend = low32Unsigned(registers, args.sourceRegister1);
   const divisor = low32Unsigned(registers, args.sourceRegister2);
   const remainder = divisor === 0n ? dividend : dividend % divisor;
   writeSext32(registers, args.destinationRegister, remainder);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { mulw, divw, divuw, remw, remuw };

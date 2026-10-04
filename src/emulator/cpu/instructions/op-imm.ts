@@ -48,7 +48,12 @@ type ShiftImmArgs = {
 };
 
 /** addi: rd = rs1 + imm. */
-const addi = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
+const addi = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -58,11 +63,16 @@ const addi = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
       args.immediate
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** slti: rd = (rs1 < imm) ? 1 : 0 (signed). */
-const slti = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
+const slti = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   setBooleanGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -71,11 +81,16 @@ const slti = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
       args.immediate
     ) < 0
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sltiu: rd = (rs1 < imm) ? 1 : 0 (unsigned). */
-const sltiu = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
+const sltiu = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   setBooleanGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -84,11 +99,16 @@ const sltiu = (registers: Registers, _memory: Memory, args: OpImmArgs): void => 
       args.immediate
     ) < 0
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** xori: rd = rs1 ^ imm. */
-const xori = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
+const xori = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -98,11 +118,16 @@ const xori = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
       args.immediate
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** ori: rd = rs1 | imm. */
-const ori = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
+const ori = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -112,11 +137,16 @@ const ori = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
       args.immediate
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** andi: rd = rs1 & imm. */
-const andi = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
+const andi = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -126,11 +156,16 @@ const andi = (registers: Registers, _memory: Memory, args: OpImmArgs): void => {
       args.immediate
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** slli: rd = rs1 << shamt. */
-const slli = (registers: Registers, _memory: Memory, args: ShiftImmArgs): void => {
+const slli = (
+  registers: Registers,
+  _memory: Memory,
+  args: ShiftImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -140,11 +175,16 @@ const slli = (registers: Registers, _memory: Memory, args: ShiftImmArgs): void =
       args.shiftAmount
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** srli: rd = rs1 >> shamt (logical). */
-const srli = (registers: Registers, _memory: Memory, args: ShiftImmArgs): void => {
+const srli = (
+  registers: Registers,
+  _memory: Memory,
+  args: ShiftImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -154,11 +194,16 @@ const srli = (registers: Registers, _memory: Memory, args: ShiftImmArgs): void =
       args.shiftAmount
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** srai: rd = rs1 >> shamt (arithmetic). */
-const srai = (registers: Registers, _memory: Memory, args: ShiftImmArgs): void => {
+const srai = (
+  registers: Registers,
+  _memory: Memory,
+  args: ShiftImmArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -168,8 +213,7 @@ const srai = (registers: Registers, _memory: Memory, args: ShiftImmArgs): void =
       args.shiftAmount
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { addi, slti, sltiu, xori, ori, andi, slli, srli, srai };
-export type { OpImmArgs, ShiftImmArgs };

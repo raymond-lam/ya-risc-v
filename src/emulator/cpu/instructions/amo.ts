@@ -66,7 +66,12 @@ const trapStoreAmoMisaligned = (registers: Registers, address: ReadonlyUint8Arra
 };
 
 /** lr.w: rd = sext(mem[rs1]); reserve 32 bits. Misaligned / non-RAM → trap (no reservation). */
-const lrW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
+const lrW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const oldValue = new Uint8Array(8);
   if (!atomicLoadBytes({ destination: oldValue, memory, address, byteLength: 4 })) {
@@ -76,11 +81,16 @@ const lrW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   signExtendBytes(oldValue, 4);
   setReservation(memory, hartIdOf(registers), address, 4);
   writeGeneralPurposeRegister(registers, args.destinationRegister, oldValue);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** lr.d: rd = mem[rs1]; reserve 64 bits. Misaligned / non-RAM → trap (no reservation). */
-const lrD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
+const lrD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const oldValue = new Uint8Array(8);
   if (!atomicLoadBytes({ destination: oldValue, memory, address, byteLength: 8 })) {
@@ -89,14 +99,19 @@ const lrD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
   }
   setReservation(memory, hartIdOf(registers), address, 8);
   writeGeneralPurposeRegister(registers, args.destinationRegister, oldValue);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /**
  * sc.w: if reservation matches, mem[rs1] = rs2[31:0], rd = 0; else rd ≠ 0.
  * Misaligned / non-RAM → trap before taking the reservation.
  */
-const scW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
+const scW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const probe = new Uint8Array(8);
   if (!atomicLoadBytes({ destination: probe, memory, address, byteLength: 4 })) {
@@ -117,14 +132,19 @@ const scW = (registers: Registers, memory: Memory, args: AmoArgs): void => {
     args.destinationRegister,
     success ? ZERO_BYTES : ONE_BYTES
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /**
  * sc.d: if reservation matches, mem[rs1] = rs2, rd = 0; else rd ≠ 0.
  * Misaligned / non-RAM → trap before taking the reservation.
  */
-const scD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
+const scD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const probe = new Uint8Array(8);
   if (!atomicLoadBytes({ destination: probe, memory, address, byteLength: 8 })) {
@@ -145,7 +165,7 @@ const scD = (registers: Registers, memory: Memory, args: AmoArgs): void => {
     args.destinationRegister,
     success ? ZERO_BYTES : ONE_BYTES
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 type AmoCombine = (
@@ -159,7 +179,8 @@ const amoReadModifyWrite = (
   memory: Memory,
   args: AmoArgs,
   byteLength: 4 | 8,
-  combine: AmoCombine
+  combine: AmoCombine,
+  instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   const source = readGeneralPurposeRegister(registers, args.sourceRegister2);
@@ -189,7 +210,7 @@ const amoReadModifyWrite = (
     signExtendBytes(oldValue, 4);
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, oldValue);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 const asSignedOperands = (
@@ -224,116 +245,303 @@ const narrowStoreValue = (value: Uint8Array, byteLength: 4 | 8): Uint8Array =>
   byteLength === 4 ? low32Bytes(new Uint8Array(8), value) : value;
 
 /** amoswap.w / amoswap.d */
-const amoswap = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (_old, source) =>
-    copyBytes(new Uint8Array(8), source)
+const amoswap = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (_old, source) => copyBytes(new Uint8Array(8), source),
+    instructionByteLength
   );
 };
 
 /** amoadd.w / amoadd.d */
-const amoadd = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (oldValue, source, width) => {
-    const { left, right } = asSignedOperands(oldValue, source, width);
-    return narrowStoreValue(addBytes(new Uint8Array(8), left, right), width);
-  });
+const amoadd = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (oldValue, source, width) => {
+      const { left, right } = asSignedOperands(oldValue, source, width);
+      return narrowStoreValue(addBytes(new Uint8Array(8), left, right), width);
+    },
+    instructionByteLength
+  );
 };
 
 /** amoxor.w / amoxor.d */
-const amoxor = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (oldValue, source, width) => {
-    const { left, right } = asSignedOperands(oldValue, source, width);
-    return narrowStoreValue(xorBytes(new Uint8Array(8), left, right), width);
-  });
+const amoxor = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (oldValue, source, width) => {
+      const { left, right } = asSignedOperands(oldValue, source, width);
+      return narrowStoreValue(xorBytes(new Uint8Array(8), left, right), width);
+    },
+    instructionByteLength
+  );
 };
 
 /** amoand.w / amoand.d */
-const amoand = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (oldValue, source, width) => {
-    const { left, right } = asSignedOperands(oldValue, source, width);
-    return narrowStoreValue(andBytes(new Uint8Array(8), left, right), width);
-  });
+const amoand = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (oldValue, source, width) => {
+      const { left, right } = asSignedOperands(oldValue, source, width);
+      return narrowStoreValue(andBytes(new Uint8Array(8), left, right), width);
+    },
+    instructionByteLength
+  );
 };
 
 /** amoor.w / amoor.d */
-const amoor = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (oldValue, source, width) => {
-    const { left, right } = asSignedOperands(oldValue, source, width);
-    return narrowStoreValue(orBytes(new Uint8Array(8), left, right), width);
-  });
+const amoor = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (oldValue, source, width) => {
+      const { left, right } = asSignedOperands(oldValue, source, width);
+      return narrowStoreValue(orBytes(new Uint8Array(8), left, right), width);
+    },
+    instructionByteLength
+  );
 };
 
 /** amomin.w / amomin.d (signed) */
-const amomin = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (oldValue, source, width) => {
-    const { left, right } = asSignedOperands(oldValue, source, width);
-    const next = compareSignedBytes(left, right) <= 0 ? left : right;
-    return narrowStoreValue(copyBytes(new Uint8Array(8), next), width);
-  });
+const amomin = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (oldValue, source, width) => {
+      const { left, right } = asSignedOperands(oldValue, source, width);
+      const next = compareSignedBytes(left, right) <= 0 ? left : right;
+      return narrowStoreValue(copyBytes(new Uint8Array(8), next), width);
+    },
+    instructionByteLength
+  );
 };
 
 /** amomax.w / amomax.d (signed) */
-const amomax = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (oldValue, source, width) => {
-    const { left, right } = asSignedOperands(oldValue, source, width);
-    const next = compareSignedBytes(left, right) >= 0 ? left : right;
-    return narrowStoreValue(copyBytes(new Uint8Array(8), next), width);
-  });
+const amomax = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (oldValue, source, width) => {
+      const { left, right } = asSignedOperands(oldValue, source, width);
+      const next = compareSignedBytes(left, right) >= 0 ? left : right;
+      return narrowStoreValue(copyBytes(new Uint8Array(8), next), width);
+    },
+    instructionByteLength
+  );
 };
 
 /** amominu.w / amominu.d (unsigned) */
-const amominu = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (oldValue, source, width) => {
-    const { left, right } = asUnsignedOperands(oldValue, source, width);
-    const next = compareUnsignedBytes(left, right) <= 0 ? left : right;
-    return narrowStoreValue(copyBytes(new Uint8Array(8), next), width);
-  });
+const amominu = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (oldValue, source, width) => {
+      const { left, right } = asUnsignedOperands(oldValue, source, width);
+      const next = compareUnsignedBytes(left, right) <= 0 ? left : right;
+      return narrowStoreValue(copyBytes(new Uint8Array(8), next), width);
+    },
+    instructionByteLength
+  );
 };
 
 /** amomaxu.w / amomaxu.d (unsigned) */
-const amomaxu = (registers: Registers, memory: Memory, args: AmoArgs, byteLength: 4 | 8): void => {
-  amoReadModifyWrite(registers, memory, args, byteLength, (oldValue, source, width) => {
-    const { left, right } = asUnsignedOperands(oldValue, source, width);
-    const next = compareUnsignedBytes(left, right) >= 0 ? left : right;
-    return narrowStoreValue(copyBytes(new Uint8Array(8), next), width);
-  });
+const amomaxu = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  byteLength: 4 | 8,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  amoReadModifyWrite(
+    registers,
+    memory,
+    args,
+    byteLength,
+    (oldValue, source, width) => {
+      const { left, right } = asUnsignedOperands(oldValue, source, width);
+      const next = compareUnsignedBytes(left, right) >= 0 ? left : right;
+      return narrowStoreValue(copyBytes(new Uint8Array(8), next), width);
+    },
+    instructionByteLength
+  );
 };
 
-const amoswapW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoswap(registers, memory, args, 4);
-const amoswapD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoswap(registers, memory, args, 8);
-const amoaddW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoadd(registers, memory, args, 4);
-const amoaddD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoadd(registers, memory, args, 8);
-const amoxorW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoxor(registers, memory, args, 4);
-const amoxorD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoxor(registers, memory, args, 8);
-const amoandW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoand(registers, memory, args, 4);
-const amoandD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoand(registers, memory, args, 8);
-const amoorW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoor(registers, memory, args, 4);
-const amoorD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amoor(registers, memory, args, 8);
-const amominW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amomin(registers, memory, args, 4);
-const amominD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amomin(registers, memory, args, 8);
-const amomaxW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amomax(registers, memory, args, 4);
-const amomaxD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amomax(registers, memory, args, 8);
-const amominuW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amominu(registers, memory, args, 4);
-const amominuD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amominu(registers, memory, args, 8);
-const amomaxuW = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amomaxu(registers, memory, args, 4);
-const amomaxuD = (registers: Registers, memory: Memory, args: AmoArgs): void =>
-  amomaxu(registers, memory, args, 8);
+const amoswapW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoswap(registers, memory, args, 4, instructionByteLength);
+const amoswapD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoswap(registers, memory, args, 8, instructionByteLength);
+const amoaddW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoadd(registers, memory, args, 4, instructionByteLength);
+const amoaddD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoadd(registers, memory, args, 8, instructionByteLength);
+const amoxorW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoxor(registers, memory, args, 4, instructionByteLength);
+const amoxorD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoxor(registers, memory, args, 8, instructionByteLength);
+const amoandW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoand(registers, memory, args, 4, instructionByteLength);
+const amoandD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoand(registers, memory, args, 8, instructionByteLength);
+const amoorW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoor(registers, memory, args, 4, instructionByteLength);
+const amoorD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amoor(registers, memory, args, 8, instructionByteLength);
+const amominW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amomin(registers, memory, args, 4, instructionByteLength);
+const amominD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amomin(registers, memory, args, 8, instructionByteLength);
+const amomaxW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amomax(registers, memory, args, 4, instructionByteLength);
+const amomaxD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amomax(registers, memory, args, 8, instructionByteLength);
+const amominuW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amominu(registers, memory, args, 4, instructionByteLength);
+const amominuD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amominu(registers, memory, args, 8, instructionByteLength);
+const amomaxuW = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amomaxu(registers, memory, args, 4, instructionByteLength);
+const amomaxuD = (
+  registers: Registers,
+  memory: Memory,
+  args: AmoArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => amomaxu(registers, memory, args, 8, instructionByteLength);
 
 export {
   lrW,
@@ -359,4 +567,3 @@ export {
   amomaxuW,
   amomaxuD,
 };
-export type { AmoArgs };

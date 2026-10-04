@@ -23,6 +23,7 @@ import {
   readGeneralPurposeRegister,
   readProgramCounter,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -39,11 +40,16 @@ describe('op-32-m', () => {
       2,
       unsignedBigIntToBytes(new Uint8Array(8), 0x2_0000_0006n)
     );
-    mulw(registers, testMemory(256n), {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    mulw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 42, 32)
@@ -55,20 +61,30 @@ describe('op-32-m', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 20, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0, 32));
-    divw(registers, testMemory(256n), {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    divw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), -1, 32)
     );
-    remw(registers, testMemory(256n), {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    remw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 20, 32)
@@ -80,11 +96,16 @@ describe('op-32-m', () => {
       signedNumberToBytes(new Uint8Array(8), 0x80000000, 32)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
-    divw(registers, testMemory(256n), {
-      destinationRegister: 5,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    divw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 5,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 5),
       signedNumberToBytes(new Uint8Array(8), 0x80000000, 32)
@@ -100,20 +121,30 @@ describe('op-32-m', () => {
       signedNumberToBytes(new Uint8Array(8), 0xfffffffe, 32)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 2, 32));
-    divuw(registers, testMemory(256n), {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    divuw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 0x7fffffff, 32)
     );
-    remuw(registers, testMemory(256n), {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    remuw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 0, 32)

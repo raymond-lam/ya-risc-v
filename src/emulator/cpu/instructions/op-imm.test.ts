@@ -23,17 +23,23 @@ import {
   readGeneralPurposeRegister,
   readProgramCounter,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('op-imm', () => {
   it('addi writes rs1 + imm and advances pc', () => {
     const registers = createRegisters();
-    addi(registers, testMemory(256n), {
-      destinationRegister: 1,
-      sourceRegister1: 0,
-      immediate: signedNumberToBytes(new Uint8Array(8), 10, 32),
-    });
+    addi(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 1,
+        sourceRegister1: 0,
+        immediate: signedNumberToBytes(new Uint8Array(8), 10, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 10, 32)
@@ -45,21 +51,31 @@ describe('op-imm', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), -1, 32));
 
-    slti(registers, testMemory(256n), {
-      destinationRegister: 2,
-      sourceRegister1: 1,
-      immediate: signedNumberToBytes(new Uint8Array(8), 1, 32),
-    });
+    slti(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 2,
+        sourceRegister1: 1,
+        immediate: signedNumberToBytes(new Uint8Array(8), 1, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 2),
       signedNumberToBytes(new Uint8Array(8), 1, 32)
     );
 
-    sltiu(registers, testMemory(256n), {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      immediate: signedNumberToBytes(new Uint8Array(8), 1, 32),
-    });
+    sltiu(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        immediate: signedNumberToBytes(new Uint8Array(8), 1, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 0, 32)
@@ -69,11 +85,16 @@ describe('op-imm', () => {
   it('xori bitwise-xors the immediate', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
-    xori(registers, testMemory(256n), {
-      destinationRegister: 2,
-      sourceRegister1: 1,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0xff, 32),
-    });
+    xori(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 2,
+        sourceRegister1: 1,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0xff, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 2),
       signedNumberToBytes(new Uint8Array(8), 0xf0, 32)

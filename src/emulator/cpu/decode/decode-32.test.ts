@@ -35,6 +35,15 @@ const mstatusBytes = (low32: number): Uint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), BigInt(low32 >>> 0) | (0xan << 32n));
 import type { ReadonlyUint8Array } from '#types';
 
+const runDecoded = (
+  word: Uint8Array,
+  registers: ReturnType<typeof createRegisters>,
+  memory: ReturnType<typeof testMemory>
+) => {
+  const [execute, instructionByteLength] = decode(word);
+  return execute(registers, memory, instructionByteLength);
+};
+
 /** Pack a 32-bit instruction encoding as little-endian bytes. */
 const instructionBytes = (encoding: number): Uint8Array => {
   const bytes = new Uint8Array(4);
@@ -70,7 +79,7 @@ describe('decode + execute', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     // addi x1, x0, 42
-    decode(instructionBytes(0x02a00093))(registers, memory);
+    runDecoded(instructionBytes(0x02a00093), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 42, 32)
@@ -88,7 +97,7 @@ describe('decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x11, 32)
     );
     // csrrw x1, 0x300, x2
-    decode(instructionBytes(0x300110f3))(registers, memory);
+    runDecoded(instructionBytes(0x300110f3), registers, memory);
     assert.deepEqual(readGeneralPurposeRegister(registers, 1), mstatusBytes(0x11));
     assert.deepEqual(snapshotControlAndStatusRegister(registers, 0x300), mstatusBytes(0x22));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
@@ -98,7 +107,7 @@ describe('decode + execute', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     // csrrwi x1, 0x300, 31
-    decode(instructionBytes(0x300fd0f3))(registers, memory);
+    runDecoded(instructionBytes(0x300fd0f3), registers, memory);
     assert.deepEqual(readGeneralPurposeRegister(registers, 1), mstatusBytes(0));
     assert.deepEqual(snapshotControlAndStatusRegister(registers, 0x300), mstatusBytes(31));
   });
@@ -107,7 +116,7 @@ describe('decode + execute', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     // lui x1, 0x12345
-    decode(instructionBytes(0x123450b7))(registers, memory);
+    runDecoded(instructionBytes(0x123450b7), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 0x12345000, 32)
@@ -120,7 +129,7 @@ describe('decode + execute', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 6, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
     // mul x3, x1, x2
-    decode(instructionBytes(0x022081b3))(registers, memory);
+    runDecoded(instructionBytes(0x022081b3), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 42, 32)
@@ -134,7 +143,7 @@ describe('decode + execute', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 6, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
     // mulw x3, x1, x2
-    decode(instructionBytes(0x022081bb))(registers, memory);
+    runDecoded(instructionBytes(0x022081bb), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 42, 32)
@@ -153,7 +162,7 @@ describe('decode + execute', () => {
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 16, 32));
 
     // sw x1, 0(x2)
-    decode(instructionBytes(0x00112023))(registers, memory);
+    runDecoded(instructionBytes(0x00112023), registers, memory);
     const stored = new Uint8Array(4);
     loadBytes({
       destination: stored,
@@ -164,7 +173,7 @@ describe('decode + execute', () => {
     assert.deepEqual(stored, new Uint8Array([0xdd, 0xcc, 0xbb, 0xaa]));
 
     // lw x3, 0(x2)
-    decode(instructionBytes(0x00012183))(registers, memory);
+    runDecoded(instructionBytes(0x00012183), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 0xaabbccdd, 32)
@@ -206,7 +215,7 @@ describe('decode + execute', () => {
         address: readProgramCounter(registers),
         byteLength: 4,
       });
-      decode(word)(registers, memory);
+      runDecoded(word, registers, memory);
     }
 
     assert.deepEqual(
@@ -233,7 +242,7 @@ describe('decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x20, 32)
     );
     // mret
-    decode(instructionBytes(0x30200073))(registers, memory);
+    runDecoded(instructionBytes(0x30200073), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x20);
   });
 
@@ -246,7 +255,7 @@ describe('decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x30, 32)
     );
     // sret (legal in M-mode)
-    decode(instructionBytes(0x10200073))(registers, memory);
+    runDecoded(instructionBytes(0x10200073), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x30);
   });
 
@@ -255,7 +264,7 @@ describe('decode + execute', () => {
     const memory = testMemory(64n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     armTimerWake(registers, memory);
-    await decode(instructionBytes(0x10500073))(registers, memory);
+    await runDecoded(instructionBytes(0x10500073), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 
@@ -266,7 +275,7 @@ describe('decode + execute', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 8, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
     // amoadd.w x3, x2, (x1)
-    decode(instructionBytes(0x0020_a1af))(registers, memory);
+    runDecoded(instructionBytes(0x0020_a1af), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 5, 32)
@@ -285,7 +294,7 @@ describe('decode + execute', () => {
     );
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     // all-ones is not a valid 32-bit encoding
-    decode(instructionBytes(0xffff_ffff))(registers, memory);
+    runDecoded(instructionBytes(0xffff_ffff), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x341),
@@ -298,22 +307,12 @@ describe('decode + execute', () => {
     assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, 0x343)), 0xffff_ffff);
   });
 
-  it('traps compressed encodings (inst[1:0] !== 0b11) as illegal', () => {
+  it('executes a compressed encoding from a 32-bit fetch (low halfword)', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
-    writeControlAndStatusRegister(
-      registers,
-      0x305,
-      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
-    );
-    // Quadrant 0 compressed-looking halfword pattern in a 32-bit fetch
-    decode(instructionBytes(0x0000_0001))(registers, memory);
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, 0x342),
-      signedNumberToBytes(new Uint8Array(8), 2, 32)
-    );
-    assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, 0x343)), 0x0000_0001);
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+    // Low halfword 0x0001 is c.nop; high halfword is ignored for length/decode.
+    runDecoded(instructionBytes(0xdead_0001), registers, memory);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 2);
   });
 
   it('traps lr.w with rs2 !== x0 as illegal', () => {
@@ -326,7 +325,7 @@ describe('decode + execute', () => {
     );
     // lr.w x1, (x2) but with rs2 = x3: funct5=LR, aq/rl=0, rs2=3, rs1=2, funct3=W, rd=1, opcode=AMO
     // encoding: 00010 00 00011 00010 010 00001 0101111 = 0x103120af
-    decode(instructionBytes(0x1031_20af))(registers, memory);
+    runDecoded(instructionBytes(0x1031_20af), registers, memory);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
       signedNumberToBytes(new Uint8Array(8), 2, 32)
@@ -343,7 +342,7 @@ describe('decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x4000, 32)
     );
     // ecall with rd = x1: 000000000000 00000 000 00001 1110011 = 0x000000f3
-    decode(instructionBytes(0x0000_00f3))(registers, memory);
+    runDecoded(instructionBytes(0x0000_00f3), registers, memory);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
       signedNumberToBytes(new Uint8Array(8), 2, 32)
@@ -357,7 +356,7 @@ describe('decode + execute', () => {
     );
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
     // ebreak with rs1 = x1: 000000000001 00001 000 00000 1110011 = 0x00108073
-    decode(instructionBytes(0x0010_8073))(registers, memory);
+    runDecoded(instructionBytes(0x0010_8073), registers, memory);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
       signedNumberToBytes(new Uint8Array(8), 2, 32)

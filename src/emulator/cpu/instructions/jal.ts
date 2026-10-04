@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
+/* eslint-disable import/prefer-default-export -- named export matches call-site style */
+
 import { addBytes } from '#utils/bytes';
 import {
   writeGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
-  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
@@ -30,12 +31,17 @@ type JalArgs = {
   immediate: ReadonlyUint8Array;
 };
 
-/** jal: rd = pc + 4; pc = pc + imm (J-type). */
-const jal = (registers: Registers, _memory: Memory, args: JalArgs): void => {
+/** jal: rd = pc + instruction length; pc = pc + imm (J-type). */
+const jal = (
+  registers: Registers,
+  _memory: Memory,
+  args: JalArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
-    addBytes(new Uint8Array(8), readProgramCounter(registers), FOUR_BYTES)
+    addBytes(new Uint8Array(8), readProgramCounter(registers), instructionByteLength)
   );
   setProgramCounter(
     registers,
@@ -44,4 +50,3 @@ const jal = (registers: Registers, _memory: Memory, args: JalArgs): void => {
 };
 
 export { jal };
-export type { JalArgs };

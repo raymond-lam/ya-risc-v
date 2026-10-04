@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+/* eslint-disable import/prefer-default-export -- named export matches call-site style */
+
 import { addBytes } from '#utils/bytes';
 import {
   writeGeneralPurposeRegister,
@@ -30,14 +32,18 @@ type AuipcArgs = {
 };
 
 /** auipc: rd = pc + imm (U-type). */
-const auipc = (registers: Registers, _memory: Memory, args: AuipcArgs): void => {
+const auipc = (
+  registers: Registers,
+  _memory: Memory,
+  args: AuipcArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
     addBytes(new Uint8Array(8), readProgramCounter(registers), args.immediate)
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { auipc };
-export type { AuipcArgs };

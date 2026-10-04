@@ -30,6 +30,7 @@ import {
   advanceProgramCounter,
 } from '#emulator/cpu/registers';
 import type { Registers } from '#emulator/cpu/types';
+import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
 
 type Op32Args = {
@@ -39,7 +40,12 @@ type Op32Args = {
 };
 
 /** addw: rd = sext32(rs1[31:0] + rs2[31:0]). */
-const addw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const addw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -52,11 +58,16 @@ const addw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** subw: rd = sext32(rs1[31:0] - rs2[31:0]). */
-const subw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const subw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -69,11 +80,16 @@ const subw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sllw: rd = sext32(rs1[31:0] << rs2). */
-const sllw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const sllw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -86,11 +102,16 @@ const sllw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** srlw: rd = sext32(rs1[31:0] >> rs2) (logical). */
-const srlw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const srlw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -103,11 +124,16 @@ const srlw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sraw: rd = sext32(rs1[31:0] >> rs2) (arithmetic). */
-const sraw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
+const sraw = (
+  registers: Registers,
+  _memory: Memory,
+  args: Op32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -126,7 +152,7 @@ const sraw = (registers: Registers, _memory: Memory, args: Op32Args): void => {
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { addw, subw, sllw, srlw, sraw };

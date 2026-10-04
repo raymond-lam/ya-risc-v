@@ -585,9 +585,9 @@ describe('trap', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x60);
   });
 
-  it('trapIfInstructionAddressMisaligned traps when PC is 2 mod 4', () => {
+  it('trapIfInstructionAddressMisaligned traps when PC is odd (IALIGN=16)', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x102, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x103, 32));
     writeControlAndStatusRegister(
       registers,
       MTVEC,
@@ -602,20 +602,20 @@ describe('trap', () => {
     // mtval holds the faulting PC; mepc is IALIGN-legalized on write.
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MTVAL),
-      signedNumberToBytes(new Uint8Array(8), 0x102, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x103, 32)
     );
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MEPC),
-      signedNumberToBytes(new Uint8Array(8), 0x100, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x102, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x8000);
   });
 
-  it('trapIfInstructionAddressMisaligned is a no-op for 4-byte-aligned PC', () => {
+  it('trapIfInstructionAddressMisaligned is a no-op for 2-byte-aligned PC', () => {
     const registers = createRegisters();
-    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x104, 32));
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x102, 32));
     assert.equal(trapIfInstructionAddressMisaligned(registers), false);
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x104);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x102);
   });
 
   it('vectored mtvec jumps to BASE + 4*cause for interrupts only', () => {

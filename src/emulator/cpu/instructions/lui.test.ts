@@ -22,16 +22,22 @@ import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('lui', () => {
   it('writes the immediate to rd and advances pc', () => {
     const registers = createRegisters();
-    lui(registers, testMemory(256n), {
-      destinationRegister: 1,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0x12345000, 32),
-    });
+    lui(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 1,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0x12345000, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 0x12345000, 32)

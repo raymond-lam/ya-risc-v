@@ -32,6 +32,7 @@ import {
   setSupervisorExternalInterruptPending,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { takeInterruptIfAny } from '#emulator/cpu/trap';
 import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
@@ -232,7 +233,7 @@ describe('wfi irq-level notify', () => {
       signedNumberToBytes(new Uint8Array(8), MIE_MSIE, 32)
     );
 
-    const done = wfi(registers, memory);
+    const done = wfi(registers, memory, FOUR_BYTES);
     await delay(20);
     storeBytes({
       memory,

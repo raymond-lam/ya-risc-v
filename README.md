@@ -3,14 +3,14 @@
 Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 > [!WARNING]
-> **This is a work in progress and nowhere near finished.** RV64I, RV64M, RV64A (LR/SC + AMOs), and
-> Zicsr execute and are covered by tests. U/S/M privilege modes, `mret`/`sret`, trap CSRs, synchronous
-> traps, interrupt delivery (including `wfi`), a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` →
-> `mip.MTIP`), and a PLIC (→ `mip.MEIP`/`SEIP`, UART source 10) are in place. A 16550 UART (IER/IIR →
-> PLIC source 10) plus an Ink TUI console path exist. There are no further
-> ISA extensions and no OS boot path. It cannot run Linux yet. Anything listed under
-> [Not yet implemented](#not-yet-implemented) is unfinished work rather than a deliberate limit on
-> scope — the goal is a much more complete machine than what is here today.
+> **This is a work in progress and nowhere near finished.** RV64I, RV64M, RV64A (LR/SC + AMOs),
+> RV64C (compressed), and Zicsr execute and are covered by tests. U/S/M privilege modes,
+> `mret`/`sret`, trap CSRs, synchronous traps, interrupt delivery (including `wfi`), a CLINT
+> (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), and a PLIC (→ `mip.MEIP`/`SEIP`, UART
+> source 10) are in place. A 16550 UART (IER/IIR → PLIC source 10) plus an Ink TUI console path
+> exist. There are no further ISA extensions and no OS boot path. It cannot run Linux yet. Anything
+> listed under [Not yet implemented](#not-yet-implemented) is unfinished work rather than a
+> deliberate limit on scope — the goal is a much more complete machine than what is here today.
 
 ## Status
 
@@ -25,6 +25,11 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   `amoadd`, `amoxor`, `amoand`, `amoor`, `amomin`/`amomax`, `amominu`/`amomaxu`). A shared SAB
   reservation monitor (line granule) is cleared by overlapping stores/AMOs; aligned RAM AMOs use host
   `Atomics` RMW. `aq`/`rl` are accepted and ignored.
+- **RV64C** compressed: the full integer RVC set (`c.lw`/`c.ld`/`c.sw`/`c.sd` and SP forms,
+  `c.addi`/`c.addiw`/`c.li`/`c.lui`/`c.addi16sp`/`c.addi4spn`, shifts, CA ALU ops including
+  `c.addw`/`c.subw`, `c.j`/`c.jr`/`c.jalr`, `c.beqz`/`c.bnez`, `c.ebreak`). `misa.C` is set;
+  IALIGN=16 (odd PC traps; `mepc`/`sepc` clear bit 0). HINts execute as NOP; F/D compressed
+  encodings remain illegal.
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
   Only implemented CSRs are accessible (`mstatus`/`sstatus`, `misa`, `medeleg`/`mideleg`,
   `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/`sscratch`, `mepc`/`sepc`,
@@ -32,7 +37,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   `mcounteren`/`scounteren`, `mcountinhibit`, identity); other indices, insufficient privilege,
   and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the write when
   the source is zero. `sstatus`/`sie`/`sip` are masked views of `mstatus`/`mie`/`mip`. WARL:
-  `misa` hardwired (RV64IMA + S/U); MPP legalization; `mie`/`mideleg` to implemented IRQ bits;
+  `misa` hardwired (RV64IMAC + S/U); MPP legalization; `mie`/`mideleg` to implemented IRQ bits;
   `mip` preserves hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`; `mcounteren`/`scounteren` to CY/TM/IR;
   `mcountinhibit` to CY/IR. `time` mirrors CLINT `mtime`; `cycle`/`instret` alias
   `mcycle`/`minstret` and count retires at CPI=1 (traps cancel retire except `ecall`/`ebreak`).
@@ -65,7 +70,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   implemented set, with x0 and the identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`)
   hardwired read-only.
 - A fetch/decode/execute loop running on a worker thread against shared guest memory, with decoded
-  instructions memoized by their 32-bit encoding.
+  instructions memoized by encoding (full word for 32-bit; halfword for RVC).
 - **Guest memory map:** DRAM at `0x80000000` (size set by the caller / `--ram-size`), a fixed
   8-byte **16550 UART** window at `0x10000000` (RBR/THR/IER/IIR/LSR; IER→PLIC source 10), a
   **CLINT** at `0x02000000` (`msip` / `mtimecmp` / `mtime`), and a **PLIC** at `0x0c000000`. Flat
@@ -78,7 +83,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 ### Not yet implemented
 
-- **Extensions.** No F/D (floating point) or C (compressed).
+- **Extensions.** No F/D (floating point).
 - **Virtual memory.** `satp` is stored; Sv39 page walks are not implemented yet.
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
@@ -165,7 +170,7 @@ src/
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute
-      decode.ts           Instruction decode into memoized execute thunks
+      decode/             Instruction decode package (index → decode-32 / decode-c)
       trap.ts             Trap/interrupt entry and mret/sret
       registers.ts        Register file: x0–x31, the program counter, and CSRs
       types.ts            Architectural state types (re-exported from index)

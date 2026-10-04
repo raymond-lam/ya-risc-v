@@ -18,13 +18,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
 import fence from '#emulator/cpu/instructions/misc-mem';
-import { createRegisters, readProgramCounter } from '#emulator/cpu/registers';
+import { createRegisters, readProgramCounter, FOUR_BYTES } from '#emulator/cpu/registers';
 import { bytesToNumber } from '#utils/bytes';
 
 describe('misc-mem', () => {
   it('fence advances pc', () => {
     const registers = createRegisters();
-    fence(registers, testMemory(256n));
+    fence(registers, testMemory(256n), FOUR_BYTES);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 });

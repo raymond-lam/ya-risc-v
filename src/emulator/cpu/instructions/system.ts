@@ -93,19 +93,31 @@ const sampleDevicePending = (registers: Registers, memory: Memory): void => {
 };
 
 /** ecall: environment call; cause depends on the current privilege mode. */
-const ecall = (registers: Registers, _memory: Memory): void => {
+const ecall = (
+  registers: Registers,
+  _memory: Memory,
+  _instructionByteLength: ReadonlyUint8Array
+): void => {
   retireInstructionNow(registers);
   enterTrap(registers, ecallCauseForPrivilege(registers));
 };
 
 /** ebreak: breakpoint (synchronous trap, cause 3). */
-const ebreak = (registers: Registers, _memory: Memory): void => {
+const ebreak = (
+  registers: Registers,
+  _memory: Memory,
+  _instructionByteLength: ReadonlyUint8Array
+): void => {
   retireInstructionNow(registers);
   enterTrap(registers, CAUSE_BREAKPOINT);
 };
 
 /** mret: return from M-mode trap handler (illegal outside M-mode). */
-const mret = (registers: Registers, _memory: Memory): void => {
+const mret = (
+  registers: Registers,
+  _memory: Memory,
+  _instructionByteLength: ReadonlyUint8Array
+): void => {
   if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_MACHINE) !== 0) {
     enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(0x30200073));
     return;
@@ -114,7 +126,11 @@ const mret = (registers: Registers, _memory: Memory): void => {
 };
 
 /** sret: return from S-mode trap handler (illegal in U-mode; TSR traps SRET in M). */
-const sret = (registers: Registers, _memory: Memory): void => {
+const sret = (
+  registers: Registers,
+  _memory: Memory,
+  _instructionByteLength: ReadonlyUint8Array
+): void => {
   if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR) < 0) {
     enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(0x10200073));
     return;
@@ -139,7 +155,11 @@ const sret = (registers: Registers, _memory: Memory): void => {
  * When `mstatus.TW` is set and privilege is below M, `wfi` raises illegal-instruction
  * immediately (implementation-defined wait limit of zero).
  */
-const wfi = async (registers: Registers, memory: Memory): Promise<void> => {
+const wfi = async (
+  registers: Registers,
+  memory: Memory,
+  instructionByteLength: ReadonlyUint8Array
+): Promise<void> => {
   if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_MACHINE) < 0) {
     const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
     if ((mstatus[2]! & MSTATUS_BYTE2_TW) !== 0) {
@@ -151,7 +171,7 @@ const wfi = async (registers: Registers, memory: Memory): Promise<void> => {
       return;
     }
   }
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
   for (;;) {
     sampleDevicePending(registers, memory);
     if (isPendingEnabledInterrupt(registers)) {
@@ -169,7 +189,12 @@ const wfi = async (registers: Registers, memory: Memory): Promise<void> => {
 };
 
 /** csrrw: rd = csr; csr = rs1. */
-const csrrw = (registers: Registers, memory: Memory, args: CsrRegisterArgs): void => {
+const csrrw = (
+  registers: Registers,
+  memory: Memory,
+  args: CsrRegisterArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   if (!isControlAndStatusRegisterAccessAllowed(registers, args.controlAndStatusRegister, true)) {
     trapIllegalCsrAccess(registers, args.instructionWord);
     return;
@@ -185,11 +210,16 @@ const csrrw = (registers: Registers, memory: Memory, args: CsrRegisterArgs): voi
     readGeneralPurposeRegister(registers, args.sourceRegister1)
   );
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** csrrs: rd = csr; if rs1 ≠ x0, csr |= rs1. */
-const csrrs = (registers: Registers, memory: Memory, args: CsrRegisterArgs): void => {
+const csrrs = (
+  registers: Registers,
+  memory: Memory,
+  args: CsrRegisterArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const writes = args.sourceRegister1 !== 0;
   if (!isControlAndStatusRegisterAccessAllowed(registers, args.controlAndStatusRegister, writes)) {
     trapIllegalCsrAccess(registers, args.instructionWord);
@@ -212,11 +242,16 @@ const csrrs = (registers: Registers, memory: Memory, args: CsrRegisterArgs): voi
     );
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** csrrc: rd = csr; if rs1 ≠ x0, csr &= ~rs1. */
-const csrrc = (registers: Registers, memory: Memory, args: CsrRegisterArgs): void => {
+const csrrc = (
+  registers: Registers,
+  memory: Memory,
+  args: CsrRegisterArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const writes = args.sourceRegister1 !== 0;
   if (!isControlAndStatusRegisterAccessAllowed(registers, args.controlAndStatusRegister, writes)) {
     trapIllegalCsrAccess(registers, args.instructionWord);
@@ -243,11 +278,16 @@ const csrrc = (registers: Registers, memory: Memory, args: CsrRegisterArgs): voi
     );
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** csrrwi: rd = csr; csr = zero-extended uimm. */
-const csrrwi = (registers: Registers, memory: Memory, args: CsrImmediateArgs): void => {
+const csrrwi = (
+  registers: Registers,
+  memory: Memory,
+  args: CsrImmediateArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   if (!isControlAndStatusRegisterAccessAllowed(registers, args.controlAndStatusRegister, true)) {
     trapIllegalCsrAccess(registers, args.instructionWord);
     return;
@@ -259,11 +299,16 @@ const csrrwi = (registers: Registers, memory: Memory, args: CsrImmediateArgs): v
   );
   writeControlAndStatusRegister(registers, args.controlAndStatusRegister, args.immediate);
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** csrrsi: rd = csr; if uimm ≠ 0, csr |= uimm. */
-const csrrsi = (registers: Registers, memory: Memory, args: CsrImmediateArgs): void => {
+const csrrsi = (
+  registers: Registers,
+  memory: Memory,
+  args: CsrImmediateArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const writes = !isZeroBytes(args.immediate);
   if (!isControlAndStatusRegisterAccessAllowed(registers, args.controlAndStatusRegister, writes)) {
     trapIllegalCsrAccess(registers, args.instructionWord);
@@ -282,11 +327,16 @@ const csrrsi = (registers: Registers, memory: Memory, args: CsrImmediateArgs): v
     );
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** csrrci: rd = csr; if uimm ≠ 0, csr &= ~uimm. */
-const csrrci = (registers: Registers, memory: Memory, args: CsrImmediateArgs): void => {
+const csrrci = (
+  registers: Registers,
+  memory: Memory,
+  args: CsrImmediateArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const writes = !isZeroBytes(args.immediate);
   if (!isControlAndStatusRegisterAccessAllowed(registers, args.controlAndStatusRegister, writes)) {
     trapIllegalCsrAccess(registers, args.instructionWord);
@@ -309,8 +359,7 @@ const csrrci = (registers: Registers, memory: Memory, args: CsrImmediateArgs): v
     );
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, previous);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { ecall, ebreak, mret, sret, wfi, csrrw, csrrs, csrrc, csrrwi, csrrsi, csrrci };
-export type { CsrRegisterArgs, CsrImmediateArgs };

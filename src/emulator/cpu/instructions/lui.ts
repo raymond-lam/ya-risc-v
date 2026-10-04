@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+/* eslint-disable import/prefer-default-export -- named export matches call-site style */
+
 import { writeGeneralPurposeRegister, advanceProgramCounter } from '#emulator/cpu/registers';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
@@ -25,10 +27,14 @@ type LuiArgs = {
 };
 
 /** lui: rd = imm (U-type). */
-const lui = (registers: Registers, _memory: Memory, args: LuiArgs): void => {
+const lui = (
+  registers: Registers,
+  _memory: Memory,
+  args: LuiArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(registers, args.destinationRegister, args.immediate);
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { lui };
-export type { LuiArgs };

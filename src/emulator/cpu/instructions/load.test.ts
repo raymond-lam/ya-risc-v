@@ -22,6 +22,7 @@ import {
   createRegisters,
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { signedNumberToBytes } from '#utils/bytes';
 
@@ -32,21 +33,31 @@ describe('load', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 10, 32));
 
-    lb(registers, guest, {
-      destinationRegister: 1,
-      sourceRegister1: 2,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-    });
+    lb(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), -128, 32)
     );
 
-    lbu(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 2,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-    });
+    lbu(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
@@ -62,11 +73,16 @@ describe('load', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 8, 32));
 
-    lw(registers, guest, {
-      destinationRegister: 1,
-      sourceRegister1: 2,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-    });
+    lw(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 0x12345678, 32)
@@ -79,11 +95,16 @@ describe('load', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 2, new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0]));
 
-    lb(registers, guest, {
-      destinationRegister: 1,
-      sourceRegister1: 2,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-    });
+    lb(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 0, 32)
