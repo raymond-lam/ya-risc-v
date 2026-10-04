@@ -16,11 +16,16 @@
 
 import { advanceProgramCounter } from '#emulator/cpu/registers';
 import type { Registers } from '#emulator/cpu/types';
+import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
 
 /** fence: memory-ordering barrier (no-op in this emulator). */
-const fence = (registers: Registers, _memory: Memory): void => {
-  advanceProgramCounter(registers);
+const fence = (
+  registers: Registers,
+  _memory: Memory,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export default fence;

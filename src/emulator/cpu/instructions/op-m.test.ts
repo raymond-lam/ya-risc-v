@@ -23,6 +23,7 @@ import {
   readGeneralPurposeRegister,
   readProgramCounter,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -31,11 +32,16 @@ describe('op-m', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 6, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 7, 32));
-    mul(registers, testMemory(256n), {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    mul(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 42, 32)
@@ -55,11 +61,16 @@ describe('op-m', () => {
       2,
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
     );
-    mulhu(registers, testMemory(256n), {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    mulhu(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_fffen)
@@ -68,11 +79,16 @@ describe('op-m', () => {
 
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), -1, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
-    mulh(registers, testMemory(256n), {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    mulh(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 0, 32)
@@ -84,11 +100,16 @@ describe('op-m', () => {
       2,
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
     );
-    mulhsu(registers, testMemory(256n), {
-      destinationRegister: 5,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    mulhsu(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 5,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 5),
       signedNumberToBytes(new Uint8Array(8), -2, 32)
@@ -100,20 +121,30 @@ describe('op-m', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 20, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0, 32));
-    div(registers, testMemory(256n), {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    div(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), -1, 32)
     );
-    rem(registers, testMemory(256n), {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    rem(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 20, 32)
@@ -126,20 +157,30 @@ describe('op-m', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_0000n)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
-    div(registers, testMemory(256n), {
-      destinationRegister: 5,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    div(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 5,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 5),
       unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_0000n)
     );
-    rem(registers, testMemory(256n), {
-      destinationRegister: 6,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    rem(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 6,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 6),
       signedNumberToBytes(new Uint8Array(8), 0, 32)
@@ -154,20 +195,30 @@ describe('op-m', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 2, 32));
-    divu(registers, testMemory(256n), {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    divu(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       unsignedBigIntToBytes(new Uint8Array(8), 0x7fff_ffff_ffff_ffffn)
     );
-    remu(registers, testMemory(256n), {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    remu(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 1, 32)

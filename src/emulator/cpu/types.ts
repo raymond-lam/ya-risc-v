@@ -28,7 +28,7 @@ type Registers = {
   /**
    * Dense CSR file keyed by 12-bit index. Only the implemented set is guest-accessible;
    * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only. `misa` is hardwired
-   * WARL (RV64IMA + S/U). `sstatus`/`sie`/`sip` are aliases of `mstatus`/`mie`/`mip`
+   * WARL (RV64IMAC + S/U). `sstatus`/`sie`/`sip` are aliases of `mstatus`/`mie`/`mip`
    * (handled in the register helpers, not separate slots). `sscratch`/`mscratch` are ordinary
    * XLEND scratch slots. `time` mirrors CLINT `mtime` (not the CSR slot). `cycle`/`instret`
    * alias `mcycle`/`minstret` (CPI=1 retire counts; `mcountinhibit` can freeze them).

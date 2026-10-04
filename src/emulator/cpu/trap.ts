@@ -275,12 +275,12 @@ const enterTrap = (
 };
 
 /**
- * IALIGN=32: without the C extension, PC[1:0] must be 0. If misaligned, enter trap cause 0
- * with xtval = PC and return true so the run loop can skip fetch.
+ * IALIGN=16 (C): PC[0] must be 0. If misaligned, enter trap cause 0 with xtval = PC and
+ * return true so the run loop can skip fetch.
  */
 const trapIfInstructionAddressMisaligned = (registers: Registers): boolean => {
   const pc = readProgramCounter(registers);
-  if ((pc[0]! & 0x03) === 0) {
+  if ((pc[0]! & 0x01) === 0) {
     return false;
   }
   enterTrap(registers, CAUSE_INSTRUCTION_ADDRESS_MISALIGNED, copyBytes(new Uint8Array(8), pc));

@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
 import { sb, sw } from '#emulator/cpu/instructions/store';
-import { createRegisters, writeGeneralPurposeRegister } from '#emulator/cpu/registers';
+import { createRegisters, writeGeneralPurposeRegister, FOUR_BYTES } from '#emulator/cpu/registers';
 import { signedNumberToBytes } from '#utils/bytes';
 
 describe('store', () => {
@@ -27,11 +27,16 @@ describe('store', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 0xab, 32));
     writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(new Uint8Array(8), 20, 32));
-    sb(registers, guest, {
-      sourceRegister1: 4,
-      sourceRegister2: 3,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-    });
+    sb(
+      registers,
+      guest,
+      {
+        sourceRegister1: 4,
+        sourceRegister2: 3,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
     assert.equal(guest.bytes[20], 0xab);
   });
 
@@ -44,11 +49,16 @@ describe('store', () => {
       5,
       signedNumberToBytes(new Uint8Array(8), 0x44332211, 32)
     );
-    sw(registers, guest, {
-      sourceRegister1: 4,
-      sourceRegister2: 5,
-      immediate: signedNumberToBytes(new Uint8Array(8), 4, 32),
-    });
+    sw(
+      registers,
+      guest,
+      {
+        sourceRegister1: 4,
+        sourceRegister2: 5,
+        immediate: signedNumberToBytes(new Uint8Array(8), 4, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(guest.bytes.subarray(24, 28), Uint8Array.of(0x11, 0x22, 0x33, 0x44));
   });
 });

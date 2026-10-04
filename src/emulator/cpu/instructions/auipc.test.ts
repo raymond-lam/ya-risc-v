@@ -23,6 +23,7 @@ import {
   readGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
@@ -30,10 +31,15 @@ describe('auipc', () => {
   it('adds the immediate to pc', () => {
     const registers = createRegisters();
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
-    auipc(registers, testMemory(256n), {
-      destinationRegister: 1,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0x2000, 32),
-    });
+    auipc(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 1,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0x2000, 32),
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 0x3000, 32)

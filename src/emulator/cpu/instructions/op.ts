@@ -34,6 +34,7 @@ import {
   advanceProgramCounter,
 } from '#emulator/cpu/registers';
 import type { Registers } from '#emulator/cpu/types';
+import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
 
 type OpArgs = {
@@ -43,7 +44,12 @@ type OpArgs = {
 };
 
 /** add: rd = rs1 + rs2. */
-const add = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const add = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -53,11 +59,16 @@ const add = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       readGeneralPurposeRegister(registers, args.sourceRegister2)
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sub: rd = rs1 - rs2. */
-const sub = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const sub = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -67,11 +78,16 @@ const sub = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       readGeneralPurposeRegister(registers, args.sourceRegister2)
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sll: rd = rs1 << rs2. */
-const sll = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const sll = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -81,11 +97,16 @@ const sll = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** slt: rd = (rs1 < rs2) ? 1 : 0 (signed). */
-const slt = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const slt = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   setBooleanGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -94,11 +115,16 @@ const slt = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       readGeneralPurposeRegister(registers, args.sourceRegister2)
     ) < 0
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sltu: rd = (rs1 < rs2) ? 1 : 0 (unsigned). */
-const sltu = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const sltu = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   setBooleanGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -107,11 +133,16 @@ const sltu = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       readGeneralPurposeRegister(registers, args.sourceRegister2)
     ) < 0
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** xor: rd = rs1 ^ rs2. */
-const xor = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const xor = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -121,11 +152,16 @@ const xor = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       readGeneralPurposeRegister(registers, args.sourceRegister2)
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** srl: rd = rs1 >> rs2 (logical). */
-const srl = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const srl = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -135,11 +171,16 @@ const srl = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sra: rd = rs1 >> rs2 (arithmetic). */
-const sra = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const sra = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -149,11 +190,16 @@ const sra = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       byte0ToNumber(readGeneralPurposeRegister(registers, args.sourceRegister2), 0x3f)
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** or: rd = rs1 | rs2. */
-const or = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const or = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -163,11 +209,16 @@ const or = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       readGeneralPurposeRegister(registers, args.sourceRegister2)
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** and: rd = rs1 & rs2. */
-const and = (registers: Registers, _memory: Memory, args: OpArgs): void => {
+const and = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -177,7 +228,7 @@ const and = (registers: Registers, _memory: Memory, args: OpArgs): void => {
       readGeneralPurposeRegister(registers, args.sourceRegister2)
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { add, sub, sll, slt, sltu, xor, srl, sra, or, and };

@@ -90,13 +90,13 @@ const MIMPID = 0xf13; // implementation id (hardwired 0)
 const MHARTID = 0xf14; // hardware thread id (hardwired 0)
 
 /**
- * Hardwired misa: MXL=64 (bits 63:62 = 2) and extensions A, I, M, S, U.
- * Update when C (or F/D/…) lands. WARL writes are ignored (value stays fixed).
+ * Hardwired misa: MXL=64 (bits 63:62 = 2) and extensions A, C, I, M, S, U.
+ * Update when F/D/… land. WARL writes are ignored (value stays fixed).
  */
 const MISA_HARDWIRED_BYTES = unsignedBigIntToBytes(
   new Uint8Array(8),
-  // MXL=2 at [63:62] | U | S | M | I | A
-  (2n << 62n) | (1n << 20n) | (1n << 18n) | (1n << 12n) | (1n << 8n) | (1n << 0n)
+  // MXL=2 at [63:62] | U | S | M | I | C | A
+  (2n << 62n) | (1n << 20n) | (1n << 18n) | (1n << 12n) | (1n << 8n) | (1n << 2n) | (1n << 0n)
 ) as ReadonlyUint8Array;
 
 /**
@@ -159,8 +159,8 @@ const COUNTEREN_BYTE0_TM = 0x02;
 /** mcounteren/scounteren/mcountinhibit.IR — `instret` / `minstret` (byte0 bit 2). */
 const COUNTEREN_BYTE0_IR = 0x04;
 
-/** IALIGN=32: mepc/sepc WARL clears bits [1:0] on write. */
-const XEPC_IALIGN_MASK_BYTE0 = 0xfc;
+/** IALIGN=16 (C): mepc/sepc WARL clears bit [0] on write. */
+const XEPC_IALIGN_MASK_BYTE0 = 0xfe;
 
 /** mip.MTIP — machine timer interrupt pending (byte0 bit 7). */
 const MIP_BYTE0_MTIP = 0x80;
@@ -335,6 +335,8 @@ const isControlAndStatusRegisterAccessAllowed = (
 const REGISTER_ZERO_BYTES = new Uint8Array(8) as ReadonlyUint8Array;
 const REGISTER_ONE_BYTES = signedNumberToBytes(new Uint8Array(8), 1, 32) as ReadonlyUint8Array;
 
+/** Encoded instruction width as an architectural byte delta (RVC = 2, 32-bit = 4). */
+const TWO_BYTES = signedNumberToBytes(new Uint8Array(8), 2, 32) as ReadonlyUint8Array;
 const FOUR_BYTES = signedNumberToBytes(new Uint8Array(8), 4, 32) as ReadonlyUint8Array;
 
 /** Mark that the instruction about to execute should retire if it completes. */
@@ -392,7 +394,7 @@ const createRegisters = (): Registers => {
     () => new Uint8Array(8)
   );
 
-  // Hardwire mstatus.UXL/SXL to 64 and misa (RV64IMA + S/U) on reset.
+  // Hardwire mstatus.UXL/SXL to 64 and misa (RV64IMAC + S/U) on reset.
   controlAndStatus[MSTATUS]![4] = MSTATUS_BYTE4_UXL_SXL_64;
   copyBytes(controlAndStatus[MISA]!, MISA_HARDWIRED_BYTES);
 
@@ -442,8 +444,8 @@ const readProgramCounter = (registers: Registers): ReadonlyUint8Array => registe
 const setProgramCounter = (registers: Registers, value: ReadonlyUint8Array): Uint8Array =>
   copyBytes(registers.programCounter, value);
 
-const advanceProgramCounter = (registers: Registers): Uint8Array =>
-  addBytes(registers.programCounter, registers.programCounter, FOUR_BYTES);
+const advanceProgramCounter = (registers: Registers, byteLength: ReadonlyUint8Array): Uint8Array =>
+  addBytes(registers.programCounter, registers.programCounter, byteLength);
 
 /**
  * Keep mstatus.MPP legal on write. `mret` restores privilege from MPP, so a reserved
@@ -459,7 +461,7 @@ const legalizeMstatus = (mstatus: Uint8Array): Uint8Array => {
   return mstatus;
 };
 
-/** IALIGN=32: clear low 2 bits of mepc/sepc on CSR write. */
+/** IALIGN=16: clear bit 0 of mepc/sepc on CSR write. */
 const legalizeXepc = (xepc: Uint8Array): Uint8Array => {
   xepc[0]! &= XEPC_IALIGN_MASK_BYTE0;
   return xepc;
@@ -689,6 +691,7 @@ export {
   MIP,
   MSTATUS_BYTE1_MPP_MASK,
   MSTATUS_BYTE1_MPP_USER,
+  TWO_BYTES,
   FOUR_BYTES,
   createRegisters,
   readPrivilegeMode,

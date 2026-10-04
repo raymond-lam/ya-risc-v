@@ -35,48 +35,67 @@ const storeEffectiveAddress = (registers: Registers, args: StoreArgs): ReadonlyU
   );
 
 /** sb: mem[rs1+imm] = rs2[7:0]. */
-const sb = (registers: Registers, memory: Memory, args: StoreArgs): void => {
+const sb = (
+  registers: Registers,
+  memory: Memory,
+  args: StoreArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   storeBytes({
     memory,
     address: storeEffectiveAddress(registers, args),
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 1,
   });
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sh: mem[rs1+imm] = rs2[15:0]. */
-const sh = (registers: Registers, memory: Memory, args: StoreArgs): void => {
+const sh = (
+  registers: Registers,
+  memory: Memory,
+  args: StoreArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   storeBytes({
     memory,
     address: storeEffectiveAddress(registers, args),
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 2,
   });
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sw: mem[rs1+imm] = rs2[31:0]. */
-const sw = (registers: Registers, memory: Memory, args: StoreArgs): void => {
+const sw = (
+  registers: Registers,
+  memory: Memory,
+  args: StoreArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   storeBytes({
     memory,
     address: storeEffectiveAddress(registers, args),
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 4,
   });
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sd: mem[rs1+imm] = rs2. */
-const sd = (registers: Registers, memory: Memory, args: StoreArgs): void => {
+const sd = (
+  registers: Registers,
+  memory: Memory,
+  args: StoreArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   storeBytes({
     memory,
     address: storeEffectiveAddress(registers, args),
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 8,
   });
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { sb, sh, sw, sd };
-export type { StoreArgs };

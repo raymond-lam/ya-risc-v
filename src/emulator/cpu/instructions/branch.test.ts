@@ -23,6 +23,7 @@ import {
   readProgramCounter,
   setProgramCounter,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
@@ -32,11 +33,16 @@ describe('branch', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 5, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 5, 32));
-    beq(registers, testMemory(256n), {
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-      immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
-    });
+    beq(
+      registers,
+      testMemory(256n),
+      {
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
+      },
+      FOUR_BYTES
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 116);
   });
 
@@ -45,11 +51,16 @@ describe('branch', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 5, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 5, 32));
-    bne(registers, testMemory(256n), {
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-      immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
-    });
+    bne(
+      registers,
+      testMemory(256n),
+      {
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
+      },
+      FOUR_BYTES
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 104);
   });
 
@@ -58,11 +69,16 @@ describe('branch', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 200, 32));
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), -1, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0, 32));
-    blt(registers, testMemory(256n), {
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-      immediate: signedNumberToBytes(new Uint8Array(8), 8, 32),
-    });
+    blt(
+      registers,
+      testMemory(256n),
+      {
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 8, 32),
+      },
+      FOUR_BYTES
+    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 208);
   });
 });

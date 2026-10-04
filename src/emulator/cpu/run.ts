@@ -58,7 +58,8 @@ const main = async (): Promise<void> => {
       byteLength: 4,
     });
     beginInstructionRetire(registers);
-    await decode(instructionWord)(registers, memory);
+    const [execute, instructionByteLength] = decode(instructionWord);
+    await execute(registers, memory, instructionByteLength);
     commitInstructionRetire(registers);
   }
 };

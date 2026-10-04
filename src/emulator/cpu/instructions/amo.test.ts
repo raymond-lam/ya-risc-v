@@ -37,6 +37,7 @@ import {
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { CAUSE_STORE_AMO_ADDRESS_MISALIGNED } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
@@ -60,22 +61,32 @@ describe('amo', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0x99aa_bbcc_ddeeff00n)
     );
 
-    lrD(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 0,
-    });
+    lrD(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 0,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       unsignedBigIntToBytes(new Uint8Array(8), 0x8877_6655_4433_2211n)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
 
-    scD(registers, guest, {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    scD(
+      registers,
+      guest,
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 0, 32)
@@ -102,21 +113,36 @@ describe('amo', () => {
       signedNumberToBytes(new Uint8Array(8), 0x22222222, 32)
     );
 
-    lrW(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 0,
-    });
-    sw(registers, guest, {
-      sourceRegister1: 1,
-      sourceRegister2: 5,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-    });
-    scW(registers, guest, {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    lrW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 0,
+      },
+      FOUR_BYTES
+    );
+    sw(
+      registers,
+      guest,
+      {
+        sourceRegister1: 1,
+        sourceRegister2: 5,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
+    scW(
+      registers,
+      guest,
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 1, 32)
@@ -140,21 +166,36 @@ describe('amo', () => {
       signedNumberToBytes(new Uint8Array(8), 0x33333333, 32)
     );
 
-    lrW(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 0,
-    });
-    sw(registers, guest, {
-      sourceRegister1: 6,
-      sourceRegister2: 5,
-      immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-    });
-    scW(registers, guest, {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    lrW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 0,
+      },
+      FOUR_BYTES
+    );
+    sw(
+      registers,
+      guest,
+      {
+        sourceRegister1: 6,
+        sourceRegister2: 5,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
+    scW(
+      registers,
+      guest,
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 1, 32)
@@ -172,11 +213,16 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 8, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 3, 32));
 
-    amoaddW(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    amoaddW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), -2, 32)
@@ -198,11 +244,16 @@ describe('amo', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0x0102_0304_0506_0708n)
     );
 
-    amoswapD(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    amoswapD(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       unsignedBigIntToBytes(new Uint8Array(8), 0x0807_0605_0403_0201n)
@@ -223,11 +274,16 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 48, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
 
-    amominW(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    amominW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 0x7fffffff, 32)
@@ -238,11 +294,16 @@ describe('amo', () => {
     guest.bytes[49] = 0xff;
     guest.bytes[50] = 0xff;
     guest.bytes[51] = 0x7f;
-    amominuW(registers, guest, {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    amominuW(
+      registers,
+      guest,
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(guest.bytes.slice(48, 52), Uint8Array.of(0xff, 0xff, 0xff, 0x7f));
   });
 
@@ -255,11 +316,16 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 64, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
 
-    amoaddD(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    amoaddD(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
@@ -279,11 +345,16 @@ describe('amo', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 2, 32));
 
-    lrW(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 0,
-    });
+    lrW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 0,
+      },
+      FOUR_BYTES
+    );
 
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
@@ -303,11 +374,16 @@ describe('amo', () => {
       2,
       signedNumberToBytes(new Uint8Array(8), 0x11111111, 32)
     );
-    scW(registers, guest, {
-      destinationRegister: 4,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    scW(
+      registers,
+      guest,
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 1, 32)
@@ -327,11 +403,16 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 2, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
 
-    amoaddW(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    amoaddW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
 
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
@@ -355,11 +436,16 @@ describe('amo', () => {
     );
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 4, 32));
 
-    scD(registers, guest, {
-      destinationRegister: 3,
-      sourceRegister1: 1,
-      sourceRegister2: 2,
-    });
+    scD(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
 
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),

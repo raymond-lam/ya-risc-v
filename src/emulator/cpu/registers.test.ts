@@ -37,6 +37,7 @@ import {
   setSupervisorExternalInterruptPending,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
+  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -52,10 +53,10 @@ const MCYCLE = 0xb00;
 const MINSTRET = 0xb02;
 const CYCLE = 0xc00;
 
-/** Hardwired misa: MXL=64 and extensions A, I, M, S, U. */
+/** Hardwired misa: MXL=64 and extensions A, C, I, M, S, U. */
 const MISA_HARDWIRED = unsignedBigIntToBytes(
   new Uint8Array(8),
-  (2n << 62n) | (1n << 20n) | (1n << 18n) | (1n << 12n) | (1n << 8n) | (1n << 0n)
+  (2n << 62n) | (1n << 20n) | (1n << 18n) | (1n << 12n) | (1n << 8n) | (1n << 2n) | (1n << 0n)
 );
 
 const SIE = 0x104;
@@ -103,7 +104,7 @@ describe('registers', () => {
     const registers = createRegisters();
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 100, 32));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 100);
-    advanceProgramCounter(registers);
+    advanceProgramCounter(registers, FOUR_BYTES);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 104);
   });
 
@@ -114,7 +115,7 @@ describe('registers', () => {
     assert.deepEqual(snapshotControlAndStatusRegister(registers, 0x305), value);
   });
 
-  it('misa is hardwired RV64IMA+S/U and WARL-ignores writes', () => {
+  it('misa is hardwired RV64IMAC+S/U and WARL-ignores writes', () => {
     const registers = createRegisters();
     assert.deepEqual(snapshotControlAndStatusRegister(registers, MISA), MISA_HARDWIRED);
     writeControlAndStatusRegister(
@@ -407,7 +408,7 @@ describe('registers', () => {
     );
   });
 
-  it('mepc and sepc WARL clear bits below IALIGN=32', () => {
+  it('mepc and sepc WARL clear bits below IALIGN=16', () => {
     const registers = createRegisters();
     writeControlAndStatusRegister(
       registers,
@@ -421,11 +422,11 @@ describe('registers', () => {
     );
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x341),
-      signedNumberToBytes(new Uint8Array(8), 0x120, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x122, 32)
     );
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x141),
-      signedNumberToBytes(new Uint8Array(8), 0x454, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x456, 32)
     );
   });
 });

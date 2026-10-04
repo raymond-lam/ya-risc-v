@@ -44,7 +44,12 @@ type ShiftImm32Args = {
 };
 
 /** addiw: rd = sext32(rs1[31:0] + imm). */
-const addiw = (registers: Registers, _memory: Memory, args: OpImm32Args): void => {
+const addiw = (
+  registers: Registers,
+  _memory: Memory,
+  args: OpImm32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -57,11 +62,16 @@ const addiw = (registers: Registers, _memory: Memory, args: OpImm32Args): void =
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** slliw: rd = sext32(rs1[31:0] << shamt). */
-const slliw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): void => {
+const slliw = (
+  registers: Registers,
+  _memory: Memory,
+  args: ShiftImm32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -74,11 +84,16 @@ const slliw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): voi
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** srliw: rd = sext32(rs1[31:0] >> shamt) (logical). */
-const srliw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): void => {
+const srliw = (
+  registers: Registers,
+  _memory: Memory,
+  args: ShiftImm32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -91,11 +106,16 @@ const srliw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): voi
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** sraiw: rd = sext32(rs1[31:0] >> shamt) (arithmetic). */
-const sraiw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): void => {
+const sraiw = (
+  registers: Registers,
+  _memory: Memory,
+  args: ShiftImm32Args,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -114,8 +134,7 @@ const sraiw = (registers: Registers, _memory: Memory, args: ShiftImm32Args): voi
       4
     )
   );
-  advanceProgramCounter(registers);
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 export { addiw, slliw, srliw, sraiw };
-export type { OpImm32Args, ShiftImm32Args };

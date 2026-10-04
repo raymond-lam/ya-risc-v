@@ -3,14 +3,14 @@
 A RISC-V emulator written in TypeScript for Node (>= 24, ESM only). The CLI (`src/index.ts`)
 reads a raw program image, starts the emulator and Ink TUI, and wires them over streams.
 
-**Work in progress.** RV64I, RV64M, RV64A (LR/SC + AMOs), Zicsr, U/S/M privilege (`mret`/`sret`,
-`medeleg`/`mideleg`, S-mode trap CSRs), synchronous traps (`ecall`/`ebreak`/illegal →
-`mtvec`/`stvec`), interrupt delivery (`mie`/`mip`/`sie`/`sip`, run-loop take, `wfi`), a CLINT
-(`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), and a PLIC (priority/enable/claim →
-`mip.MEIP`/`SEIP`, UART source 10) are implemented; further extensions and virtual memory are
-still to come.
+**Work in progress.** RV64I, RV64M, RV64A (LR/SC + AMOs), RV64C (compressed), Zicsr, U/S/M
+privilege (`mret`/`sret`, `medeleg`/`mideleg`, S-mode trap CSRs), synchronous traps
+(`ecall`/`ebreak`/illegal → `mtvec`/`stvec`), interrupt delivery (`mie`/`mip`/`sie`/`sip`,
+run-loop take, `wfi`), a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), and a
+PLIC (priority/enable/claim → `mip.MEIP`/`SEIP`, UART source 10) are implemented; further
+extensions and virtual memory are still to come.
 Missing instructions and features are unfinished work, not deliberate scope — don't treat the
-current opcode coverage in `decode.ts` as the intended ceiling, and don't add code that assumes
+current opcode coverage in `decode/` as the intended ceiling, and don't add code that assumes
 today's ISA is all there will ever be.
 
 ## Commands
@@ -42,8 +42,10 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `0x8000_0000` (UART at `0x1000_0000`, CLINT at `0x0200_0000`, PLIC at `0x0c00_0000`), creates
   CPU + timer + terminal handles, returns an awaitable. `start` / `stop` forward to all three;
   awaiting joins all three.
-- `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, decode,
-  trap, registers, instructions (one file per opcode group).
+- `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, trap,
+  registers, instructions (one file per opcode group).
+- `src/emulator/cpu/decode/` — instruction decode package: `index` multiplexes to `decode-32`
+  (RV64IMA) or `decode-c` (RVC) from `inst[1:0]`.
 - `src/emulator/memory.ts` — guest memory leaf: `createMemory(regionSpecs)`, load/store
   dispatch, `Memory` type. Packs caller-supplied regions into one SAB; does not own
   device init or layout.
@@ -91,11 +93,16 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   architectural bytes. `signedNumberToBytes`, `unsignedNumberToBytes`, `unsignedBigIntToBytes`,
   and `low32Bytes` pack values into a caller-allocated buffer (same destination/return
   convention).
-- **Instruction functions are `(registers, memory, args) => void | Promise<void>`** and own the
-  PC: call `advanceProgramCounter` on the fall-through path, or `setProgramCounter` when
-  jumping/branching. The CPU worker `await`s each instruction (only `wfi` is async today).
-  Unused parameters are prefixed with `_`. Args go in a named type (`OpArgs`, `LoadArgs`) exported
-  alongside the instructions; `decode.ts` extracts fields and closes over them in the thunk.
+- **Instruction functions are `(registers, memory, args, instructionByteLength) => …`** and own
+  the PC: call `advanceProgramCounter(registers, instructionByteLength)` on the fall-through path,
+  or `setProgramCounter` when jumping/branching (`jal`/`jalr` use the length for the link).
+  Decode returns `[execute, instructionByteLength]` (`TWO_BYTES` for RVC, `FOUR_BYTES` for
+  32-bit architectural deltas); the run loop passes that length into the thunk. Length is always
+  required (no default) — unit tests pass `FOUR_BYTES` when calling instructions directly. The CPU
+  worker `await`s each instruction (only `wfi` is async today). Unused parameters are prefixed
+  with `_`. Args go in a named type (`OpArgs`, `LoadArgs`) alongside the instructions — export the
+  type only when another production module needs it; `decode/` extracts fields and closes over
+  them in the thunk.
 - **Hardwired x0 drops writes in the register helpers.** Identity CSRs
   (`mvendorid`, `marchid`, `mimpid`, `mhartid`) are typed as `ReadonlyUint8Array`; the write
   helper still ignores stores to those slots as a safety net. Guest CSR instructions must not
@@ -137,7 +144,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   index or an access above the current privilege raises illegal-instruction. Writes to read-only
   CSRs also illegal; `csrrs`/`csrrc` with `rs1` = `x0` and `csrrsi`/`csrrci` with a zero immediate
   are read-only and may touch identity CSRs. `sstatus`/`sie`/`sip` are masked aliases of
-  `mstatus`/`mie`/`mip`; `misa` is hardwired WARL (RV64IMA + S/U); `mstatus` MPP is WARL
+  `mstatus`/`mie`/`mip`; `misa` is hardwired WARL (RV64IMAC + S/U); `mstatus` MPP is WARL
   (reserved → U); `mie`/`mideleg` WARL to implemented interrupt bits; `mip` WARL preserves
   hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`. `time` mirrors CLINT `mtime`; `cycle`/`instret` alias
   `mcycle`/`minstret` and advance together on retire (CPI=1) unless `mcountinhibit` freezes CY/IR;
@@ -149,9 +156,10 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 1. Add or extend a file in `src/emulator/cpu/instructions/`, keeping the `/** mnemonic: rd = … */`
    doc comment. A new extension gets its own files under the same one-file-per-opcode-group
-   convention.
-2. Add the opcode/funct3/funct7 constants to `decode.ts` (with a trailing comment) and wire the case,
-   falling through to `illegalInstruction` for unmatched encodings.
+   convention. RVC expands in `decode/decode-c.ts` onto those same instruction functions; the
+   multiplex passes `TWO_BYTES` so PC/link advance by halfword.
+2. Wire 32-bit encodings in `decode/decode-32.ts` (opcode/funct3/funct7 constants with trailing
+   comments; fall through to illegal). Wire RVC in `decode/decode-c.ts` by quadrant.
 3. Add a colocated `*.test.ts` covering the value written _and_ the resulting PC.
 
 ## Style
@@ -175,6 +183,10 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 - Arrow functions only — no `function` expressions or declarations, and no `export default function`.
 - Modules with a single export use `export default`; otherwise list named exports in one block at the
   bottom of the file, with `export type { … }` after it.
+- **Export only what production code needs.** Do not export helpers, types, or constants solely so
+  tests can import them (tests may deep-import private modules, or share fixtures via `test/`). Do
+  not leave unused exports. Prefer keeping a symbol module-private until a real non-test caller
+  needs it.
 - No `any`, no `==`, no `@ts-` comments. Any `eslint-disable` needs a `-- reason` explanation.
 - Bitwise operators and typed-array indexing are expected here; those rules are off on purpose.
 - Every file in `src/` opens with the Apache 2.0 header (in `index.ts` it follows the shebang). Copy

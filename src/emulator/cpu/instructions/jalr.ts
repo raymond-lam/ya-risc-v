@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
+/* eslint-disable import/prefer-default-export -- named export matches call-site style */
+
 import { addBytes } from '#utils/bytes';
 import {
   writeGeneralPurposeRegister,
   readGeneralPurposeRegister,
   readProgramCounter,
   setProgramCounter,
-  FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
@@ -32,8 +33,13 @@ type JalrArgs = {
   immediate: ReadonlyUint8Array;
 };
 
-/** jalr: rd = pc + 4; pc = (rs1 + imm) & ~1 (I-type). */
-const jalr = (registers: Registers, _memory: Memory, args: JalrArgs): void => {
+/** jalr: rd = pc + instruction length; pc = (rs1 + imm) & ~1 (I-type). */
+const jalr = (
+  registers: Registers,
+  _memory: Memory,
+  args: JalrArgs,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
   const target = addBytes(
     new Uint8Array(8),
     readGeneralPurposeRegister(registers, args.sourceRegister1),
@@ -43,10 +49,9 @@ const jalr = (registers: Registers, _memory: Memory, args: JalrArgs): void => {
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
-    addBytes(new Uint8Array(8), readProgramCounter(registers), FOUR_BYTES)
+    addBytes(new Uint8Array(8), readProgramCounter(registers), instructionByteLength)
   );
   setProgramCounter(registers, target);
 };
 
 export { jalr };
-export type { JalrArgs };
