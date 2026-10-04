@@ -54,4 +54,3 @@ const findOverlappingPair = (
 };
 
 export { findOverlappingPair, rangesOverlap };
-export type { NamedRange };

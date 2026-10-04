@@ -110,4 +110,4 @@ class Terminal implements TerminalHandle {
 const create = (options: TerminalCreateOptions): TerminalHandle => new Terminal(options);
 
 export { create };
-export type { TerminalCreateOptions, TerminalHandle } from '#emulator/terminal/types';
+export type { TerminalHandle } from '#emulator/terminal/types';

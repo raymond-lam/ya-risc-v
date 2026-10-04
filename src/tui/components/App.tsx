@@ -61,4 +61,3 @@ const App = ({ stdin, stdout, onShutdown }: AppProps) => {
 };
 
 export default App;
-export type { AppProps };

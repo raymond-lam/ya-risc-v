@@ -14,7 +14,23 @@
  * limitations under the License.
  */
 
+import {
+  CLINT_GUEST_BYTE_LENGTH,
+  CLINT_HOST_BYTE_LENGTH,
+  CLINT_REGION_ID,
+  initializeClint,
+} from '#emulator/clint';
+import { IRQ_LEVEL_HOST_BYTE_LENGTH, IRQ_LEVEL_REGION_ID } from '#emulator/irq-level';
 import { createMemory, type Memory } from '#emulator/memory';
+import {
+  PLIC_GUEST_BYTE_LENGTH,
+  PLIC_HOST_BYTE_LENGTH,
+  PLIC_REGION_ID,
+  initializePlic,
+} from '#emulator/plic';
+import { RAM_REGION_ID } from '#emulator/ram';
+import { RESERVATION_HOST_BYTE_LENGTH, RESERVATION_REGION_ID } from '#emulator/reservation';
+import { UART_GUEST_BYTE_LENGTH, UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -33,13 +49,77 @@ const PLIC_BASE_ADDRESS = unsignedBigIntToBytes(
   0x0c00_0000n
 ) as ReadonlyUint8Array;
 
-const createTestMemory = (ramSize: bigint): Memory =>
-  createMemory({
-    ramBaseAddress: RAM_BASE_ADDRESS,
-    ramSize,
-    uartBaseAddress: UART_BASE_ADDRESS,
-    clintBaseAddress: CLINT_BASE_ADDRESS,
-    plicBaseAddress: PLIC_BASE_ADDRESS,
-  });
+/** Standard machine region list (pack order: ram → uart → clint → plic → reservation → irqLevel). */
+const machineRegionSpecs = ({
+  ramBaseAddress,
+  ramSize,
+  uartBaseAddress,
+  clintBaseAddress,
+  plicBaseAddress,
+}: {
+  ramBaseAddress: ReadonlyUint8Array;
+  ramSize: bigint;
+  uartBaseAddress: ReadonlyUint8Array;
+  clintBaseAddress: ReadonlyUint8Array;
+  plicBaseAddress: ReadonlyUint8Array;
+}): Parameters<typeof createMemory>[0] => {
+  if (ramSize < 0n) {
+    throw new RangeError('ramSize must be non-negative.');
+  }
+  return [
+    {
+      id: RAM_REGION_ID,
+      hostByteLength: ramSize,
+      guestAddress: ramBaseAddress,
+      guestByteLength: ramSize,
+    },
+    {
+      id: UART_REGION_ID,
+      hostByteLength: UART_HOST_BYTE_LENGTH,
+      guestAddress: uartBaseAddress,
+      guestByteLength: UART_GUEST_BYTE_LENGTH,
+    },
+    {
+      id: CLINT_REGION_ID,
+      hostByteLength: CLINT_HOST_BYTE_LENGTH,
+      guestAddress: clintBaseAddress,
+      guestByteLength: CLINT_GUEST_BYTE_LENGTH,
+    },
+    {
+      id: PLIC_REGION_ID,
+      hostByteLength: PLIC_HOST_BYTE_LENGTH,
+      guestAddress: plicBaseAddress,
+      guestByteLength: PLIC_GUEST_BYTE_LENGTH,
+    },
+    {
+      id: RESERVATION_REGION_ID,
+      hostByteLength: RESERVATION_HOST_BYTE_LENGTH,
+      guestAddress: null,
+      guestByteLength: 0n,
+    },
+    {
+      id: IRQ_LEVEL_REGION_ID,
+      hostByteLength: IRQ_LEVEL_HOST_BYTE_LENGTH,
+      guestAddress: null,
+      guestByteLength: 0n,
+    },
+  ];
+};
 
+const createTestMemory = (ramSize: bigint): Memory => {
+  const memory = createMemory(
+    machineRegionSpecs({
+      ramBaseAddress: RAM_BASE_ADDRESS,
+      ramSize,
+      uartBaseAddress: UART_BASE_ADDRESS,
+      clintBaseAddress: CLINT_BASE_ADDRESS,
+      plicBaseAddress: PLIC_BASE_ADDRESS,
+    })
+  );
+  initializeClint(memory);
+  initializePlic(memory);
+  return memory;
+};
+
+export { machineRegionSpecs };
 export default createTestMemory;

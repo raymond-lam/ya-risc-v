@@ -14,13 +14,29 @@
  * limitations under the License.
  */
 
-import { create as createClint, type ClintHandle } from '#emulator/clint';
+import {
+  CLINT_GUEST_BYTE_LENGTH,
+  CLINT_HOST_BYTE_LENGTH,
+  CLINT_REGION_ID,
+  initializeClint,
+} from '#emulator/clint';
 import { create as createCpu, type CpuHandle } from '#emulator/cpu';
-import { createMemory, ramAddressToHostIndex } from '#emulator/memory';
-import type { ReadonlyUint8Array } from '#types';
+import { IRQ_LEVEL_HOST_BYTE_LENGTH, IRQ_LEVEL_REGION_ID } from '#emulator/irq-level';
+import { createMemory } from '#emulator/memory';
+import {
+  initializePlic,
+  PLIC_GUEST_BYTE_LENGTH,
+  PLIC_HOST_BYTE_LENGTH,
+  PLIC_REGION_ID,
+} from '#emulator/plic';
+import { RAM_REGION_ID, storeImageToRam } from '#emulator/ram';
+import { RESERVATION_HOST_BYTE_LENGTH, RESERVATION_REGION_ID } from '#emulator/reservation';
 import { create as createTerminal, type TerminalHandle } from '#emulator/terminal';
-import { unsignedBigIntToBytes } from '#utils/bytes';
+import { create as createTimer, type TimerHandle } from '#emulator/timer';
+import { UART_GUEST_BYTE_LENGTH, UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
 import type { EmulatorCreateOptions, EmulatorHandle } from '#emulator/types';
+import type { ReadonlyUint8Array } from '#types';
+import { unsignedBigIntToBytes } from '#utils/bytes';
 
 /** Default guest DRAM base address. */
 const DEFAULT_RAM_BASE = unsignedBigIntToBytes(
@@ -52,7 +68,7 @@ class Emulator implements EmulatorHandle {
 
   readonly #cpu: CpuHandle;
 
-  readonly #clint: ClintHandle;
+  readonly #timer: TimerHandle;
 
   readonly #terminal: TerminalHandle;
 
@@ -73,35 +89,65 @@ class Emulator implements EmulatorHandle {
     const uartBaseAddress = DEFAULT_UART_BASE;
     const clintBaseAddress = DEFAULT_CLINT_BASE;
     const plicBaseAddress = DEFAULT_PLIC_BASE;
-    const memory = createMemory({
-      ramBaseAddress,
-      ramSize,
-      uartBaseAddress,
-      clintBaseAddress,
-      plicBaseAddress,
-    });
-    const dramHostIndex = ramAddressToHostIndex(memory, ramBaseAddress);
-    if (dramHostIndex === null) {
-      throw new RangeError('RAM base address is not mapped.');
-    }
-    memory.bytes.set(image, dramHostIndex);
+    // Pack order: ram → uart → clint → plic → reservation → irqLevel
+    const memory = createMemory([
+      {
+        id: RAM_REGION_ID,
+        hostByteLength: ramSize,
+        guestAddress: ramBaseAddress,
+        guestByteLength: ramSize,
+      },
+      {
+        id: UART_REGION_ID,
+        hostByteLength: UART_HOST_BYTE_LENGTH,
+        guestAddress: uartBaseAddress,
+        guestByteLength: UART_GUEST_BYTE_LENGTH,
+      },
+      {
+        id: CLINT_REGION_ID,
+        hostByteLength: CLINT_HOST_BYTE_LENGTH,
+        guestAddress: clintBaseAddress,
+        guestByteLength: CLINT_GUEST_BYTE_LENGTH,
+      },
+      {
+        id: PLIC_REGION_ID,
+        hostByteLength: PLIC_HOST_BYTE_LENGTH,
+        guestAddress: plicBaseAddress,
+        guestByteLength: PLIC_GUEST_BYTE_LENGTH,
+      },
+      {
+        id: RESERVATION_REGION_ID,
+        hostByteLength: RESERVATION_HOST_BYTE_LENGTH,
+        guestAddress: null,
+        guestByteLength: 0n,
+      },
+      {
+        id: IRQ_LEVEL_REGION_ID,
+        hostByteLength: IRQ_LEVEL_HOST_BYTE_LENGTH,
+        guestAddress: null,
+        guestByteLength: 0n,
+      },
+    ]);
+    initializeClint(memory);
+    initializePlic(memory);
+    storeImageToRam(memory, image);
 
     const cpu = createCpu({
       memory,
       resetPc: ramBaseAddress,
     });
-    const clint = createClint({ memory });
+    const timer = createTimer({ memory });
     const terminal = createTerminal({
       memory,
       stdin,
       stdout,
     });
     this.#cpu = cpu;
-    this.#clint = clint;
+    this.#timer = timer;
     this.#terminal = terminal;
     this.#done = (async () => {
       try {
-        await Promise.all([cpu, clint, terminal]);
+        await Promise.all([cpu, timer, terminal]);
       } finally {
         this.stop();
       }
@@ -116,7 +162,7 @@ class Emulator implements EmulatorHandle {
       throw new Error('Already started.');
     }
     this.#started = true;
-    this.#clint.start();
+    this.#timer.start();
     this.#cpu.start();
     this.#terminal.start();
   };
@@ -130,7 +176,7 @@ class Emulator implements EmulatorHandle {
     }
     this.#stopped = true;
     this.#cpu.stop();
-    this.#clint.stop();
+    this.#timer.stop();
     this.#terminal.stop();
   };
 
@@ -155,4 +201,4 @@ class Emulator implements EmulatorHandle {
 const create = (options: EmulatorCreateOptions): EmulatorHandle => new Emulator(options);
 
 export { create };
-export type { EmulatorCreateOptions, EmulatorHandle } from '#emulator/types';
+export type { EmulatorHandle } from '#emulator/types';

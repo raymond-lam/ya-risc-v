@@ -34,17 +34,15 @@ import {
   writeControlAndStatusRegister,
 } from '#emulator/cpu/registers';
 import { takeInterruptIfAny } from '#emulator/cpu/trap';
+import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
+import { IRQ_LEVEL_MSIP, loadIrqLevel, waitIrqLevel } from '#emulator/irq-level';
+import { storeBytes, type Memory } from '#emulator/memory';
 import {
-  isClintMachineSoftwarePending,
-  isClintMachineTimerPending,
   isPlicMachineExternalPending,
   isPlicSupervisorExternalPending,
-  loadHartIrqLevel,
-  storeBytes,
-  waitHartWake,
-  type Memory,
-} from '#emulator/memory';
-import { PLIC_SOURCE_UART, setPlicSourcePending } from '#emulator/memory/plic';
+  PLIC_SOURCE_UART,
+  setPlicSourcePending,
+} from '#emulator/plic';
 import createTestMemory from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
@@ -65,9 +63,6 @@ const MSTATUS_MIE = 0x08;
 const CLINT_MSIP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n) as ReadonlyUint8Array;
 const CLINT_MTIMECMP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_4000n) as ReadonlyUint8Array;
 const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as ReadonlyUint8Array;
-
-/** Hart-wake MSIP level bit (matches `hart-wake.ts`). */
-const IRQ_LEVEL_MSIP = 1 << 3;
 
 const interruptCauseBytes = (code: number): Uint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), (1n << 63n) | BigInt(code));
@@ -209,13 +204,13 @@ describe('device wire → mip → takeInterruptIfAny', () => {
   });
 });
 
-describe('wfi hart-wake notify', () => {
-  it('waitHartWake resolves when CLINT msip publishes a level change', async () => {
+describe('wfi irq-level notify', () => {
+  it('waitIrqLevel resolves when CLINT msip publishes a level change', async () => {
     const memory = createTestMemory(256n);
-    const fromLevel = loadHartIrqLevel(memory);
+    const fromLevel = loadIrqLevel(memory);
     assert.equal(fromLevel & IRQ_LEVEL_MSIP, 0);
 
-    const waiting = waitHartWake(memory, fromLevel);
+    const waiting = waitIrqLevel(memory, fromLevel);
     await delay(20);
     storeBytes({
       memory,
@@ -224,7 +219,7 @@ describe('wfi hart-wake notify', () => {
       byteLength: 4,
     });
     await waiting;
-    assert.equal(loadHartIrqLevel(memory) & IRQ_LEVEL_MSIP, IRQ_LEVEL_MSIP);
+    assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_MSIP, IRQ_LEVEL_MSIP);
   });
 
   it('wfi resumes after a deferred CLINT msip assert notifies the wake word', async () => {

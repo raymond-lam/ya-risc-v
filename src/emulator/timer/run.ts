@@ -16,18 +16,18 @@
 
 import { parentPort, workerData } from 'node:worker_threads';
 import { setTimeout as delay } from 'node:timers/promises';
-import { tickClint } from '#emulator/memory';
-import type { ClintWorkerData } from '#emulator/clint/types';
+import { tickClint } from '#emulator/clint';
+import type { TimerWorkerData } from '#emulator/timer/types';
 
 /** How often the timebase domain wakes to advance `mtime` and the timer wire. */
-const CLINT_TICK_PERIOD_MS = 1;
+const TIMER_TICK_PERIOD_MS = 1;
 
 const main = async (): Promise<void> => {
-  const { memory } = workerData as ClintWorkerData;
+  const { memory } = workerData as TimerWorkerData;
   // Independent clock domain: keep ticking until the host terminates us.
   for (;;) {
     tickClint(memory);
-    await delay(CLINT_TICK_PERIOD_MS);
+    await delay(TIMER_TICK_PERIOD_MS);
   }
 };
 

@@ -17,30 +17,59 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  createMemory,
+  CLINT_REGION_ID,
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
-  isPlicMachineExternalPending,
+} from '#emulator/clint';
+import { IRQ_LEVEL_REGION_ID } from '#emulator/irq-level';
+import {
+  atomicCompareExchangeBytes,
+  atomicLoadBytes,
+  atomicStoreBytes,
+  createMemory,
   loadBytes,
-  popUartTransmit,
-  pushUartReceive,
   storeBytes,
   type Memory,
 } from '#emulator/memory';
-import { PLIC_SOURCE_UART, setPlicSourcePending } from '#emulator/memory/plic';
-import createTestMemory from '#test/guest-memory';
+import {
+  isPlicMachineExternalPending,
+  PLIC_REGION_ID,
+  PLIC_SOURCE_UART,
+  setPlicSourcePending,
+} from '#emulator/plic';
+import { RAM_REGION_ID } from '#emulator/ram';
+import { RESERVATION_REGION_ID } from '#emulator/reservation';
+import { popUartTransmit, pushUartReceive, UART_REGION_ID } from '#emulator/uart';
+import { bigIntAsNumber } from '#utils/int';
+import createTestMemory, { machineRegionSpecs } from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
-import { signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
+import { compareUnsignedBytes, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
-/** Snapshot the `wfi` wake Int32 (test observation only). */
-const readHartWake = (memory: Memory): number =>
-  Atomics.load(new Int32Array(memory.bytes.buffer, memory.hartWakeHostIndex, 1), 0);
+/** Snapshot the irq-level Int32 (test observation only). */
+const readIrqLevel = (memory: Memory): number => {
+  const region = memory.regions.get(IRQ_LEVEL_REGION_ID);
+  assert.ok(region);
+  return Atomics.load(new Int32Array(memory.bytes.buffer, bigIntAsNumber(region.hostIndex), 1), 0);
+};
+
+/** Host offset of the UART TX-wake Int32 (matches `#emulator/uart/region`). */
+const UART_TX_WAKE_HOST_OFFSET = 44;
 
 /** Snapshot the UART TX wake Int32 (test observation only). */
-const readUartTxWake = (memory: Memory): number =>
-  Atomics.load(new Int32Array(memory.bytes.buffer, memory.uartTxWakeHostIndex, 1), 0);
+const readUartTxWake = (memory: Memory): number => {
+  const region = memory.regions.get(UART_REGION_ID);
+  assert.ok(region);
+  return Atomics.load(
+    new Int32Array(
+      memory.bytes.buffer,
+      bigIntAsNumber(region.hostIndex) + UART_TX_WAKE_HOST_OFFSET,
+      1
+    ),
+    0
+  );
+};
 
-/** Hart wake level bits — local to tests (match `hart-wake.ts`). */
+/** IRQ level bits — local to tests (match `#emulator/irq-level`). */
 const IRQ_LEVEL_MSIP = 1 << 3;
 const IRQ_LEVEL_MEIP = 1 << 11;
 
@@ -58,6 +87,9 @@ const UART_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n) as Read
 const CLINT_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n) as ReadonlyUint8Array;
 const PLIC_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x0c00_0000n) as ReadonlyUint8Array;
 const HIGH_RAM_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000n) as ReadonlyUint8Array;
+
+const guest = (address: bigint): ReadonlyUint8Array =>
+  unsignedBigIntToBytes(new Uint8Array(8), address) as ReadonlyUint8Array;
 
 const uartAddress = (registerIndex: number): ReadonlyUint8Array => {
   const address = new Uint8Array(UART_BASE);
@@ -99,32 +131,63 @@ const setUartPlicPending = (memory: Memory, pending: boolean): void => {
 };
 
 describe('memory', () => {
-  it('createMemory packs RAM with UART state into one SharedArrayBuffer', () => {
+  it('createMemory packs 8-byte-aligned regions into one SharedArrayBuffer', () => {
     const memory = createTestMemory(64n);
-    assert.equal(memory.ramSize, 64n);
-    assert.equal(memory.uartRegistersHostIndex, 64);
-    assert.equal(memory.uartMetaHostIndex, 72);
-    assert.equal(memory.clintHostBaseIndex % 8, 0);
-    assert.ok(memory.bytes.byteLength > memory.clintHostBaseIndex);
-    assert.ok(memory.plicHostBaseIndex >= memory.clintHostBaseIndex + 32);
-    assert.equal(memory.plicHostBaseIndex % 4, 0);
-    assert.equal(memory.uartTxWakeHostIndex % 4, 0);
-    assert.ok(memory.uartTxWakeHostIndex >= memory.uartTxDataHostIndex);
-    assert.ok(memory.clintHostBaseIndex >= memory.uartTxWakeHostIndex + 4);
-    assert.equal(memory.hartWakeHostIndex % 4, 0);
-    assert.ok(memory.hartWakeHostIndex >= memory.plicHostBaseIndex);
-    assert.equal(memory.reservationMonitorHostIndex % 8, 0);
-    assert.ok(memory.reservationMonitorHostIndex >= memory.plicHostBaseIndex);
-    assert.ok(memory.hartWakeHostIndex >= memory.reservationMonitorHostIndex);
+    const ram = memory.regions.get(RAM_REGION_ID);
+    const uart = memory.regions.get(UART_REGION_ID);
+    const clint = memory.regions.get(CLINT_REGION_ID);
+    const plic = memory.regions.get(PLIC_REGION_ID);
+    const reservation = memory.regions.get(RESERVATION_REGION_ID);
+    const irqLevel = memory.regions.get(IRQ_LEVEL_REGION_ID);
+    assert.ok(ram);
+    assert.ok(uart);
+    assert.ok(clint);
+    assert.ok(plic);
+    assert.ok(reservation);
+    assert.ok(irqLevel);
+    assert.equal(ram.hostIndex, 0n);
+    assert.equal(ram.hostByteLength, 64n);
+    assert.equal(ram.guestByteLength, 64n);
+    assert.equal(uart.hostIndex, 64n);
+    assert.equal(uart.guestByteLength, 8n);
+    assert.ok(uart.hostByteLength > uart.guestByteLength);
+    assert.equal(clint.hostIndex % 8n, 0n);
+    assert.ok(clint.hostIndex >= uart.hostIndex + uart.hostByteLength);
+    assert.equal(plic.hostIndex % 8n, 0n);
+    assert.ok(plic.hostIndex >= clint.hostIndex + clint.hostByteLength);
+    assert.equal(reservation.hostIndex % 8n, 0n);
+    assert.equal(reservation.guestAddress, null);
+    assert.ok(reservation.hostIndex >= plic.hostIndex + plic.hostByteLength);
+    assert.equal(irqLevel.hostIndex % 8n, 0n);
+    assert.equal(irqLevel.guestAddress, null);
+    assert.ok(irqLevel.hostIndex >= reservation.hostIndex + reservation.hostByteLength);
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
+    assert.deepEqual(
+      memory.regionsByBaseGuestAddress.map(([, id]) => id),
+      [RAM_REGION_ID, CLINT_REGION_ID, PLIC_REGION_ID, UART_REGION_ID]
+    );
+    for (let index = 1; index < memory.regionsByBaseGuestAddress.length; index += 1) {
+      const previous = memory.regionsByBaseGuestAddress[index - 1];
+      const current = memory.regionsByBaseGuestAddress[index];
+      assert.ok(previous);
+      assert.ok(current);
+      assert.ok(compareUnsignedBytes(previous[0], current[0]) < 0);
+    }
   });
 
-  it('createMemory 8-byte-aligns CLINT after a misaligned UART packing end', () => {
-    // ramSize 1 → UART packing ends at an index ≡ 4 (mod 8); CLINT must pad to 8.
+  it('createMemory 8-byte-aligns the next region after a short RAM slab', () => {
+    // ramSize 1 → next region hostIndex pads from 1 to 8.
     const memory = createTestMemory(1n);
-    assert.equal(memory.uartRegistersHostIndex, 1);
-    assert.equal(memory.clintHostBaseIndex % 8, 0);
-    assert.ok(memory.clintHostBaseIndex > memory.uartTxDataHostIndex);
+    const ram = memory.regions.get(RAM_REGION_ID);
+    const uart = memory.regions.get(UART_REGION_ID);
+    const clint = memory.regions.get(CLINT_REGION_ID);
+    assert.ok(ram);
+    assert.ok(uart);
+    assert.ok(clint);
+    assert.equal(ram.hostByteLength, 1n);
+    assert.equal(uart.hostIndex, 8n);
+    assert.equal(clint.hostIndex % 8n, 0n);
+    assert.ok(clint.hostIndex > uart.hostIndex);
   });
 
   it('storeBytes and loadBytes round-trip in RAM', () => {
@@ -181,13 +244,15 @@ describe('memory', () => {
 
   it('maps RAM at a non-zero base without allocating the guest physical-address hole', () => {
     const ramSize = 64n;
-    const memory = createMemory({
-      ramBaseAddress: HIGH_RAM_BASE,
-      ramSize,
-      uartBaseAddress: UART_BASE,
-      clintBaseAddress: CLINT_BASE,
-      plicBaseAddress: PLIC_BASE,
-    });
+    const memory = createMemory(
+      machineRegionSpecs({
+        ramBaseAddress: HIGH_RAM_BASE,
+        ramSize,
+        uartBaseAddress: UART_BASE,
+        clintBaseAddress: CLINT_BASE,
+        plicBaseAddress: PLIC_BASE,
+      })
+    );
 
     // Guest physical address 0x8000_0000 + 4 → host index 4
     const ramAddress = new Uint8Array(HIGH_RAM_BASE);
@@ -214,53 +279,124 @@ describe('memory', () => {
   it('rejects a UART window that overlaps RAM', () => {
     assert.throws(
       () =>
-        createMemory({
-          ramBaseAddress: RAM_BASE,
-          ramSize: 0x1000_0000n + 1n,
-          uartBaseAddress: UART_BASE,
-          clintBaseAddress: CLINT_BASE,
-          plicBaseAddress: PLIC_BASE,
-        }),
-      /overlaps RAM/
+        createMemory(
+          machineRegionSpecs({
+            ramBaseAddress: RAM_BASE,
+            ramSize: 0x1000_0000n + 1n,
+            uartBaseAddress: UART_BASE,
+            clintBaseAddress: CLINT_BASE,
+            plicBaseAddress: PLIC_BASE,
+          })
+        ),
+      { message: `${RAM_REGION_ID} window overlaps ${UART_REGION_ID}.` }
     );
   });
 
   it('allows large RAM when UART sits below a high RAM base', () => {
-    const memory = createMemory({
-      ramBaseAddress: HIGH_RAM_BASE,
-      ramSize: 0x1000_0000n + 1n,
-      uartBaseAddress: UART_BASE,
-      clintBaseAddress: CLINT_BASE,
-      plicBaseAddress: PLIC_BASE,
-    });
+    const memory = createMemory(
+      machineRegionSpecs({
+        ramBaseAddress: HIGH_RAM_BASE,
+        ramSize: 0x1000_0000n + 1n,
+        uartBaseAddress: UART_BASE,
+        clintBaseAddress: CLINT_BASE,
+        plicBaseAddress: PLIC_BASE,
+      })
+    );
     assert.ok(memory.bytes.byteLength > Number(0x1000_0000n + 1n));
   });
 
   it('rejects a CLINT window that overlaps RAM', () => {
     assert.throws(
       () =>
-        createMemory({
-          ramBaseAddress: CLINT_BASE,
-          ramSize: 0xc000n,
-          uartBaseAddress: UART_BASE,
-          clintBaseAddress: CLINT_BASE,
-          plicBaseAddress: PLIC_BASE,
-        }),
-      /CLINT window overlaps RAM/
+        createMemory(
+          machineRegionSpecs({
+            ramBaseAddress: CLINT_BASE,
+            ramSize: 0xc000n,
+            uartBaseAddress: UART_BASE,
+            clintBaseAddress: CLINT_BASE,
+            plicBaseAddress: PLIC_BASE,
+          })
+        ),
+      { message: `${RAM_REGION_ID} window overlaps ${CLINT_REGION_ID}.` }
     );
   });
 
   it('rejects a PLIC window that overlaps RAM', () => {
     assert.throws(
       () =>
-        createMemory({
-          ramBaseAddress: PLIC_BASE,
-          ramSize: 0x201008n,
-          uartBaseAddress: UART_BASE,
-          clintBaseAddress: CLINT_BASE,
-          plicBaseAddress: PLIC_BASE,
-        }),
-      /PLIC window overlaps RAM/
+        createMemory(
+          machineRegionSpecs({
+            ramBaseAddress: PLIC_BASE,
+            ramSize: 0x201008n,
+            uartBaseAddress: UART_BASE,
+            clintBaseAddress: CLINT_BASE,
+            plicBaseAddress: PLIC_BASE,
+          })
+        ),
+      { message: `${RAM_REGION_ID} window overlaps ${PLIC_REGION_ID}.` }
+    );
+  });
+
+  it('rejects duplicate region ids', () => {
+    assert.throws(
+      () =>
+        createMemory([
+          {
+            id: 'dup',
+            hostByteLength: 8n,
+            guestAddress: guest(0n),
+            guestByteLength: 8n,
+          },
+          {
+            id: 'dup',
+            hostByteLength: 8n,
+            guestAddress: guest(8n),
+            guestByteLength: 8n,
+          },
+        ]),
+      /Duplicate memory region ID/
+    );
+  });
+
+  it('rejects a negative hostByteLength', () => {
+    assert.throws(
+      () =>
+        createMemory([
+          {
+            id: 'bad',
+            hostByteLength: -1n,
+            guestAddress: guest(0n),
+            guestByteLength: 0n,
+          },
+        ]),
+      /hostByteLength must be non-negative/
+    );
+  });
+
+  it('sorts regionsByBaseGuestAddress by guest base (not pack order)', () => {
+    const memory = createMemory([
+      {
+        id: 'high',
+        hostByteLength: 8n,
+        guestAddress: guest(0x2000n),
+        guestByteLength: 8n,
+      },
+      {
+        id: 'low',
+        hostByteLength: 8n,
+        guestAddress: guest(0x1000n),
+        guestByteLength: 8n,
+      },
+      {
+        id: 'hostOnly',
+        hostByteLength: 8n,
+        guestAddress: null,
+        guestByteLength: 0n,
+      },
+    ]);
+    assert.deepEqual(
+      memory.regionsByBaseGuestAddress.map(([, id]) => id),
+      ['low', 'high']
     );
   });
 });
@@ -541,16 +677,16 @@ describe('clint', () => {
     assert.equal(isClintMachineSoftwarePending(memory), false);
   });
 
-  it('msip 0→1 publishes MSIP into the hart-wake level word for wfi', () => {
+  it('msip 0→1 publishes MSIP into the irq-level word for wfi', () => {
     const memory = createTestMemory(64n);
-    assert.equal(readHartWake(memory) & IRQ_LEVEL_MSIP, 0);
+    assert.equal(readIrqLevel(memory) & IRQ_LEVEL_MSIP, 0);
     storeBytes({
       memory,
       address: clintAddress(0n),
       source: new Uint8Array([1, 0, 0, 0]),
       byteLength: 4,
     });
-    assert.equal(readHartWake(memory) & IRQ_LEVEL_MSIP, IRQ_LEVEL_MSIP);
+    assert.equal(readIrqLevel(memory) & IRQ_LEVEL_MSIP, IRQ_LEVEL_MSIP);
     // Level stays asserted: word unchanged.
     storeBytes({
       memory,
@@ -558,7 +694,7 @@ describe('clint', () => {
       source: new Uint8Array([1, 0, 0, 0]),
       byteLength: 4,
     });
-    assert.equal(readHartWake(memory) & IRQ_LEVEL_MSIP, IRQ_LEVEL_MSIP);
+    assert.equal(readIrqLevel(memory) & IRQ_LEVEL_MSIP, IRQ_LEVEL_MSIP);
   });
 
   it('asserts pending when mtime is written at or above mtimecmp', () => {
@@ -714,20 +850,91 @@ describe('plic', () => {
     assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 0);
   });
 
-  it('source pending publishes MEIP into the hart-wake level word', () => {
+  it('source pending publishes MEIP into the irq-level word', () => {
     const memory = createTestMemory(64n);
     storePlicUint32(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
     storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
-    assert.equal(readHartWake(memory) & IRQ_LEVEL_MEIP, 0);
+    assert.equal(readIrqLevel(memory) & IRQ_LEVEL_MEIP, 0);
     setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
-    assert.equal(readHartWake(memory) & IRQ_LEVEL_MEIP, IRQ_LEVEL_MEIP);
+    assert.equal(readIrqLevel(memory) & IRQ_LEVEL_MEIP, IRQ_LEVEL_MEIP);
     setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
-    assert.equal(readHartWake(memory) & IRQ_LEVEL_MEIP, IRQ_LEVEL_MEIP);
+    assert.equal(readIrqLevel(memory) & IRQ_LEVEL_MEIP, IRQ_LEVEL_MEIP);
   });
 
   it('pending is not CSR/MMIO-writable', () => {
     const memory = createTestMemory(64n);
     storePlicUint32(memory, 0x1000n, 0xffff_ffff);
     assert.equal(loadPlicUint32(memory, 0x1000n), 0);
+  });
+});
+
+describe('atomic load/store/cas', () => {
+  it('succeeds on aligned RAM', () => {
+    const memory = createTestMemory(64n);
+    const address = signedNumberToBytes(new Uint8Array(8), 8, 32) as ReadonlyUint8Array;
+    const source = signedNumberToBytes(new Uint8Array(8), 0x11223344, 32);
+    assert.equal(atomicStoreBytes({ memory, address, source, byteLength: 4 }), true);
+    const destination = new Uint8Array(8);
+    assert.equal(atomicLoadBytes({ destination, memory, address, byteLength: 4 }), true);
+    assert.deepEqual(destination.subarray(0, 4), source.subarray(0, 4));
+
+    const expected = source;
+    const desired = signedNumberToBytes(new Uint8Array(8), 0x55667788, 32);
+    assert.equal(
+      atomicCompareExchangeBytes({
+        destination,
+        memory,
+        address,
+        byteLength: 4,
+        expected,
+        desired,
+      }),
+      true
+    );
+  });
+
+  it('fails on unmapped addresses and on MMIO regions', () => {
+    const memory = createTestMemory(64n);
+    const destination = new Uint8Array(8);
+    const source = new Uint8Array(8);
+    const unmappedHigh = unsignedBigIntToBytes(
+      new Uint8Array(8),
+      0x1_0000_0010n
+    ) as ReadonlyUint8Array;
+    assert.equal(
+      atomicLoadBytes({ destination, memory, address: unmappedHigh, byteLength: 4 }),
+      false
+    );
+    assert.equal(atomicStoreBytes({ memory, address: unmappedHigh, source, byteLength: 4 }), false);
+    assert.equal(
+      atomicCompareExchangeBytes({
+        destination,
+        memory,
+        address: unmappedHigh,
+        byteLength: 4,
+        expected: source,
+        desired: source,
+      }),
+      false
+    );
+    assert.equal(
+      atomicLoadBytes({ destination, memory, address: UART_BASE, byteLength: 4 }),
+      false
+    );
+    assert.equal(atomicStoreBytes({ memory, address: UART_BASE, source, byteLength: 4 }), false);
+  });
+
+  it('dispatches MMIO stores to the UART region (scratch)', () => {
+    const memory = createTestMemory(64n);
+    const scratch = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0007n) as ReadonlyUint8Array;
+    storeBytes({
+      memory,
+      address: scratch,
+      source: new Uint8Array([0x5a]),
+      byteLength: 1,
+    });
+    const destination = new Uint8Array(8);
+    loadBytes({ destination, memory, address: scratch, byteLength: 1 });
+    assert.equal(destination[0], 0x5a);
   });
 });

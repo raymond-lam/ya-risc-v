@@ -15,14 +15,8 @@
  */
 
 import { parentPort, workerData } from 'node:worker_threads';
+import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
 import decode from '#emulator/cpu/decode';
-import {
-  isClintMachineSoftwarePending,
-  isClintMachineTimerPending,
-  isPlicMachineExternalPending,
-  isPlicSupervisorExternalPending,
-  loadBytes,
-} from '#emulator/memory';
 import {
   createRegisters,
   readProgramCounter,
@@ -34,6 +28,8 @@ import {
 } from '#emulator/cpu/registers';
 import { takeInterruptIfAny, trapIfInstructionAddressMisaligned } from '#emulator/cpu/trap';
 import type { CpuWorkerData } from '#emulator/cpu/types';
+import { loadBytes } from '#emulator/memory';
+import { isPlicMachineExternalPending, isPlicSupervisorExternalPending } from '#emulator/plic';
 
 const main = async (): Promise<void> => {
   const { memory, resetPc } = workerData as CpuWorkerData;

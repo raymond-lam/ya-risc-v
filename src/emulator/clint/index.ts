@@ -14,90 +14,32 @@
  * limitations under the License.
  */
 
-import { Worker } from 'node:worker_threads';
-import workerExecArgv from '#utils/worker-exec-argv';
-import type { ClintCreateOptions, ClintHandle, ClintWorkerData } from '#emulator/clint/types';
+/**
+ * CLINT device public API — guest MMIO, timebase init / tick, and IRQ wire samples.
+ * Timebase Worker host is `#emulator/timer`.
+ */
 
-/* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
-class Clint implements ClintHandle {
-  readonly [Symbol.toStringTag] = 'Promise';
+import { resetClintTimebase, tickClint } from '#emulator/clint/time';
+import {
+  isClintMachineSoftwarePending,
+  isClintMachineTimerPending,
+  setClintSoftwareWire,
+  setClintTimerWire,
+} from '#emulator/clint/wires';
+import type { Memory } from '#emulator/memory';
 
-  readonly #lifetime = Promise.withResolvers<void>();
+export {
+  CLINT_GUEST_BYTE_LENGTH,
+  CLINT_HOST_BYTE_LENGTH,
+  CLINT_REGION_ID,
+} from '#emulator/clint/layout';
+export { loadBytesFromClint, storeBytesToClint } from '#emulator/clint/memory';
 
-  readonly #options: ClintCreateOptions;
+/** Initialize CLINT: timebase reset, both IRQ wires clear. */
+const initializeClint = (memory: Memory): void => {
+  resetClintTimebase(memory);
+  setClintTimerWire(memory, false);
+  setClintSoftwareWire(memory, false);
+};
 
-  #worker: Worker | undefined;
-
-  #started = false;
-
-  #stopped = false;
-
-  constructor(options: ClintCreateOptions) {
-    this.#options = options;
-  }
-
-  start = (): void => {
-    if (this.#stopped) {
-      throw new Error('Already stopped.');
-    }
-    if (this.#started) {
-      throw new Error('Already started.');
-    }
-    this.#started = true;
-    const workerData = {
-      memory: this.#options.memory,
-    } satisfies ClintWorkerData;
-    const worker = new Worker(new URL(import.meta.resolve('#emulator/clint/run')), {
-      execArgv: workerExecArgv(),
-      workerData,
-    });
-    this.#worker = worker;
-    worker.once('error', (error) => {
-      this.#lifetime.reject(error);
-    });
-    worker.once('exit', (code) => {
-      if (this.#stopped || code === 0) {
-        this.#lifetime.resolve();
-        return;
-      }
-      this.#lifetime.reject(new Error(`CLINT worker exited with code ${code}`));
-    });
-  };
-
-  stop = (): void => {
-    if (!this.#started) {
-      throw new Error('Not started.');
-    }
-    if (this.#stopped) {
-      return;
-    }
-    this.#stopped = true;
-    if (this.#worker !== undefined) {
-      void this.#worker.terminate();
-      return;
-    }
-    this.#lifetime.resolve();
-  };
-
-  then<TResult1 = void, TResult2 = never>(
-    onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null | undefined,
-    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined
-  ): Promise<TResult1 | TResult2> {
-    return this.#lifetime.promise.then(onfulfilled, onrejected);
-  }
-
-  catch<TResult = never>(
-    onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null | undefined
-  ): Promise<void | TResult> {
-    return this.#lifetime.promise.catch(onrejected);
-  }
-
-  finally(onfinally?: (() => void) | null | undefined): Promise<void> {
-    return this.#lifetime.promise.finally(onfinally);
-  }
-}
-
-const create = (options: ClintCreateOptions): ClintHandle => new Clint(options);
-
-export { create };
-export type { ClintCreateOptions, ClintHandle } from '#emulator/clint/types';
+export { initializeClint, tickClint, isClintMachineSoftwarePending, isClintMachineTimerPending };

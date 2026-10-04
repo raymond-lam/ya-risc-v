@@ -17,8 +17,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { create } from '#emulator/clint';
-import { isClintMachineTimerPending, loadBytes, storeBytes } from '#emulator/memory';
+import { isClintMachineTimerPending } from '#emulator/clint';
+import { loadBytes, storeBytes } from '#emulator/memory';
+import { create } from '#emulator/timer';
 import createTestMemory from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
@@ -30,7 +31,7 @@ const CLINT_MTIME_OFFSET = 0xbff8n;
 const clintAddress = (offset: bigint): ReadonlyUint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n + offset);
 
-describe('clint worker', () => {
+describe('timer worker', () => {
   it('advances mtime and asserts the timer wire when past mtimecmp', async () => {
     const memory = createTestMemory(256n);
     storeBytes({
@@ -41,8 +42,8 @@ describe('clint worker', () => {
     });
     assert.equal(isClintMachineTimerPending(memory), false);
 
-    const clint = create({ memory });
-    clint.start();
+    const timer = create({ memory });
+    timer.start();
     try {
       let pending = false;
       for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -63,8 +64,8 @@ describe('clint worker', () => {
       });
       assert.ok(mtime.some((byte) => byte !== 0));
     } finally {
-      clint.stop();
-      await clint;
+      timer.stop();
+      await timer;
     }
   });
 });

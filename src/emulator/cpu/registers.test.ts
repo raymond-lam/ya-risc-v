@@ -20,12 +20,8 @@ import {
   MIDELEG,
   MIE,
   MIP,
-  MISA,
-  MSCRATCH,
   MSTATUS,
   PRIVILEGE_MACHINE,
-  SATP,
-  SSCRATCH,
   advanceProgramCounter,
   createRegisters,
   snapshotControlAndStatusRegister,
@@ -41,6 +37,12 @@ import {
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
+
+/** CSR addresses used only in these tests (not part of the registers public surface). */
+const MISA = 0x301;
+const MSCRATCH = 0x340;
+const SSCRATCH = 0x140;
+const SATP = 0x180;
 
 /** Hardwired misa: MXL=64 and extensions A, I, M, S, U. */
 const MISA_HARDWIRED = unsignedBigIntToBytes(

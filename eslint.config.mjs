@@ -5,6 +5,40 @@ import sonarjsPlugin from 'eslint-plugin-sonarjs';
 import typescriptEslintPlugin from '@typescript-eslint/eslint-plugin';
 import typescriptEslintParser from '@typescript-eslint/parser';
 
+/** Shared `#` / relative import shape (must be re-listed when a block replaces this rule). */
+const importShapePatterns = [
+  {
+    group: ['./*', '../*', '../**', './**'],
+    message: 'Use # package imports (see package.json "imports"), not relative paths.',
+  },
+  {
+    group: ['#*.js', '#*/*.js', '#*/*/*.js', '#*/*/*/*.js'],
+    message: 'Omit the file extension; #specifiers resolve like a bundler.',
+  },
+];
+
+/**
+ * Private siblings of packages that have an `index.ts`. Public exceptions:
+ * the `#emulator/.../run` worker entries (resolved via `import.meta.resolve`, not imports).
+ */
+const packagePrivatePatterns = [
+  {
+    group: [
+      '#emulator/uart/*',
+      '#emulator/terminal/*',
+      '#emulator/timer/*',
+      '#emulator/cpu/*',
+      '#emulator/clint/layout',
+      '#emulator/clint/memory',
+      '#emulator/clint/time',
+      '#emulator/clint/wires',
+      '#tui/*',
+    ],
+    message:
+      'Import from the package root only (worker #emulator/.../run entries are public subpaths).',
+  },
+];
+
 const eslintConfig = [
   {
     files: ['src/**/*.ts', 'src/**/*.tsx', 'test/**/*.ts'],
@@ -39,16 +73,7 @@ const eslintConfig = [
       'no-restricted-imports': [
         'error',
         {
-          patterns: [
-            {
-              group: ['./*', '../*', '../**', './**'],
-              message: 'Use # package imports (see package.json "imports"), not relative paths.',
-            },
-            {
-              group: ['#*.js', '#*/*.js', '#*/*/*.js', '#*/*/*/*.js'],
-              message: 'Omit the file extension; #specifiers resolve like a bundler.',
-            },
-          ],
+          patterns: [...importShapePatterns],
         },
       ],
       /** Security */
@@ -94,6 +119,32 @@ const eslintConfig = [
     },
   },
   {
+    /**
+     * Outside a package directory, import only that package's public surface.
+     * Packages may deep-import their own siblings; unit/integration tests may
+     * deep-import cpu instruction modules for coverage.
+     */
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'test/**/*.ts'],
+    ignores: [
+      'src/emulator/uart/**',
+      'src/emulator/clint/**',
+      'src/emulator/terminal/**',
+      'src/emulator/cpu/**',
+      'src/tui/**',
+      'src/emulator/**/*.test.ts',
+      'src/emulator/**/*.test.tsx',
+      'src/emulator/**/*.integration.test.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivatePatterns],
+        },
+      ],
+    },
+  },
+  {
     files: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     rules: {
       /** Table-driven tests repeat literals on purpose; extracting them hurts readability. */
@@ -104,8 +155,8 @@ const eslintConfig = [
   },
   {
     /**
-     * Hart worker entry (`cpu/run.ts`) and its graph must sample CLINT/PLIC via
-     * `#emulator/memory` only — never pull host `#emulator/clint` / `terminal` or import `Worker`.
+     * Hart worker graph may use the CLINT device API (`#emulator/clint`) but must
+     * not pull host `#emulator/timer`, `#emulator/terminal`, or `Worker`.
      * Host `cpu/index.ts` is excluded (it owns `new Worker`).
      */
     files: ['src/emulator/cpu/**/*.ts'],
@@ -123,23 +174,20 @@ const eslintConfig = [
             },
           ],
           patterns: [
-            {
-              group: ['./*', '../*', '../**', './**'],
-              message: 'Use # package imports (see package.json "imports"), not relative paths.',
-            },
-            {
-              group: ['#*.js', '#*/*.js', '#*/*/*.js', '#*/*/*/*.js'],
-              message: 'Omit the file extension; #specifiers resolve like a bundler.',
-            },
+            ...importShapePatterns,
             {
               group: [
-                '#emulator/clint',
-                '#emulator/clint/*',
+                '#emulator/clint/layout',
+                '#emulator/clint/memory',
+                '#emulator/clint/time',
+                '#emulator/clint/wires',
+                '#emulator/timer',
+                '#emulator/timer/*',
                 '#emulator/terminal',
                 '#emulator/terminal/*',
               ],
               message:
-                'Hart code samples devices via #emulator/memory; do not import host device packages.',
+                'Hart code uses #emulator/clint (device API); do not import #emulator/timer or #emulator/terminal.',
             },
           ],
         },

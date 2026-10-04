@@ -24,9 +24,10 @@ today's ISA is all there will ever be.
 | `npm run build`       | Bundle to `dist/` (generated, gitignored — never edit by hand) |
 
 Worker bundles are tree-shaken (`sideEffects: false`, esbuild `--tree-shaking`): the hart worker may
-import `isClintMachineTimerPending` / `isClintMachineSoftwarePending` from `#emulator/memory` without
-keeping the host CLINT `create` / `Worker` path. ESLint bans `#emulator/clint`, `#emulator/terminal`,
-and `Worker` from `node:worker_threads` under `src/emulator/cpu/**` (except host `cpu/index.ts`).
+import CLINT wire samples from `#emulator/clint` (device API) without keeping the timebase
+`create` / `Worker` path (`#emulator/timer` stays out of the hart graph). ESLint bans
+`#emulator/timer`, `#emulator/terminal`, and `Worker` from `node:worker_threads` under
+`src/emulator/cpu/**` (except host `cpu/index.ts`).
 
 Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
@@ -39,20 +40,32 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   terminal pane over caller streams.
 - `src/emulator/index.ts` — host-side `create` (requires `ramSize`); maps the image into DRAM at
   `0x8000_0000` (UART at `0x1000_0000`, CLINT at `0x0200_0000`, PLIC at `0x0c00_0000`), creates
-  CPU + CLINT + terminal
-  handles, returns an awaitable. `start` / `stop` forward to all three; awaiting joins all three.
+  CPU + timer + terminal handles, returns an awaitable. `start` / `stop` forward to all three;
+  awaiting joins all three.
 - `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, decode,
   trap, registers, instructions (one file per opcode group).
-- `src/emulator/memory/` — guest memory package (`index` public API; private `types` / `layout` /
-  `ram` / `uart` / `clint` / `plic` / `atomics` / `hart-wake` / `reservation` guest physical-address
-  decode + shadow R/W + host-clock `mtime` advance; exports `pushUartReceive` / `popUartTransmit` /
-  `waitUartTransmit`, CLINT/PLIC pending samples, hart-wake helpers, and LR/SC monitor + atomic RAM
-  RMW for workers).
-- `src/emulator/clint/` — CLINT timebase: host `create` / `start` / `stop`, worker `run.ts`
-  (calls `tickClint` in `#emulator/memory`).
+- `src/emulator/memory.ts` — guest memory leaf: `createMemory(regionSpecs)`, load/store
+  dispatch, `Memory` type. Packs caller-supplied regions into one SAB; does not own
+  device init or layout.
+- `src/emulator/ram.ts` — RAM region: dense guest load/store, `storeImageToRam`, RV64A RMW.
+- `src/emulator/plic.ts` — PLIC sparse MMIO, claim/complete, MEIP/SEIP wires.
+- `src/emulator/reservation.ts` — host-only LR/SC reservation monitor.
+- `src/emulator/wake.ts` — Int32 wake/level publish + `waitWake` (IRQ aggregate, UART TX).
+- `src/emulator/irq-level.ts` — host-only Int32 OR of device IRQ levels (`setIrqWire`,
+  `waitIrqLevel`); packed as the `irqLevel` region.
+- `src/emulator/clint/` — device API (`index`: MMIO / init / `tickClint` / wire samples); private
+  `layout` / `memory` / `wires` / `time`.
+- `src/emulator/timer/` — CLINT timebase host `create` / `start` / `stop`, worker `run.ts`
+  (ticks `mtime` via `#emulator/clint`).
+- `src/emulator/uart/` — UART 16550 package (`index` public API; private `region` / `queues` /
+  `registers` / `memory`). Terminal uses RX/TX via `#emulator/uart`.
 - `src/emulator/terminal/` — UART↔stream bridge: host `create` / `start` / `stop`, worker
   `run.ts` (async TX pump awaits `waitUartTransmit`; stdin pushes RX).
 - `src/utils/bytes.ts` — architectural byte helpers.
+- `src/utils/int.ts` — `bigIntAsNumber` (safe `bigint` → JS `number`).
+- `src/utils/alignment.ts` — `alignUp` (power-of-two round-up for `bigint`).
+- `src/utils/atomics.ts` — SAB byte/bit Atomics helpers (`atomicLoadBit`, …).
+- `src/utils/binary-search.ts` — `findLastIndex` (MDN-shaped; O(log n) on a true…false partition).
 - `src/types.ts` — shared architectural types (`ReadonlyUint8Array`).
 - `test/` — shared test helpers (`guest-memory.ts`). Unit tests stay colocated as `*.test.ts`.
 
@@ -62,25 +75,22 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   and immediates never become `number` or `bigint`. Do arithmetic with the helpers in
   `#utils/bytes` (`addBytes`, `compareSignedBytes`, `isZeroBytes`, `shiftRightArithmeticBytes`,
   …), including CSR bitfield updates in `trap.ts`. Mutating helpers take a `destination`
-  buffer and return it for chaining (`const x = addBytes(new Uint8Array(8), a, b)`). Guest
-  addresses stay as byte arrays through `loadBytes`/`storeBytes`. Map decode
-  uses `bytesToBigInt` only for range compares. Guest-mapped RAM size (`ramSize`) is `bigint`
-  (physical-address math); the UART window is a fixed 16550 register block (8 bytes) with RX/TX
-  queues packed in the SAB (host-only; RBR/THR/IER/IIR/LSR loads/stores are queue and IRQ side
-  effects in `memory/uart.ts` — IER∧(RX ready / TX empty) asserts PLIC source 10). Guest CLINT MMIO (`msip` / `mtime` / `mtimecmp`) is decoded in `memory/clint.ts`;
-  host shadows, timer/software wires, and epoch live in the SAB after UART (see `memory/clint.ts`),
-  accessed with `Atomics` (`BigUint64Array` for time/epoch, bytes for wires) like UART queue meta
-  and PLIC shadows; the `#emulator/clint` worker advances the 10 MHz timebase and drives the timer
-  wire; the hart samples the wires (`isClintMachineTimerPending` / `isClintMachineSoftwarePending`) into
-  `mip.MTIP` / `mip.MSIP`. Guest PLIC MMIO is decoded in `memory/plic.ts` (priority / enable /
-  claim; UART source 10); host shadows and MEIP/SEIP wires sit after CLINT in the SAB; the hart
-  samples them into `mip.MEIP` / `mip.SEIP`. **address** means a guest
-  physical address (architectural bytes); **index** means a host TypedArray index into
-  `memory.bytes` (`number`). Transfer widths
-  (`byteLength` on load/store) are also `number`.
-  `bytesToNumber` reads u32 from architectural bytes. `signedNumberToBytes`,
-  `unsignedNumberToBytes`, `unsignedBigIntToBytes`, and `low32Bytes` pack values into a
-  caller-allocated buffer (same destination/return convention).
+  buffer and return it for chaining (`const x = addBytes(new Uint8Array(8), a, b)`).
+  **guestAddress** means a guest physical address (architectural bytes); **hostIndex** means a
+  `bigint` byte index into the SAB (`memory.bytes`). Memory is carved into a **regions** Map
+  (`hostIndex` / `hostByteLength`, optional `guestAddress` / `guestByteLength`); regions are
+  packed contiguously with 8-byte-aligned hostIndexes. `loadBytes`/`storeBytes` map a
+  guestAddress to `{ regionId, offset }` then call the region's load/store pair — UART queues, IRQ wires, the LR/SC
+  monitor, and wake words are host-only (`bigIntAsNumber` at the TypedArray boundary). Guest-mapped RAM
+  size is `bigint` (also the RAM region's host length). UART guest window is 8 register bytes
+  (dense prefix of the UART region); RBR/THR/IER/IIR/LSR have queue/IRQ side effects
+  (`uart/registers.ts` — IER∧(RX ready / TX empty) asserts PLIC source 10). CLINT/PLIC are
+  sparse guest windows over packed host slabs (`clint/layout.ts` + `clint/memory.ts` / `plic.ts`); the hart
+  samples CLINT wires into `mip.MTIP`/`MSIP` and PLIC wires into `mip.MEIP`/`SEIP`. Transfer
+  widths (`byteLength` on load/store) are `number`. `bytesToNumber` reads u32 from
+  architectural bytes. `signedNumberToBytes`, `unsignedNumberToBytes`, `unsignedBigIntToBytes`,
+  and `low32Bytes` pack values into a caller-allocated buffer (same destination/return
+  convention).
 - **Instruction functions are `(registers, memory, args) => void | Promise<void>`** and own the
   PC: call `advanceProgramCounter` on the fall-through path, or `setProgramCounter` when
   jumping/branching. The CPU worker `await`s each instruction (only `wfi` is async today).
@@ -99,7 +109,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   the SAB after PLIC and is invalidated by overlapping `storeBytes` / atomic AMO writes. Other
   host-only packing
   (UART queue meta, CLINT time/epoch/wires, PLIC shadows/wires) uses `Atomics` on bytes
-  (`Uint8Array`), except CLINT time/epoch (`BigUint64Array`) and the hart-wake / UART TX-wake words
+  (`Uint8Array`), except CLINT time/epoch (`BigUint64Array`) and the irq-level / UART TX-wake words
   (`Int32Array` for `Atomics.waitAsync` / `notify`).
 - **Privilege modes and traps.** The hart tracks U/S/M in `registers.privilegeMode`
   (8-byte little-endian; reset = M). `ecall`, `ebreak`, and illegal encodings call `enterTrap` in
@@ -111,7 +121,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   run loop samples both wires into `mip.MTIP` / `mip.MSIP`, then calls
   `takeInterruptIfAny` before each fetch: pending∧enabled interrupts take via the
   same entry path with `xcause` interrupt bit set; `mideleg` routes supervisor causes to S.
-  `wfi` advances the PC then waits on the shared hart-wake Int32 (published OR of device
+  `wfi` advances the PC then waits on the shared irq-level Int32 (published OR of device
   IRQ levels; `Atomics.waitAsync` until the level word changes) until
   `mip ∧ mie` is nonzero (wake ignores global
   `mstatus.MIE`/`SIE`). With `mstatus.TW` set, `wfi` below M raises illegal-instruction
@@ -148,14 +158,17 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 - Import with `#` subpath specifiers and no file extension
   (`import { loadBytes } from '#emulator/memory'`). `tsconfig` `paths` maps `#*` to `src/*` and
   `#test/*` to `test/*`; bundler resolution fills in `index` and `.ts`/`.tsx`. The worker
-  entries `#emulator/cpu/run`, `#emulator/clint/run`, and `#emulator/terminal/run` are also
+  entries `#emulator/cpu/run`, `#emulator/timer/run`, and `#emulator/terminal/run` are also
   `package.json` `"imports"` targets (`src` vs `dist`). Relative imports are a lint error.
 - **Package boundary:** a directory with `index.ts` is a package. Sibling modules
-  (`memory/uart.ts`, `cpu/types.ts`, …) are private; outside that directory import only from the
-  package root. Host code uses `#emulator` and `#tui`. Inside `emulator/`, subpackages import each
-  other via `#emulator/cpu`, `#emulator/memory`, `#emulator/clint`, `#emulator/terminal` (workers
-  use `#emulator/cpu/run` / `#emulator/clint/run` / `#emulator/terminal/run`). Unit tests may
-  import instruction modules directly for coverage.
+  (`cpu/types.ts`, …) are private; outside that directory import only from the package root.
+  Public subpaths: worker entries `#emulator/*/run`. Leaf modules (`#emulator/memory`,
+  `#emulator/ram`, `#emulator/plic`, `#emulator/reservation`, `#emulator/wake`,
+  `#emulator/irq-level`) are their own public API. Host code uses `#emulator` and `#tui`.
+  Inside `emulator/`, packages import each other via roots (hart samples CLINT via
+  `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
+  `#emulator/timer` / `#emulator/terminal`). Unit and `*.integration.test.ts` files may
+  deep-import cpu instruction / register / trap modules for coverage.
 - Arrow functions only — no `function` expressions or declarations, and no `export default function`.
 - Modules with a single export use `export default`; otherwise list named exports in one block at the
   bottom of the file, with `export type { … }` after it.
