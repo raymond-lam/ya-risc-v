@@ -41,6 +41,8 @@ import {
   PRIVILEGE_SUPERVISOR,
   PRIVILEGE_USER,
   SEPC,
+  beginInstructionRetire,
+  commitInstructionRetire,
   createRegisters,
   snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
@@ -58,8 +60,17 @@ const MISA = 0x301;
 const MSCRATCH = 0x340;
 const SSCRATCH = 0x140;
 const SATP = 0x180;
+const CYCLE = 0xc00;
+const TIME = 0xc01;
+const INSTRET = 0xc02;
+const MCYCLE = 0xb00;
+const MINSTRET = 0xb02;
+const MCOUNTEREN = 0x306;
+const SCOUNTEREN = 0x106;
+const MCOUNTINHIBIT = 0x320;
 import { storeBytes, type Memory } from '#emulator/memory';
 import {
+  bytesToBigInt,
   bytesToNumber,
   signedNumberToBytes,
   unsignedBigIntToBytes,
@@ -914,5 +925,302 @@ describe('system', () => {
 
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x90);
     assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_USER);
+  });
+
+  it('M-mode can read time from CLINT mtime; cycle/instret count retires', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    const seeded = 12_345n;
+    storeBytes({
+      memory,
+      address: CLINT_MTIME,
+      source: unsignedBigIntToBytes(new Uint8Array(8), seeded),
+      byteLength: 8,
+    });
+
+    beginInstructionRetire(registers);
+    csrrs(registers, memory, {
+      destinationRegister: 1,
+      sourceRegister1: 0,
+      controlAndStatusRegister: TIME,
+      instructionWord: 0,
+    });
+    commitInstructionRetire(registers);
+    const timeValue = bytesToBigInt(readGeneralPurposeRegister(registers, 1));
+    assert.ok(timeValue >= seeded);
+    assert.ok(timeValue < seeded + 1_000_000n);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, CYCLE),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, INSTRET),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+
+    beginInstructionRetire(registers);
+    csrrs(registers, memory, {
+      destinationRegister: 2,
+      sourceRegister1: 0,
+      controlAndStatusRegister: CYCLE,
+      instructionWord: 0,
+    });
+    commitInstructionRetire(registers);
+    // `csrr` sees the pre-retire value; then this instruction bumps both counters.
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 2),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCYCLE),
+      signedNumberToBytes(new Uint8Array(8), 2, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MINSTRET),
+      signedNumberToBytes(new Uint8Array(8), 2, 32)
+    );
+  });
+
+  it('writes to time and cycle raise illegal-instruction', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    const timeInstructionWord = 0xc0101073; // csrrw x0, time, x1
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 1, 32));
+
+    csrrw(registers, memory, {
+      destinationRegister: 0,
+      sourceRegister1: 1,
+      controlAndStatusRegister: TIME,
+      instructionWord: timeInstructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      timeInstructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+
+    const cycleInstructionWord = 0xc0001073; // csrrw x0, cycle, x1
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    csrrw(registers, memory, {
+      destinationRegister: 0,
+      sourceRegister1: 1,
+      controlAndStatusRegister: CYCLE,
+      instructionWord: cycleInstructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      cycleInstructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+  });
+
+  it('mcounteren gates S-mode time/cycle; M-mode ignores the enable bits', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    storeBytes({
+      memory,
+      address: CLINT_MTIME,
+      source: unsignedBigIntToBytes(new Uint8Array(8), 50n),
+      byteLength: 8,
+    });
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+
+    // M can read time with mcounteren clear.
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    csrrs(registers, memory, {
+      destinationRegister: 1,
+      sourceRegister1: 0,
+      controlAndStatusRegister: TIME,
+      instructionWord: 0,
+    });
+    assert.ok(bytesToBigInt(readGeneralPurposeRegister(registers, 1)) >= 50n);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+
+    // S without TM traps.
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    const timeInstructionWord = 0xc01025f3; // csrrs x11, time, x0
+    csrrs(registers, memory, {
+      destinationRegister: 11,
+      sourceRegister1: 0,
+      controlAndStatusRegister: TIME,
+      instructionWord: timeInstructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      timeInstructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+
+    // S with TM succeeds.
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0x02, 32)
+    );
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    csrrs(registers, memory, {
+      destinationRegister: 2,
+      sourceRegister1: 0,
+      controlAndStatusRegister: TIME,
+      instructionWord: 0,
+    });
+    assert.ok(bytesToBigInt(readGeneralPurposeRegister(registers, 2)) >= 50n);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
+
+    // S without CY traps on cycle.
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0xc0, 32));
+    const cycleInstructionWord = 0xc00025f3; // csrrs x11, cycle, x0
+    csrrs(registers, memory, {
+      destinationRegister: 11,
+      sourceRegister1: 0,
+      controlAndStatusRegister: CYCLE,
+      instructionWord: cycleInstructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      cycleInstructionWord
+    );
+  });
+
+  it('U-mode time needs both mcounteren.TM and scounteren.TM', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    storeBytes({
+      memory,
+      address: CLINT_MTIME,
+      source: unsignedBigIntToBytes(new Uint8Array(8), 77n),
+      byteLength: 8,
+    });
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0x02, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      SCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    const timeInstructionWord = 0xc01025f3;
+    csrrs(registers, memory, {
+      destinationRegister: 11,
+      sourceRegister1: 0,
+      controlAndStatusRegister: TIME,
+      instructionWord: timeInstructionWord,
+    });
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      timeInstructionWord
+    );
+
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    writeControlAndStatusRegister(
+      registers,
+      SCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0x02, 32)
+    );
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    csrrs(registers, memory, {
+      destinationRegister: 3,
+      sourceRegister1: 0,
+      controlAndStatusRegister: TIME,
+      instructionWord: 0,
+    });
+    assert.ok(bytesToBigInt(readGeneralPurposeRegister(registers, 3)) >= 77n);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
+  });
+
+  it('illegal CSR access does not retire; ecall does', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+
+    beginInstructionRetire(registers);
+    csrrw(registers, memory, {
+      destinationRegister: 0,
+      sourceRegister1: 1,
+      controlAndStatusRegister: TIME,
+      instructionWord: 0xc0101073,
+    });
+    commitInstructionRetire(registers);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCYCLE),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MINSTRET),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    beginInstructionRetire(registers);
+    ecall(registers, memory);
+    commitInstructionRetire(registers);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCYCLE),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MINSTRET),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
   });
 });

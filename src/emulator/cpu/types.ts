@@ -30,7 +30,10 @@ type Registers = {
    * identity CSRs (mvendorid, marchid, mimpid, mhartid) are read-only. `misa` is hardwired
    * WARL (RV64IMA + S/U). `sstatus`/`sie`/`sip` are aliases of `mstatus`/`mie`/`mip`
    * (handled in the register helpers, not separate slots). `sscratch`/`mscratch` are ordinary
-   * XLEND scratch slots. `satp` is stored but paging is not implemented yet.
+   * XLEND scratch slots. `time` mirrors CLINT `mtime` (not the CSR slot). `cycle`/`instret`
+   * alias `mcycle`/`minstret` (CPI=1 retire counts; `mcountinhibit` can freeze them).
+   * `mcounteren`/`scounteren` gate S/U reads of the unprivileged counters. `satp` is stored
+   * but paging is not implemented yet.
    */
   controlAndStatus: readonly Uint8Array[] & {
     readonly 0xf11: ReadonlyUint8Array; // mvendorid
@@ -48,6 +51,11 @@ type Registers = {
    * this level and the software-writable SEIP bit in the `mip` CSR slot.
    */
   plicSupervisorExternalPending: boolean;
+  /**
+   * Host-only: when true after execute, `commitInstructionRetire` bumps mcycle/minstret.
+   * Cleared by traps that abort the instruction; set again by `ecall`/`ebreak` before trap.
+   */
+  retireInstruction: boolean;
 };
 
 /**

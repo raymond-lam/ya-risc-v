@@ -18,6 +18,8 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
 import decode from '#emulator/cpu/decode';
 import {
+  beginInstructionRetire,
+  commitInstructionRetire,
   createRegisters,
   readProgramCounter,
   setMachineExternalInterruptPending,
@@ -55,7 +57,9 @@ const main = async (): Promise<void> => {
       address: readProgramCounter(registers),
       byteLength: 4,
     });
+    beginInstructionRetire(registers);
     await decode(instructionWord)(registers, memory);
+    commitInstructionRetire(registers);
   }
 };
 

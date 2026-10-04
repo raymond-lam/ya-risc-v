@@ -42,6 +42,7 @@ import {
   PRIVILEGE_MACHINE,
   MSTATUS_BYTE1_MPP_MASK,
   MSTATUS_BYTE1_MPP_USER,
+  cancelInstructionRetire,
   mppBitsFromPrivilegeMode,
   privilegeModeFromMppBits,
   readPrivilegeMode,
@@ -263,6 +264,8 @@ const enterTrap = (
   cause: number,
   trapValue: ReadonlyUint8Array = signedNumberToBytes(new Uint8Array(8), 0, 32)
 ): void => {
+  // Aborted / exception paths do not retire — `ecall`/`ebreak` call `retireInstructionNow` first.
+  cancelInstructionRetire(registers);
   const causeBytes = exceptionCauseBytes(cause);
   if (shouldDelegateExceptionToSupervisor(registers, cause)) {
     enterSupervisorTrap(registers, causeBytes, trapValue);
