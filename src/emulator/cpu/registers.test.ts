@@ -23,6 +23,8 @@ import {
   MSTATUS,
   PRIVILEGE_MACHINE,
   advanceProgramCounter,
+  beginInstructionRetire,
+  commitInstructionRetire,
   createRegisters,
   snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
@@ -43,6 +45,12 @@ const MISA = 0x301;
 const MSCRATCH = 0x340;
 const SSCRATCH = 0x140;
 const SATP = 0x180;
+const MCOUNTEREN = 0x306;
+const SCOUNTEREN = 0x106;
+const MCOUNTINHIBIT = 0x320;
+const MCYCLE = 0xb00;
+const MINSTRET = 0xb02;
+const CYCLE = 0xc00;
 
 /** Hardwired misa: MXL=64 and extensions A, I, M, S, U. */
 const MISA_HARDWIRED = unsignedBigIntToBytes(
@@ -225,6 +233,86 @@ describe('registers', () => {
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MIDELEG),
       signedNumberToBytes(new Uint8Array(8), 0x0222, 32)
+    );
+  });
+
+  it('mcounteren and scounteren WARL keep only CY, TM, and IR', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0xffff, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      SCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0xffff, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCOUNTEREN),
+      signedNumberToBytes(new Uint8Array(8), 0x07, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SCOUNTEREN),
+      signedNumberToBytes(new Uint8Array(8), 0x07, 32)
+    );
+  });
+
+  it('mcountinhibit WARL keeps only CY and IR; freezes retire bumps', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTINHIBIT,
+      signedNumberToBytes(new Uint8Array(8), 0xffff, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCOUNTINHIBIT),
+      signedNumberToBytes(new Uint8Array(8), 0x05, 32)
+    );
+
+    beginInstructionRetire(registers);
+    commitInstructionRetire(registers);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCYCLE),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MINSTRET),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTINHIBIT,
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    beginInstructionRetire(registers);
+    commitInstructionRetire(registers);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCYCLE),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, CYCLE),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+  });
+
+  it('mcycle is writable from M and aliases cycle; cycle writes are ignored by the helper', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MCYCLE,
+      signedNumberToBytes(new Uint8Array(8), 99, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, CYCLE),
+      signedNumberToBytes(new Uint8Array(8), 99, 32)
+    );
+    writeControlAndStatusRegister(registers, CYCLE, signedNumberToBytes(new Uint8Array(8), 1, 32));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCYCLE),
+      signedNumberToBytes(new Uint8Array(8), 99, 32)
     );
   });
 

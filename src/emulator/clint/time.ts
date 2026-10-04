@@ -18,7 +18,7 @@
  * CLINT timebase — `mtime` / `mtimecmp` / epoch shadows and `tickClint`.
  */
 
-import { bytesToBigInt } from '#utils/bytes';
+import { bytesToBigInt, unsignedBigIntToBytes } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 import {
   CLINT_HOST_EPOCH_NS_UINT64,
@@ -157,9 +157,18 @@ const storeClintTimeRegisterByte = (
   storeClintTimeBytes(memory, register, byteOffset, Uint8Array.of(value & 0xff), 1);
 };
 
+/**
+ * Architectural `mtime` for the unprivileged `time` CSR: sync-on-read then pack little-endian.
+ */
+const readClintMtimeBytes = (memory: Memory, destination: Uint8Array): Uint8Array => {
+  tickClint(memory);
+  return unsignedBigIntToBytes(destination, readTimeRegister(memory, 'mtime'));
+};
+
 export {
   loadClintTimeBytes,
   loadClintTimeRegisterByte,
+  readClintMtimeBytes,
   resetClintTimebase,
   storeClintTimeBytes,
   storeClintTimeRegisterByte,

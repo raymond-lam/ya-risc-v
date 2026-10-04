@@ -15,6 +15,8 @@
  */
 
 import type { Registers } from '#emulator/cpu/types';
+import { readClintMtimeBytes } from '#emulator/clint';
+import type { Memory } from '#emulator/memory';
 import {
   addBytes,
   andBytes,
@@ -46,10 +48,16 @@ const PRIVILEGE_BY_CSR_LEVEL = [
   PRIVILEGE_MACHINE,
 ] as const;
 
+/** Unprivileged counters (read-only; S/U gated by mcounteren / scounteren). */
+const CYCLE = 0xc00; // alias of mcycle (read-only below M)
+const TIME = 0xc01; // wall time — mirrors CLINT `mtime`
+const INSTRET = 0xc02; // alias of minstret (read-only below M)
+
 /** Supervisor-mode CSRs. */
 const SSTATUS = 0x100; // S-visible status (masked view of mstatus)
 const SIE = 0x104; // S-visible interrupt enables (masked view of mie)
 const STVEC = 0x105; // S-mode trap handler address
+const SCOUNTEREN = 0x106; // U-mode counter-enable (CY/TM/IR)
 const SSCRATCH = 0x140; // scratch for S-mode trap handlers
 const SEPC = 0x141; // PC saved on trap to S
 const SCAUSE = 0x142; // exception/interrupt code for S traps
@@ -64,11 +72,16 @@ const MEDELEG = 0x302; // which exceptions are delegated to S
 const MIDELEG = 0x303; // which interrupts are delegated to S
 const MIE = 0x304; // machine interrupt-enable bits
 const MTVEC = 0x305; // M-mode trap handler address
+const MCOUNTEREN = 0x306; // S/U counter-enable (CY/TM/IR)
+const MCOUNTINHIBIT = 0x320; // freeze mcycle / minstret (CY/IR)
 const MSCRATCH = 0x340; // scratch for M-mode trap handlers
 const MEPC = 0x341; // PC saved on trap to M
 const MCAUSE = 0x342; // exception/interrupt code for M traps
 const MTVAL = 0x343; // faulting address/instruction for M traps
 const MIP = 0x344; // machine interrupt-pending bits
+/** Machine counters (canonical storage; `cycle` / `instret` alias these). */
+const MCYCLE = 0xb00;
+const MINSTRET = 0xb02;
 
 /** Identity CSR addresses (implemented read-only). */
 const MVENDORID = 0xf11; // JEDEC vendor id (hardwired 0)
@@ -130,6 +143,22 @@ const MIP_HARDWARE_MASK_BYTES = Uint8Array.of(0x88, 0x08, 0, 0, 0, 0, 0, 0) as R
 /** sip software-writable pending bits (SSIP/STIP only; SEIP is read-only in sip). */
 const SIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
+/**
+ * mcounteren / scounteren WARL: CY (bit 0), TM (bit 1), IR (bit 2). HPM bits stay
+ * read-only zero until those counters exist.
+ */
+const COUNTEREN_MASK_BYTES = Uint8Array.of(0x07, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/** mcountinhibit WARL: CY (bit 0) and IR (bit 2). Bit 1 is reserved (no TM inhibit). */
+const MCOUNTINHIBIT_MASK_BYTES = Uint8Array.of(0x05, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
+
+/** mcounteren/scounteren/mcountinhibit.CY — `cycle` / `mcycle` (byte0 bit 0). */
+const COUNTEREN_BYTE0_CY = 0x01;
+/** mcounteren/scounteren.TM — allow `time` below M (byte0 bit 1). */
+const COUNTEREN_BYTE0_TM = 0x02;
+/** mcounteren/scounteren/mcountinhibit.IR — `instret` / `minstret` (byte0 bit 2). */
+const COUNTEREN_BYTE0_IR = 0x04;
+
 /** IALIGN=32: mepc/sepc WARL clears bits [1:0] on write. */
 const XEPC_IALIGN_MASK_BYTE0 = 0xfc;
 
@@ -182,10 +211,17 @@ const MSTATUS_BYTE1_MPP_RESERVED = 0x10; // MPP = 10 (illegal)
 const isIdentityControlAndStatusRegister = (index: number): boolean =>
   index === MVENDORID || index === MARCHID || index === MIMPID || index === MHARTID;
 
+const isUnprivilegedCounterControlAndStatusRegister = (index: number): boolean =>
+  index === CYCLE || index === TIME || index === INSTRET;
+
 const isImplementedControlAndStatusRegister = (index: number): boolean =>
+  index === CYCLE ||
+  index === TIME ||
+  index === INSTRET ||
   index === SSTATUS ||
   index === SIE ||
   index === STVEC ||
+  index === SCOUNTEREN ||
   index === SSCRATCH ||
   index === SEPC ||
   index === SCAUSE ||
@@ -198,15 +234,19 @@ const isImplementedControlAndStatusRegister = (index: number): boolean =>
   index === MIDELEG ||
   index === MIE ||
   index === MTVEC ||
+  index === MCOUNTEREN ||
+  index === MCOUNTINHIBIT ||
   index === MSCRATCH ||
   index === MEPC ||
   index === MCAUSE ||
   index === MTVAL ||
   index === MIP ||
+  index === MCYCLE ||
+  index === MINSTRET ||
   isIdentityControlAndStatusRegister(index);
 
 const isReadOnlyControlAndStatusRegister = (index: number): boolean =>
-  isIdentityControlAndStatusRegister(index);
+  isIdentityControlAndStatusRegister(index) || isUnprivilegedCounterControlAndStatusRegister(index);
 
 /** CSR address bits [9:8] encode the minimum privilege required to access it. */
 const controlAndStatusRegisterRequiredPrivilege = (index: number): ReadonlyUint8Array =>
@@ -218,10 +258,47 @@ const controlAndStatusRegisterRequiredPrivilege = (index: number): ReadonlyUint8
  */
 const MSTATUS_BYTE2_TVM = 0x10;
 
+/** Enable bit in mcounteren/scounteren for an unprivileged counter CSR. */
+const counterEnableBit = (index: number): number => {
+  if (index === CYCLE) {
+    return COUNTEREN_BYTE0_CY;
+  }
+  if (index === TIME) {
+    return COUNTEREN_BYTE0_TM;
+  }
+  return COUNTEREN_BYTE0_IR;
+};
+
+/**
+ * S/U access to `cycle`/`time` requires the matching `mcounteren` bit; U also needs
+ * `scounteren`. M-mode always allowed.
+ */
+const isCounterAccessEnabled = (registers: Registers, index: number): boolean => {
+  const enableBit = counterEnableBit(index);
+  if (compareUnsignedBytes(registers.privilegeMode, PRIVILEGE_MACHINE) < 0) {
+    if ((registers.controlAndStatus[MCOUNTEREN]![0]! & enableBit) === 0) {
+      return false;
+    }
+  }
+  if (compareUnsignedBytes(registers.privilegeMode, PRIVILEGE_USER) === 0) {
+    if ((registers.controlAndStatus[SCOUNTEREN]![0]! & enableBit) === 0) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/** `mstatus.TVM` blocks S-mode `satp` access. */
+const isSatpBlockedByTvm = (registers: Registers, index: number): boolean =>
+  index === SATP &&
+  compareUnsignedBytes(registers.privilegeMode, PRIVILEGE_SUPERVISOR) === 0 &&
+  (registers.controlAndStatus[MSTATUS]![2]! & MSTATUS_BYTE2_TVM) !== 0;
+
 /**
  * Whether a CSR instruction may complete. Non-existent indices and insufficient
  * privilege are illegal on any access; read-only CSRs are illegal only when writing.
  * With `mstatus.TVM` set, S-mode access to `satp` is also illegal.
+ * `cycle`/`time` below M need `mcounteren`; U-mode also needs `scounteren`.
  */
 const isControlAndStatusRegisterAccessAllowed = (
   registers: Registers,
@@ -242,10 +319,12 @@ const isControlAndStatusRegisterAccessAllowed = (
   if (writes && isReadOnlyControlAndStatusRegister(index)) {
     return false;
   }
+  if (isSatpBlockedByTvm(registers, index)) {
+    return false;
+  }
   if (
-    index === SATP &&
-    compareUnsignedBytes(registers.privilegeMode, PRIVILEGE_SUPERVISOR) === 0 &&
-    (registers.controlAndStatus[MSTATUS]![2]! & MSTATUS_BYTE2_TVM) !== 0
+    isUnprivilegedCounterControlAndStatusRegister(index) &&
+    !isCounterAccessEnabled(registers, index)
   ) {
     return false;
   }
@@ -257,6 +336,50 @@ const REGISTER_ZERO_BYTES = new Uint8Array(8) as ReadonlyUint8Array;
 const REGISTER_ONE_BYTES = signedNumberToBytes(new Uint8Array(8), 1, 32) as ReadonlyUint8Array;
 
 const FOUR_BYTES = signedNumberToBytes(new Uint8Array(8), 4, 32) as ReadonlyUint8Array;
+
+/** Mark that the instruction about to execute should retire if it completes. */
+const beginInstructionRetire = (registers: Registers): void => {
+  registers.retireInstruction = true;
+};
+
+/** Cancel retire (trap / illegal / aborted execute). */
+const cancelInstructionRetire = (registers: Registers): void => {
+  registers.retireInstruction = false;
+};
+
+/**
+ * If retire is still pending, bump `mcycle` / `minstret` unless frozen in `mcountinhibit`.
+ * CPI = 1: one retired instruction advances both counters together.
+ */
+const commitInstructionRetire = (registers: Registers): void => {
+  if (!registers.retireInstruction) {
+    return;
+  }
+  registers.retireInstruction = false;
+  const inhibit = registers.controlAndStatus[MCOUNTINHIBIT]![0]!;
+  if ((inhibit & COUNTEREN_BYTE0_CY) === 0) {
+    addBytes(
+      registers.controlAndStatus[MCYCLE]!,
+      registers.controlAndStatus[MCYCLE]!,
+      REGISTER_ONE_BYTES
+    );
+  }
+  if ((inhibit & COUNTEREN_BYTE0_IR) === 0) {
+    addBytes(
+      registers.controlAndStatus[MINSTRET]!,
+      registers.controlAndStatus[MINSTRET]!,
+      REGISTER_ONE_BYTES
+    );
+  }
+};
+
+/**
+ * Retire now (for `ecall` / `ebreak`, whose defined behavior is to trap after retiring).
+ */
+const retireInstructionNow = (registers: Registers): void => {
+  registers.retireInstruction = true;
+  commitInstructionRetire(registers);
+};
 
 const createRegisters = (): Registers => {
   const generalPurpose = Array.from(
@@ -279,6 +402,7 @@ const createRegisters = (): Registers => {
     controlAndStatus: controlAndStatus as unknown as Registers['controlAndStatus'],
     privilegeMode: copyBytes(new Uint8Array(8), PRIVILEGE_MACHINE),
     plicSupervisorExternalPending: false,
+    retireInstruction: false,
   };
 };
 
@@ -350,8 +474,22 @@ const readMipWithPlicSeip = (registers: Registers): Uint8Array => {
   return mip;
 };
 
-const readControlAndStatusRegister = (registers: Registers, index: number): ReadonlyUint8Array => {
+const readControlAndStatusRegister = (
+  registers: Registers,
+  index: number,
+  memory?: Memory
+): ReadonlyUint8Array => {
   switch (index) {
+    case TIME:
+      // `time` mirrors CLINT `mtime` (sync-on-read). Callers that read TIME must pass memory.
+      if (memory === undefined) {
+        throw new TypeError('Reading the time CSR requires guest memory (CLINT mtime).');
+      }
+      return readClintMtimeBytes(memory, new Uint8Array(8));
+    case CYCLE:
+      return registers.controlAndStatus[MCYCLE]!;
+    case INSTRET:
+      return registers.controlAndStatus[MINSTRET]!;
     case SSTATUS:
       return andBytes(new Uint8Array(8), registers.controlAndStatus[MSTATUS]!, SSTATUS_MASK_BYTES);
     case SIE:
@@ -365,17 +503,28 @@ const readControlAndStatusRegister = (registers: Registers, index: number): Read
   }
 };
 
-/** Copy a CSR; the file slot is live and must not be used as a mutable old value. */
-const snapshotControlAndStatusRegister = (registers: Registers, index: number): Uint8Array =>
-  copyBytes(new Uint8Array(8), readControlAndStatusRegister(registers, index));
+/**
+ * Copy a CSR; the file slot is live and must not be used as a mutable old value.
+ * Pass `memory` when reading `time` (CLINT-backed).
+ */
+const snapshotControlAndStatusRegister = (
+  registers: Registers,
+  index: number,
+  memory?: Memory
+): Uint8Array =>
+  copyBytes(new Uint8Array(8), readControlAndStatusRegister(registers, index, memory));
 
 const writeControlAndStatusRegister = (
   registers: Registers,
   index: number,
   value: ReadonlyUint8Array
 ): ReadonlyUint8Array => {
-  // Identity CSRs are hardwired; guest CSR instructions must trap before calling this.
-  if (isIdentityControlAndStatusRegister(index)) {
+  // Identity / unprivileged counters are hardwired or device-backed; guest CSR
+  // instructions must trap before calling this for those indices.
+  if (
+    isIdentityControlAndStatusRegister(index) ||
+    isUnprivilegedCounterControlAndStatusRegister(index)
+  ) {
     return registers.controlAndStatus[index]!;
   }
   switch (index) {
@@ -443,6 +592,17 @@ const writeControlAndStatusRegister = (
       return copyBytes(
         registers.controlAndStatus[MIDELEG]!,
         andBytes(new Uint8Array(8), value, MIDELEG_MASK_BYTES)
+      );
+    case MCOUNTEREN:
+    case SCOUNTEREN:
+      return copyBytes(
+        registers.controlAndStatus[index]!,
+        andBytes(new Uint8Array(8), value, COUNTEREN_MASK_BYTES)
+      );
+    case MCOUNTINHIBIT:
+      return copyBytes(
+        registers.controlAndStatus[MCOUNTINHIBIT]!,
+        andBytes(new Uint8Array(8), value, MCOUNTINHIBIT_MASK_BYTES)
       );
     case MEPC:
     case SEPC:
@@ -539,6 +699,10 @@ export {
   readProgramCounter,
   setProgramCounter,
   advanceProgramCounter,
+  beginInstructionRetire,
+  cancelInstructionRetire,
+  commitInstructionRetire,
+  retireInstructionNow,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   isControlAndStatusRegisterAccessAllowed,
