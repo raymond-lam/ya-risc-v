@@ -16,6 +16,10 @@
 
 /**
  * CLINT timebase — `mtime` / `mtimecmp` / epoch shadows and `tickClint`.
+ *
+ * Guest RMW and the timer worker race on the same u64 shadows: updates use
+ * compareExchange, and a winning `mtime` store reseats the epoch before the
+ * next tick can observe a torn pair.
  */
 
 import { bytesToBigInt, unsignedBigIntToBytes } from '#utils/bytes';
@@ -48,6 +52,19 @@ const writeTimeRegister = (memory: Memory, register: ClintTimeRegister, value: b
   );
 };
 
+const compareExchangeTimeRegister = (
+  memory: Memory,
+  register: ClintTimeRegister,
+  expected: bigint,
+  desired: bigint
+): bigint =>
+  Atomics.compareExchange(
+    clintHostUint64s(memory),
+    timeRegisterUint64Index(register),
+    BigInt.asUintN(64, expected),
+    BigInt.asUintN(64, desired)
+  );
+
 const writeEpochNs = (memory: Memory, value: bigint): void => {
   Atomics.store(clintHostUint64s(memory), CLINT_HOST_EPOCH_NS_UINT64, BigInt.asUintN(64, value));
 };
@@ -62,20 +79,32 @@ const updateTimerWireFromCompare = (memory: Memory): void => {
   );
 };
 
-const reseatEpochFromMtime = (memory: Memory): void => {
-  const mtime = readTimeRegister(memory, 'mtime');
+/** Reseat epoch so `tickClint` reproduces `mtime` from `process.hrtime`. */
+const reseatEpochForMtime = (memory: Memory, mtime: bigint): void => {
   writeEpochNs(memory, process.hrtime.bigint() - (mtime * NS_PER_SECOND) / CLINT_TIMEBASE_HZ);
 };
 
 /**
  * Advance free-running `mtime` from the host clock and refresh the timer IRQ wire.
  * Called by the CLINT timebase worker and on guest `mtime` reads (sync-on-read).
+ * CAS-retries when a guest `mtime`/epoch RMW wins the race.
  */
 const tickClint = (memory: Memory): void => {
-  const elapsedNs = process.hrtime.bigint() - readEpochNs(memory);
-  const ticks = (elapsedNs * CLINT_TIMEBASE_HZ) / NS_PER_SECOND;
-  writeTimeRegister(memory, 'mtime', ticks);
-  updateTimerWireFromCompare(memory);
+  for (;;) {
+    const epochNs = readEpochNs(memory);
+    const elapsedNs = process.hrtime.bigint() - epochNs;
+    const ticks = BigInt.asUintN(64, (elapsedNs * CLINT_TIMEBASE_HZ) / NS_PER_SECOND);
+    const previous = readTimeRegister(memory, 'mtime');
+    if (compareExchangeTimeRegister(memory, 'mtime', previous, ticks) !== previous) {
+      continue;
+    }
+    // Guest may have reseated the epoch after we sampled it; retry if so.
+    if (readEpochNs(memory) !== epochNs) {
+      continue;
+    }
+    updateTimerWireFromCompare(memory);
+    return;
+  }
 };
 
 /** Reset time shadows: `mtime` = 0, `mtimecmp` = all-ones, epoch = now, timer wire from compare. */
@@ -108,8 +137,8 @@ const loadClintTimeBytes = (
 
 /**
  * Store `byteLength` bytes into `mtime` / `mtimecmp` starting at `byteOffset`.
- * Partial writes RMW one atomic u64; full aligned 8-byte writes replace the word.
- * Reseats the epoch once after any `mtime` write.
+ * Partial writes RMW one atomic u64 via CAS; full aligned 8-byte writes also CAS.
+ * Reseats the epoch in the same winning critical section as any `mtime` store.
  */
 const storeClintTimeBytes = (
   memory: Memory,
@@ -118,21 +147,28 @@ const storeClintTimeBytes = (
   source: ReadonlyUint8Array,
   byteLength: number
 ): void => {
-  let next: bigint;
-  if (byteLength === 8 && byteOffset === 0) {
-    next = bytesToBigInt(source);
-  } else {
-    next = readTimeRegister(memory, register);
-    for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
-      const shift = BigInt((byteOffset + byteIndex) * 8);
-      next = (next & ~(0xffn << shift)) | (BigInt((source[byteIndex] ?? 0) & 0xff) << shift);
+  for (;;) {
+    const previous = readTimeRegister(memory, register);
+    let next: bigint;
+    if (byteLength === 8 && byteOffset === 0) {
+      next = bytesToBigInt(source);
+    } else {
+      next = previous;
+      for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
+        const shift = BigInt((byteOffset + byteIndex) * 8);
+        next = (next & ~(0xffn << shift)) | (BigInt((source[byteIndex] ?? 0) & 0xff) << shift);
+      }
     }
+    next = BigInt.asUintN(64, next);
+    if (compareExchangeTimeRegister(memory, register, previous, next) !== previous) {
+      continue;
+    }
+    if (register === 'mtime') {
+      reseatEpochForMtime(memory, next);
+    }
+    updateTimerWireFromCompare(memory);
+    return;
   }
-  writeTimeRegister(memory, register, next);
-  if (register === 'mtime') {
-    reseatEpochFromMtime(memory);
-  }
-  updateTimerWireFromCompare(memory);
 };
 
 /** One byte of `mtime` / `mtimecmp` (syncs `mtime` once). */
@@ -147,7 +183,7 @@ const loadClintTimeRegisterByte = (
   return Number((readTimeRegister(memory, register) >> BigInt(byteOffset * 8)) & 0xffn);
 };
 
-/** RMW one byte inside a time register via a single atomic u64 load/store. */
+/** RMW one byte inside a time register via a single atomic u64 CAS. */
 const storeClintTimeRegisterByte = (
   memory: Memory,
   register: ClintTimeRegister,

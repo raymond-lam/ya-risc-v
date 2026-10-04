@@ -15,23 +15,23 @@
  */
 
 import { parentPort, workerData } from 'node:worker_threads';
-import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
 import decode from '#emulator/cpu/decode';
 import {
   beginInstructionRetire,
   commitInstructionRetire,
   createRegisters,
   readProgramCounter,
-  setMachineExternalInterruptPending,
-  setMachineSoftwareInterruptPending,
-  setMachineTimerInterruptPending,
   setProgramCounter,
-  setSupervisorExternalInterruptPending,
 } from '#emulator/cpu/registers';
+import sampleDevicePending from '#emulator/cpu/sample-device-pending';
 import { takeInterruptIfAny, trapIfInstructionAddressMisaligned } from '#emulator/cpu/trap';
 import type { CpuWorkerData } from '#emulator/cpu/types';
 import { loadBytes } from '#emulator/memory';
-import { isPlicMachineExternalPending, isPlicSupervisorExternalPending } from '#emulator/plic';
+
+const isThenable = (value: unknown): value is PromiseLike<void> =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as PromiseLike<void>).then === 'function';
 
 const main = async (): Promise<void> => {
   const { memory, resetPc } = workerData as CpuWorkerData;
@@ -41,10 +41,10 @@ const main = async (): Promise<void> => {
 
   // No exit condition: the hart runs until the host terminates us.
   for (;;) {
-    setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
-    setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));
-    setMachineExternalInterruptPending(registers, isPlicMachineExternalPending(memory));
-    setSupervisorExternalInterruptPending(registers, isPlicSupervisorExternalPending(memory));
+    // NOTE: IRQ wire sampling runs every instruction for interrupt latency correctness.
+    // Coalescing samples across iterations would be a micro-opt with observable timing
+    // changes; leave per-instruction sampling until a proven bottleneck exists.
+    sampleDevicePending(registers, memory);
     if (takeInterruptIfAny(registers)) {
       continue;
     }
@@ -59,7 +59,12 @@ const main = async (): Promise<void> => {
     });
     beginInstructionRetire(registers);
     const [execute, instructionByteLength] = decode(instructionWord);
-    await execute(registers, memory, instructionByteLength);
+    // Only await async instructions (today: wfi). Sync thunks return void and must
+    // not force a microtask per instruction on the hot path.
+    const result = execute(registers, memory, instructionByteLength);
+    if (isThenable(result)) {
+      await result;
+    }
     commitInstructionRetire(registers);
   }
 };

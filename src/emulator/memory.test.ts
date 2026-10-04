@@ -373,6 +373,21 @@ describe('memory', () => {
     );
   });
 
+  it('rejects a negative guestByteLength', () => {
+    assert.throws(
+      () =>
+        createMemory([
+          {
+            id: 'bad',
+            hostByteLength: 8n,
+            guestAddress: guest(0n),
+            guestByteLength: -1n,
+          },
+        ]),
+      /guestByteLength must be non-negative/
+    );
+  });
+
   it('sorts regionsByBaseGuestAddress by guest base (not pack order)', () => {
     const memory = createMemory([
       {
@@ -865,6 +880,67 @@ describe('plic', () => {
     const memory = createTestMemory(64n);
     storePlicUint32(memory, 0x1000n, 0xffff_ffff);
     assert.equal(loadPlicUint32(memory, 0x1000n), 0);
+  });
+
+  it('threshold gates claimable sources and wire level', () => {
+    const memory = createTestMemory(64n);
+    storePlicUint32(memory, BigInt(PLIC_SOURCE_UART * 4), 3); // priority 3
+    storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
+    storePlicUint32(memory, 0x200000n, 3); // threshold == priority → not claimable
+    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    assert.equal(isPlicMachineExternalPending(memory), false);
+    assert.equal(loadPlicUint32(memory, 0x200004n), 0);
+
+    storePlicUint32(memory, 0x200000n, 2); // threshold below priority
+    assert.equal(isPlicMachineExternalPending(memory), true);
+    assert.equal(loadPlicUint32(memory, 0x200004n), PLIC_SOURCE_UART);
+  });
+
+  it('equal-priority claim tie-breaks to the lowest source id', () => {
+    const memory = createTestMemory(64n);
+    const sourceLow = 3;
+    const sourceHigh = 12;
+    storePlicUint32(memory, BigInt(sourceLow * 4), 5);
+    storePlicUint32(memory, BigInt(sourceHigh * 4), 5);
+    storePlicUint32(memory, 0x2000n, (1 << sourceLow) | (1 << sourceHigh));
+    storePlicUint32(memory, 0x200000n, 0);
+    setPlicSourcePending(memory, sourceLow, true);
+    setPlicSourcePending(memory, sourceHigh, true);
+    assert.equal(loadPlicUint32(memory, 0x200004n), sourceLow);
+    assert.equal(loadPlicUint32(memory, 0x200004n), sourceHigh);
+  });
+
+  it('complete of an id not claimed by that context is ignored', () => {
+    const memory = createTestMemory(64n);
+    storePlicUint32(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+    storePlicUint32(memory, 0x2000n, 1 << PLIC_SOURCE_UART); // enable M
+    storePlicUint32(memory, 0x2080n, 1 << PLIC_SOURCE_UART); // enable S
+    storePlicUint32(memory, 0x200000n, 0);
+    storePlicUint32(memory, 0x201000n, 0);
+    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+
+    assert.equal(loadPlicUint32(memory, 0x200004n), PLIC_SOURCE_UART); // M claims
+    assert.equal(isPlicMachineExternalPending(memory), false);
+    // S-context complete must not release M's claim (SiFive).
+    storePlicUint32(memory, 0x201004n, PLIC_SOURCE_UART);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 0);
+    assert.equal(isPlicMachineExternalPending(memory), false);
+    // M-context complete re-arms from the still-high input level.
+    storePlicUint32(memory, 0x200004n, PLIC_SOURCE_UART);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 1 << PLIC_SOURCE_UART);
+    assert.equal(isPlicMachineExternalPending(memory), true);
+  });
+
+  it('claim then device re-assert while claimed does not set pending until complete', () => {
+    const memory = createTestMemory(64n);
+    setUartPlicPending(memory, true);
+    assert.equal(loadPlicUint32(memory, 0x200004n), PLIC_SOURCE_UART);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 0);
+    // UART refreshes level high again while gateway is claimed — pending stays clear.
+    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 0);
+    storePlicUint32(memory, 0x200004n, PLIC_SOURCE_UART);
+    assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 1 << PLIC_SOURCE_UART);
   });
 });
 

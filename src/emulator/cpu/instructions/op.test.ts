@@ -21,10 +21,11 @@ import { add, sub, slt, xor } from '#emulator/cpu/instructions/op';
 import {
   createRegisters,
   readGeneralPurposeRegister,
+  readProgramCounter,
   writeGeneralPurposeRegister,
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
-import { signedNumberToBytes } from '#utils/bytes';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('op', () => {
   it('add and sub combine two registers', () => {
@@ -46,6 +47,7 @@ describe('op', () => {
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 27, 32)
     );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
 
     sub(
       registers,
@@ -61,6 +63,7 @@ describe('op', () => {
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 13, 32)
     );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
   });
 
   it('slt sets rd from a signed comparison', () => {

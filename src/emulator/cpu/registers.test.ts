@@ -17,11 +17,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  MEDELEG,
   MIDELEG,
   MIE,
   MIP,
   MSTATUS,
+  MTVEC,
   PRIVILEGE_MACHINE,
+  STVEC,
   advanceProgramCounter,
   beginInstructionRetire,
   commitInstructionRetire,
@@ -110,9 +113,57 @@ describe('registers', () => {
 
   it('writes and reads a control-and-status register', () => {
     const registers = createRegisters();
+    // mtvec BASE with Direct MODE (bits[1:0]=0) round-trips unchanged.
     const value = signedNumberToBytes(new Uint8Array(8), 0x1234, 32);
-    writeControlAndStatusRegister(registers, 0x305, value);
-    assert.deepEqual(snapshotControlAndStatusRegister(registers, 0x305), value);
+    writeControlAndStatusRegister(registers, MTVEC, value);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MTVEC), value);
+  });
+
+  it('mtvec and stvec WARL force reserved MODE to Direct', () => {
+    const registers = createRegisters();
+    // MODE=2 (reserved) → forced to Direct (0); BASE preserved → 0x1234.
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1236, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVEC),
+      signedNumberToBytes(new Uint8Array(8), 0x1234, 32)
+    );
+    // MODE=3 (reserved) → Direct; Vectored (1) sticks.
+    writeControlAndStatusRegister(
+      registers,
+      STVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2003, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, STVEC),
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      STVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2001, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, STVEC),
+      signedNumberToBytes(new Uint8Array(8), 0x2001, 32)
+    );
+  });
+
+  it('medeleg WARL keeps bit 11 (M-mode ecall) read-only zero', () => {
+    const registers = createRegisters();
+    // Set many exception bits including bit 11 (0x800).
+    writeControlAndStatusRegister(
+      registers,
+      MEDELEG,
+      signedNumberToBytes(new Uint8Array(8), 0xffff, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MEDELEG),
+      signedNumberToBytes(new Uint8Array(8), 0xf7ff, 32)
+    );
   });
 
   it('misa is hardwired RV64IMAC+S/U and WARL-ignores writes', () => {

@@ -20,9 +20,14 @@ import testMemory from '#test/guest-memory';
 import {
   amoaddD,
   amoaddW,
+  amoandW,
+  amomaxW,
+  amomaxuW,
   amominW,
   amominuW,
+  amoorW,
   amoswapD,
+  amoxorW,
   lrD,
   lrW,
   scD,
@@ -39,7 +44,10 @@ import {
   writeGeneralPurposeRegister,
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
-import { CAUSE_STORE_AMO_ADDRESS_MISALIGNED } from '#emulator/cpu/trap';
+import {
+  CAUSE_STORE_AMO_ACCESS_FAULT,
+  CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
+} from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 describe('amo', () => {
@@ -334,6 +342,58 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
+  it('amoxor/amoand/amoor/amomax/amomaxu.w smoke the remaining AMO ops', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    const args = {
+      destinationRegister: 3,
+      sourceRegister1: 1,
+      sourceRegister2: 2,
+    };
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 80, 32));
+
+    guest.bytes[80] = 0xf0;
+    guest.bytes[81] = 0x00;
+    guest.bytes[82] = 0x00;
+    guest.bytes[83] = 0x00;
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
+    amoxorW(registers, guest, args, FOUR_BYTES);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 0xf0, 32)
+    );
+    assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0xff, 0, 0, 0));
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+
+    guest.bytes[80] = 0xf0;
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
+    amoandW(registers, guest, args, FOUR_BYTES);
+    assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0x00, 0, 0, 0));
+
+    guest.bytes[80] = 0xf0;
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
+    amoorW(registers, guest, args, FOUR_BYTES);
+    assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0xff, 0, 0, 0));
+
+    // mem = 0x7fffffff, rs2 = -1 → signed max keeps mem; unsigned max stores -1.
+    guest.bytes[80] = 0xff;
+    guest.bytes[81] = 0xff;
+    guest.bytes[82] = 0xff;
+    guest.bytes[83] = 0x7f;
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
+    amomaxW(registers, guest, args, FOUR_BYTES);
+    assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0xff, 0xff, 0xff, 0x7f));
+
+    guest.bytes[80] = 0xff;
+    guest.bytes[81] = 0xff;
+    guest.bytes[82] = 0xff;
+    guest.bytes[83] = 0x7f;
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
+    amomaxuW(registers, guest, args, FOUR_BYTES);
+    assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0xff, 0xff, 0xff, 0xff));
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 20);
+  });
+
   it('misaligned lr.w traps with cause 6 and does not arm a reservation', () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
@@ -452,5 +512,98 @@ describe('amo', () => {
       signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ADDRESS_MISALIGNED, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x3000);
+  });
+
+  it('aligned lr.w to unmapped address traps with cause 7 and does not arm a reservation', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      0x305,
+      signedNumberToBytes(new Uint8Array(8), 0x4000, 32)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    // Aligned but outside RAM (and not MMIO in the test map).
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1_0000_0000n)
+    );
+
+    lrW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 0,
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x342),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ACCESS_FAULT, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x343),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1_0000_0000n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
+
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 16, 32));
+    writeGeneralPurposeRegister(
+      registers,
+      2,
+      signedNumberToBytes(new Uint8Array(8), 0x22222222, 32)
+    );
+    scW(
+      registers,
+      guest,
+      {
+        destinationRegister: 4,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 4),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+  });
+
+  it('aligned amoadd.w to UART MMIO traps with cause 7', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      0x305,
+      signedNumberToBytes(new Uint8Array(8), 0x5000, 32)
+    );
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n)
+    );
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
+
+    amoaddW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, 0x342),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ACCESS_FAULT, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
   });
 });

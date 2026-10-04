@@ -60,7 +60,11 @@ import {
   RAM_REGION_ID,
   storeBytesToRam,
 } from '#emulator/ram';
-import { invalidateOverlappingReservations, releaseScMonitorIfHeld } from '#emulator/reservation';
+import {
+  invalidateOverlappingReservationsLocked,
+  releaseScMonitorIfHeld,
+  withMonitorLock,
+} from '#emulator/reservation';
 import { loadBytesFromUart, storeBytesToUart, UART_REGION_ID } from '#emulator/uart';
 import type { ReadonlyUint8Array } from '#types';
 import { alignUp } from '#utils/alignment';
@@ -162,6 +166,9 @@ const createMemory = (
   for (const spec of regionSpecs) {
     if (spec.hostByteLength < 0n) {
       throw new RangeError(`Region '${spec.id}' hostByteLength must be non-negative.`);
+    }
+    if (spec.guestAddress !== null && spec.guestByteLength < 0n) {
+      throw new RangeError(`Region '${spec.id}' guestByteLength must be non-negative.`);
     }
     if (regions.has(spec.id)) {
       throw new RangeError(`Duplicate memory region ID '${spec.id}'.`);
@@ -349,14 +356,18 @@ const storeBytes = ({
   byteLength: number;
 }): void => {
   try {
-    invalidateOverlappingReservations(memory, address, byteLength);
-    const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
-    if (resolved === null) {
-      return;
-    }
-    const { regionId, offset } = resolved;
-    const [, storeBytesToRegion] = REGION_LOAD_STORE.get(regionId) ?? UNMAPPED_LOAD_STORE;
-    storeBytesToRegion({ memory, address, offset, source, byteLength });
+    // Hold the LR/SC monitor across invalidate and the write so a remote hart
+    // cannot arm a reservation in the gap (same critical section SC uses).
+    withMonitorLock(memory, () => {
+      invalidateOverlappingReservationsLocked(memory, address, byteLength);
+      const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+      if (resolved === null) {
+        return;
+      }
+      const { regionId, offset } = resolved;
+      const [, storeBytesToRegion] = REGION_LOAD_STORE.get(regionId) ?? UNMAPPED_LOAD_STORE;
+      storeBytesToRegion({ memory, address, offset, source, byteLength });
+    });
   } finally {
     releaseScMonitorIfHeld(memory);
   }
@@ -389,6 +400,7 @@ const atomicLoadBytes = ({
 /**
  * Atomic store of a naturally aligned 32-bit or 64-bit location from `source`.
  * Returns `false` when unmapped, non-RAM, or misaligned.
+ * Always releases an SC-held monitor lock on every exit path.
  */
 const atomicStoreBytes = ({
   memory,
@@ -401,13 +413,17 @@ const atomicStoreBytes = ({
   source: ReadonlyUint8Array;
   byteLength: 4 | 8;
 }): boolean => {
-  const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
-  if (resolved === null) {
-    return false;
+  try {
+    const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+    if (resolved === null) {
+      return false;
+    }
+    const [, atomicStoreBytesToRegion] =
+      REGION_ATOMIC_LOAD_STORE.get(resolved.regionId) ?? ATOMIC_NOOP_LOAD_STORE;
+    return atomicStoreBytesToRegion({ memory, address, source, byteLength });
+  } finally {
+    releaseScMonitorIfHeld(memory);
   }
-  const [, atomicStoreBytesToRegion] =
-    REGION_ATOMIC_LOAD_STORE.get(resolved.regionId) ?? ATOMIC_NOOP_LOAD_STORE;
-  return atomicStoreBytesToRegion({ memory, address, source, byteLength });
 };
 
 /**

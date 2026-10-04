@@ -15,7 +15,6 @@
  */
 
 import { andBytes, compareUnsignedBytes, isZeroBytes, orBytes, xorBytes } from '#utils/bytes';
-import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
 import {
   MSTATUS,
   PRIVILEGE_MACHINE,
@@ -24,15 +23,12 @@ import {
   isControlAndStatusRegisterAccessAllowed,
   readGeneralPurposeRegister,
   readPrivilegeMode,
-  setMachineExternalInterruptPending,
-  setMachineSoftwareInterruptPending,
-  setMachineTimerInterruptPending,
-  setSupervisorExternalInterruptPending,
   retireInstructionNow,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
+import sampleDevicePending from '#emulator/cpu/sample-device-pending';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ILLEGAL_INSTRUCTION,
@@ -46,7 +42,6 @@ import {
 import type { Registers } from '#emulator/cpu/types';
 import { loadIrqLevel, waitIrqLevel } from '#emulator/irq-level';
 import type { Memory } from '#emulator/memory';
-import { isPlicMachineExternalPending, isPlicSupervisorExternalPending } from '#emulator/plic';
 import type { ReadonlyUint8Array } from '#types';
 
 type CsrRegisterArgs = {
@@ -76,20 +71,12 @@ const MSTATUS_BYTE2_TW = 0x20;
 
 /**
  * mstatus.TSR (Trap SRET), bit 22 → little-endian bytes[2] bit 6.
- * When set, `sret` in M-mode raises illegal-instruction.
+ * When set, `sret` in S-mode raises illegal-instruction (M-mode `sret` stays legal).
  */
 const MSTATUS_BYTE2_TSR = 0x40;
 
 const trapIllegalCsrAccess = (registers: Registers, instructionWord: number): void => {
   enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(instructionWord));
-};
-
-/** Sample CLINT/PLIC wires into `mip` (device-driven pending bits). */
-const sampleDevicePending = (registers: Registers, memory: Memory): void => {
-  setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
-  setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));
-  setMachineExternalInterruptPending(registers, isPlicMachineExternalPending(memory));
-  setSupervisorExternalInterruptPending(registers, isPlicSupervisorExternalPending(memory));
 };
 
 /** ecall: environment call; cause depends on the current privilege mode. */
@@ -125,7 +112,7 @@ const mret = (
   returnFromMachineTrap(registers);
 };
 
-/** sret: return from S-mode trap handler (illegal in U-mode; TSR traps SRET in M). */
+/** sret: return from S-mode trap handler (illegal in U-mode; TSR traps SRET in S). */
 const sret = (
   registers: Registers,
   _memory: Memory,
@@ -135,7 +122,7 @@ const sret = (
     enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(0x10200073));
     return;
   }
-  if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_MACHINE) === 0) {
+  if (compareUnsignedBytes(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR) === 0) {
     const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
     if ((mstatus[2]! & MSTATUS_BYTE2_TSR) !== 0) {
       enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(0x10200073));
@@ -147,10 +134,12 @@ const sret = (
 
 /**
  * wfi: hint that the hart may stall until an interrupt is pending and enabled in
- * `mie` (`mip ∧ mie`). Advances PC, then waits on the published IRQ-level word (OR of
- * device wires) until that level changes, re-sampling each time. Global
+ * `mie` (`mip ∧ mie`). Advances PC and retires, then waits on the published IRQ-level
+ * word (OR of device wires) until that level changes, re-sampling each time. Global
  * `mstatus.MIE`/`SIE` are not required to resume (interrupt take still needs them
- * on the following run-loop check).
+ * on the following run-loop check). Retire happens before the wait so counters advance
+ * even if the stall is long; the run loop's later `commitInstructionRetire` is a no-op
+ * because the retire flag is already cleared.
  *
  * When `mstatus.TW` is set and privilege is below M, `wfi` raises illegal-instruction
  * immediately (implementation-defined wait limit of zero).
@@ -172,6 +161,8 @@ const wfi = async (
     }
   }
   advanceProgramCounter(registers, instructionByteLength);
+  // Retire before waiting so minstret/mcycle advance when wfi executes, not when it wakes.
+  retireInstructionNow(registers);
   for (;;) {
     sampleDevicePending(registers, memory);
     if (isPendingEnabledInterrupt(registers)) {

@@ -180,6 +180,56 @@ describe('RV64C decode + execute', () => {
     );
   });
 
+  it('c.ldsp / c.sdsp use x2 as base with a doubleword offset', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x20, 32));
+    writeGeneralPurposeRegister(
+      registers,
+      5,
+      signedNumberToBytes(new Uint8Array(8), 0x11223344, 32)
+    );
+    // c.sdsp x5, 8 → offset=8
+    runDecoded(compressedBytes(0xe416), registers, memory);
+    assert.deepEqual(
+      memory.bytes.subarray(0x28, 0x30),
+      Uint8Array.of(0x44, 0x33, 0x22, 0x11, 0, 0, 0, 0)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    // c.ldsp x6, 8
+    runDecoded(compressedBytes(0x6322), registers, memory);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 6),
+      signedNumberToBytes(new Uint8Array(8), 0x11223344, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 2);
+  });
+
+  it('c.lwsp / c.ldsp with rd=x0 and c.jr x0 are illegal', () => {
+    const memory = testMemory(64n);
+    const expectIllegal = (halfword: number): void => {
+      const registers = createRegisters();
+      writeControlAndStatusRegister(
+        registers,
+        0x305,
+        signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+      );
+      setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
+      runDecoded(compressedBytes(halfword), registers, memory);
+      assert.deepEqual(
+        snapshotControlAndStatusRegister(registers, 0x342),
+        signedNumberToBytes(new Uint8Array(8), 2, 32)
+      );
+      assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+    };
+    // c.lwsp x0, 0
+    expectIllegal(0x4002);
+    // c.ldsp x0, 0
+    expectIllegal(0x6002);
+    // c.jr x0 (rs1=x0 reserved)
+    expectIllegal(0x8002);
+  });
+
   it('c.j jumps with a PC-relative offset', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);

@@ -20,24 +20,32 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { wfi } from '#emulator/cpu/instructions/system';
 import {
   MCAUSE,
+  MIDELEG,
   MIE,
   MSTATUS,
   MTVEC,
+  PRIVILEGE_SUPERVISOR,
+  SCAUSE,
+  STVEC,
   createRegisters,
   readProgramCounter,
-  setMachineExternalInterruptPending,
-  setMachineSoftwareInterruptPending,
-  setMachineTimerInterruptPending,
+  setPrivilegeMode,
   setProgramCounter,
-  setSupervisorExternalInterruptPending,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
+import sampleDevicePending from '#emulator/cpu/sample-device-pending';
 import { takeInterruptIfAny } from '#emulator/cpu/trap';
 import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
-import { IRQ_LEVEL_MSIP, loadIrqLevel, waitIrqLevel } from '#emulator/irq-level';
-import { storeBytes, type Memory } from '#emulator/memory';
+import {
+  IRQ_LEVEL_MEIP,
+  IRQ_LEVEL_MSIP,
+  IRQ_LEVEL_SEIP,
+  loadIrqLevel,
+  waitIrqLevel,
+} from '#emulator/irq-level';
+import { storeBytes } from '#emulator/memory';
 import {
   isPlicMachineExternalPending,
   isPlicSupervisorExternalPending,
@@ -48,18 +56,24 @@ import createTestMemory from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
-/** Interrupt codes (mcause with interrupt bit set). */
+/** Interrupt codes (mcause/scause with interrupt bit set). */
 const CAUSE_MACHINE_SOFTWARE_INTERRUPT = 3;
 const CAUSE_MACHINE_TIMER_INTERRUPT = 7;
+const CAUSE_SUPERVISOR_EXTERNAL_INTERRUPT = 9;
 const CAUSE_MACHINE_EXTERNAL_INTERRUPT = 11;
 
-/** mie enable bits (bit index = cause). */
+/** mie / sie enable bits (bit index = cause). */
 const MIE_MSIE = 1 << CAUSE_MACHINE_SOFTWARE_INTERRUPT;
 const MIE_MTIE = 1 << CAUSE_MACHINE_TIMER_INTERRUPT;
+const MIE_SEIE = 1 << CAUSE_SUPERVISOR_EXTERNAL_INTERRUPT;
 const MIE_MEIE = 1 << CAUSE_MACHINE_EXTERNAL_INTERRUPT;
 
-/** mstatus.MIE */
+/** mstatus.MIE / SIE */
+const MSTATUS_SIE = 0x02;
 const MSTATUS_MIE = 0x08;
+
+/** mideleg bit for supervisor external interrupt. */
+const MIDELEG_SEI = 1 << CAUSE_SUPERVISOR_EXTERNAL_INTERRUPT;
 
 const CLINT_MSIP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n) as ReadonlyUint8Array;
 const CLINT_MTIMECMP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_4000n) as ReadonlyUint8Array;
@@ -68,15 +82,31 @@ const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as Re
 const interruptCauseBytes = (code: number): Uint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), (1n << 63n) | BigInt(code));
 
-/** Sample device wires into `mip` the same way the hart run loop does. */
-const sampleDevicePending = (
-  registers: ReturnType<typeof createRegisters>,
-  memory: Memory
+const plicStore = (
+  memory: ReturnType<typeof createTestMemory>,
+  offset: bigint,
+  value: number
 ): void => {
-  setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
-  setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));
-  setMachineExternalInterruptPending(registers, isPlicMachineExternalPending(memory));
-  setSupervisorExternalInterruptPending(registers, isPlicSupervisorExternalPending(memory));
+  storeBytes({
+    memory,
+    address: unsignedBigIntToBytes(new Uint8Array(8), 0x0c00_0000n + offset),
+    source: unsignedBigIntToBytes(new Uint8Array(8), BigInt(value >>> 0)),
+    byteLength: 4,
+  });
+};
+
+/** Priority > 0, S-context enable for UART, threshold 0 — leaves MEIP clear. */
+const enablePlicSupervisorUart = (memory: ReturnType<typeof createTestMemory>): void => {
+  plicStore(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+  plicStore(memory, 0x2080n, 1 << PLIC_SOURCE_UART);
+  plicStore(memory, 0x201000n, 0);
+};
+
+/** Priority > 0, M-context enable for UART, threshold 0. */
+const enablePlicMachineUart = (memory: ReturnType<typeof createTestMemory>): void => {
+  plicStore(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+  plicStore(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
+  plicStore(memory, 0x200000n, 0);
 };
 
 describe('device wire → mip → takeInterruptIfAny', () => {
@@ -180,18 +210,7 @@ describe('device wire → mip → takeInterruptIfAny', () => {
       signedNumberToBytes(new Uint8Array(8), MIE_MEIE, 32)
     );
 
-    // Priority > 0, M-context enable for UART source 10, threshold 0, then assert pending.
-    const plicStore = (offset: bigint, value: number): void => {
-      storeBytes({
-        memory,
-        address: unsignedBigIntToBytes(new Uint8Array(8), 0x0c00_0000n + offset),
-        source: unsignedBigIntToBytes(new Uint8Array(8), BigInt(value >>> 0)),
-        byteLength: 4,
-      });
-    };
-    plicStore(BigInt(PLIC_SOURCE_UART * 4), 1);
-    plicStore(0x2000n, 1 << PLIC_SOURCE_UART);
-    plicStore(0x200000n, 0);
+    enablePlicMachineUart(memory);
     setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
     assert.equal(isPlicMachineExternalPending(memory), true);
 
@@ -202,6 +221,47 @@ describe('device wire → mip → takeInterruptIfAny', () => {
       interruptCauseBytes(CAUSE_MACHINE_EXTERNAL_INTERRUPT)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
+  });
+
+  it('takes a supervisor external interrupt after PLIC S-context UART via mideleg', () => {
+    const registers = createRegisters();
+    const memory = createTestMemory(256n);
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
+    writeControlAndStatusRegister(
+      registers,
+      STVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x5000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MIDELEG,
+      signedNumberToBytes(new Uint8Array(8), MIDELEG_SEI, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), MSTATUS_SIE, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), MIE_SEIE, 32)
+    );
+
+    // S-context only — enabling M as well would assert MEIP and take MEI first in S.
+    enablePlicSupervisorUart(memory);
+    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    assert.equal(isPlicSupervisorExternalPending(memory), true);
+    assert.equal(isPlicMachineExternalPending(memory), false);
+
+    sampleDevicePending(registers, memory);
+    assert.equal(takeInterruptIfAny(registers), true);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SCAUSE),
+      interruptCauseBytes(CAUSE_SUPERVISOR_EXTERNAL_INTERRUPT)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
   });
 });
 
@@ -242,6 +302,46 @@ describe('wfi irq-level notify', () => {
       byteLength: 4,
     });
     await done;
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
+  });
+
+  it('wfi resumes after a deferred PLIC MEIP assert notifies the wake word', async () => {
+    const registers = createRegisters();
+    const memory = createTestMemory(256n);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), MIE_MEIE, 32)
+    );
+    enablePlicMachineUart(memory);
+    assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_MEIP, 0);
+
+    const done = wfi(registers, memory, FOUR_BYTES);
+    await delay(20);
+    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    await done;
+    assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_MEIP, IRQ_LEVEL_MEIP);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
+  });
+
+  it('wfi resumes after a deferred PLIC SEIP assert notifies the wake word', async () => {
+    const registers = createRegisters();
+    const memory = createTestMemory(256n);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), MIE_SEIE, 32)
+    );
+    enablePlicSupervisorUart(memory);
+    assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_SEIP, 0);
+
+    const done = wfi(registers, memory, FOUR_BYTES);
+    await delay(20);
+    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    await done;
+    assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_SEIP, IRQ_LEVEL_SEIP);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
   });
 });

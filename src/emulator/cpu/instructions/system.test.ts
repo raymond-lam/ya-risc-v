@@ -220,6 +220,34 @@ describe('system', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
   });
 
+  it('wfi retires minstret/mcycle before waiting', async () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    armTimerWake(registers, memory);
+    beginInstructionRetire(registers);
+    await wfi(registers, memory, FOUR_BYTES);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCYCLE),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MINSTRET),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    // Run-loop style second commit must not double-count.
+    commitInstructionRetire(registers);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCYCLE),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MINSTRET),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+  });
+
   it('wfi in S-mode with mstatus.TW set raises illegal-instruction', async () => {
     const registers = createRegisters();
     setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
@@ -994,24 +1022,45 @@ describe('system', () => {
     );
   });
 
-  it('sret in M-mode with mstatus.TSR set raises illegal-instruction', () => {
+  it('sret in M-mode with mstatus.TSR set remains legal', () => {
     const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      SEPC,
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
+    // TSR = bit 22 → 0x40_0000; SPP = U, SPIE set.
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x40_0020, 32)
+    );
+
+    sret(registers, testMemory(256n), FOUR_BYTES);
+
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x80);
+    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_USER);
+  });
+
+  it('sret in S-mode with mstatus.TSR set raises illegal-instruction', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     writeControlAndStatusRegister(
       registers,
       MTVEC,
       signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
     );
-    // TSR = bit 22 → 0x40_0000
-    writeControlAndStatusRegister(
-      registers,
-      MSTATUS,
-      signedNumberToBytes(new Uint8Array(8), 0x40_0000, 32)
-    );
     writeControlAndStatusRegister(
       registers,
       SEPC,
-      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+      signedNumberToBytes(new Uint8Array(8), 0x90, 32)
+    );
+    // TSR set; SPP = U, SPIE set.
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x40_0020, 32)
     );
 
     sret(registers, testMemory(256n), FOUR_BYTES);
@@ -1028,29 +1077,8 @@ describe('system', () => {
     // sepc unchanged — sret did not complete.
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, SEPC),
-      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
-    );
-  });
-
-  it('sret in S-mode ignores mstatus.TSR', () => {
-    const registers = createRegisters();
-    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
-    writeControlAndStatusRegister(
-      registers,
-      SEPC,
       signedNumberToBytes(new Uint8Array(8), 0x90, 32)
     );
-    // TSR set; SPP = U, SPIE set.
-    writeControlAndStatusRegister(
-      registers,
-      MSTATUS,
-      signedNumberToBytes(new Uint8Array(8), 0x40_0020, 32)
-    );
-
-    sret(registers, testMemory(256n), FOUR_BYTES);
-
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x90);
-    assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_USER);
   });
 
   it('M-mode can read time from CLINT mtime; cycle/instret count retires', () => {

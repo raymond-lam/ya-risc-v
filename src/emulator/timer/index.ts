@@ -48,15 +48,16 @@ class Timer implements TimerHandle {
     if (this.#started) {
       throw new Error('Already started.');
     }
-    this.#started = true;
     const workerData = {
       memory: this.#options.memory,
     } satisfies TimerWorkerData;
+    // Assign worker before marking started so a constructor throw leaves state untouched.
     const worker = new Worker(new URL(import.meta.resolve('#emulator/timer/run')), {
       execArgv: workerExecArgv(),
       workerData,
     });
     this.#worker = worker;
+    this.#started = true;
     worker.once('error', (error) => {
       this.#lifetime.reject(error);
     });
@@ -70,9 +71,6 @@ class Timer implements TimerHandle {
   };
 
   stop = (): void => {
-    if (!this.#started) {
-      throw new Error('Not started.');
-    }
     if (this.#stopped) {
       return;
     }
@@ -81,6 +79,7 @@ class Timer implements TimerHandle {
       void this.#worker.terminate();
       return;
     }
+    // Never started (or start failed before worker assignment): unblock awaiters.
     this.#lifetime.resolve();
   };
 

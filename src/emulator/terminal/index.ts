@@ -48,7 +48,6 @@ class Terminal implements TerminalHandle {
     if (this.#started) {
       throw new Error('Already started.');
     }
-    this.#started = true;
     const stdinWeb = Readable.toWeb(this.#options.stdin);
     const stdoutWeb = Writable.toWeb(this.#options.stdout);
     const workerData = {
@@ -56,12 +55,14 @@ class Terminal implements TerminalHandle {
       stdin: stdinWeb,
       stdout: stdoutWeb,
     } satisfies TerminalWorkerData;
+    // Assign worker before marking started so a constructor throw leaves state untouched.
     const worker = new Worker(new URL(import.meta.resolve('#emulator/terminal/run')), {
       execArgv: workerExecArgv(),
       workerData,
       transferList: [stdinWeb, stdoutWeb],
     });
     this.#worker = worker;
+    this.#started = true;
     worker.once('error', (error) => {
       this.#lifetime.reject(error);
     });
@@ -75,9 +76,6 @@ class Terminal implements TerminalHandle {
   };
 
   stop = (): void => {
-    if (!this.#started) {
-      throw new Error('Not started.');
-    }
     if (this.#stopped) {
       return;
     }
@@ -86,6 +84,7 @@ class Terminal implements TerminalHandle {
       void this.#worker.terminate();
       return;
     }
+    // Never started (or start failed before worker assignment): unblock awaiters.
     this.#lifetime.resolve();
   };
 

@@ -29,7 +29,7 @@ import {
 } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 import { bigIntAsNumber } from '#utils/int';
-import { invalidateOverlappingReservations, releaseScMonitorIfHeld } from '#emulator/reservation';
+import { invalidateOverlappingReservationsLocked, withMonitorLock } from '#emulator/reservation';
 import type { Memory } from '#emulator/memory';
 
 /** Packed-region id for DRAM (`createMemory` / `regions.get`). */
@@ -192,7 +192,8 @@ const atomicRamLoad = ({
 
 /**
  * Atomic store of a naturally aligned 32-bit or 64-bit RAM location from `source`.
- * Returns `false` when outside RAM or misaligned. Invalidates overlapping reservations on success.
+ * Returns `false` when outside RAM or misaligned. Invalidates overlapping reservations
+ * in the same critical section as the write.
  */
 const atomicRamStore = ({
   memory,
@@ -209,7 +210,7 @@ const atomicRamStore = ({
   if (hostIndex === null) {
     return false;
   }
-  try {
+  withMonitorLock(memory, () => {
     if (byteLength === 4) {
       Atomics.store(
         bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex)),
@@ -223,18 +224,16 @@ const atomicRamStore = ({
         signedBytesToBigInt(source)
       );
     }
-    invalidateOverlappingReservations(memory, address, byteLength);
-    return true;
-  } finally {
-    releaseScMonitorIfHeld(memory);
-  }
+    invalidateOverlappingReservationsLocked(memory, address, byteLength);
+  });
+  return true;
 };
 
 /**
  * Atomic compare-and-swap of a naturally aligned 32-bit or 64-bit RAM location.
  * Writes the value observed in memory into `destination`. Returns `true` when the
- * swap succeeded (`destination` matched `expected`). Invalidates overlapping reservations on
- * success.
+ * swap succeeded (`destination` matched `expected`). Invalidates overlapping reservations
+ * in the same critical section as a successful write.
  * Returns `false` (without writing `destination`) when outside RAM or misaligned.
  */
 const atomicRamCompareExchange = ({
@@ -256,27 +255,29 @@ const atomicRamCompareExchange = ({
   if (hostIndex === null) {
     return false;
   }
-  destination.fill(0);
-  if (byteLength === 4) {
-    const view = bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex));
-    const expectedBits = bytesToNumber(expected) | 0;
-    const previous = Atomics.compareExchange(view, 0, expectedBits, bytesToNumber(desired) | 0);
-    signedNumberToBytes(destination, previous, 32);
+  return withMonitorLock(memory, () => {
+    destination.fill(0);
+    if (byteLength === 4) {
+      const view = bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex));
+      const expectedBits = bytesToNumber(expected) | 0;
+      const previous = Atomics.compareExchange(view, 0, expectedBits, bytesToNumber(desired) | 0);
+      signedNumberToBytes(destination, previous, 32);
+      if (previous !== expectedBits) {
+        return false;
+      }
+      invalidateOverlappingReservationsLocked(memory, address, byteLength);
+      return true;
+    }
+    const view = bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex));
+    const expectedBits = signedBytesToBigInt(expected);
+    const previous = Atomics.compareExchange(view, 0, expectedBits, signedBytesToBigInt(desired));
+    unsignedBigIntToBytes(destination, BigInt.asUintN(64, previous));
     if (previous !== expectedBits) {
       return false;
     }
-    invalidateOverlappingReservations(memory, address, byteLength);
+    invalidateOverlappingReservationsLocked(memory, address, byteLength);
     return true;
-  }
-  const view = bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex));
-  const expectedBits = signedBytesToBigInt(expected);
-  const previous = Atomics.compareExchange(view, 0, expectedBits, signedBytesToBigInt(desired));
-  unsignedBigIntToBytes(destination, BigInt.asUintN(64, previous));
-  if (previous !== expectedBits) {
-    return false;
-  }
-  invalidateOverlappingReservations(memory, address, byteLength);
-  return true;
+  });
 };
 
 export {

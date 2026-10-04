@@ -37,6 +37,10 @@ type TerminalProps = {
   focused: boolean;
   /** Host layout box for hit-testing clicks. */
   boxRef: RefObject<DOMElement | null>;
+  /** Host TTY columns; remounts layout measure when the window resizes. */
+  columns: number;
+  /** Host TTY rows; remounts layout measure when the window resizes. */
+  rows: number;
 };
 
 /** Border (2) + horizontal padding (2) from the pane chrome. */
@@ -46,9 +50,10 @@ const PANE_CHROME_ROWS = 2;
 
 const emptyViewport = (): Vt100Line[] => [[{ text: ' ', style: {} }]];
 
-const Terminal = ({ stdin, stdout, focused, boxRef }: TerminalProps) => {
+const Terminal = ({ stdin, stdout, focused, boxRef, columns, rows }: TerminalProps) => {
   const paneRef = useRef<DOMElement>(null);
   const termRef = useRef<XTerminal | null>(null);
+  const paintChainRef = useRef(Promise.resolve());
   const [lines, setLines] = useState<Vt100Line[]>(emptyViewport);
   const [size, setSize] = useState({ cols: 80, rows: 24 });
 
@@ -59,45 +64,43 @@ const Terminal = ({ stdin, stdout, focused, boxRef }: TerminalProps) => {
     }
     const measured = measureElement(node);
     const cols = Math.max(2, measured.width - PANE_CHROME_COLS);
-    const rows = Math.max(1, measured.height - PANE_CHROME_ROWS);
+    const nextRows = Math.max(1, measured.height - PANE_CHROME_ROWS);
     setSize((previous) =>
-      previous.cols === cols && previous.rows === rows ? previous : { cols, rows }
+      previous.cols === cols && previous.rows === nextRows ? previous : { cols, rows: nextRows }
     );
-  });
+  }, [columns, rows]);
 
   useEffect(() => {
     const terminal = createVt100Terminal(80, 24);
     termRef.current = terminal;
+    paintChainRef.current = Promise.resolve();
 
-    const onData = (data: string): void => {
-      if (data.length === 0) {
-        return;
-      }
-      stdin.write(Buffer.from(data, 'utf8'));
-    };
-    const dataDisposable = terminal.onData(onData);
-
+    // Serialize xterm write + snapshot so concurrent stdout chunks cannot paint out of order.
     const onStdout = (chunk: string | Buffer): void => {
-      const active = termRef.current;
-      if (active === null) {
-        return;
-      }
       const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
-      void writeVt100Output(active, bytes).then(() => {
-        if (termRef.current === active) {
-          setLines(serializeVt100Viewport(active));
-        }
-      });
+      paintChainRef.current = paintChainRef.current
+        .then(async () => {
+          const active = termRef.current;
+          if (active === null) {
+            return;
+          }
+          await writeVt100Output(active, bytes);
+          if (termRef.current === active) {
+            setLines(serializeVt100Viewport(active));
+          }
+        })
+        .catch(() => {
+          // Keep the chain alive if a write rejects so later chunks still paint.
+        });
     };
     stdout.on('data', onStdout);
 
     return () => {
       stdout.off('data', onStdout);
-      dataDisposable.dispose();
       termRef.current = null;
       terminal.dispose();
     };
-  }, [stdin, stdout]);
+  }, [stdout]);
 
   useEffect(() => {
     const terminal = termRef.current;
