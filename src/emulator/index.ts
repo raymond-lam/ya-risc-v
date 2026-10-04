@@ -161,19 +161,27 @@ class Emulator implements EmulatorHandle {
     if (this.#started) {
       throw new Error('Already started.');
     }
+    // Start children; only mark started once all succeed. On failure, stop any
+    // that already started (child stop is idempotent for never-started siblings).
+    try {
+      this.#timer.start();
+      this.#cpu.start();
+      this.#terminal.start();
+    } catch (error) {
+      this.#cpu.stop();
+      this.#timer.stop();
+      this.#terminal.stop();
+      this.#stopped = true;
+      throw error;
+    }
     this.#started = true;
-    this.#timer.start();
-    this.#cpu.start();
-    this.#terminal.start();
   };
 
   stop = (): void => {
-    if (!this.#started) {
-      throw new Error('Not started.');
-    }
     if (this.#stopped) {
       return;
     }
+    // Idempotent: safe before start, after partial-start rollback, and after stop.
     this.#stopped = true;
     this.#cpu.stop();
     this.#timer.stop();

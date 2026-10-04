@@ -26,7 +26,8 @@
  * Updates run under a SAB spinlock so clearing other harts / arming a slot is
  * transactional. A successful `tryTakeReservation` keeps the reservation held and
  * retains the monitor lock until the matching `storeBytes` / `atomicStoreBytes`
- * releases it (SC store window).
+ * releases it (SC store window). Plain stores and AMO writes also hold the lock
+ * across invalidate and the RAM write so a remote hart cannot LR in the gap.
  */
 
 import { bytesToBigInt, bytesToBigUint64Array, bytesToInt32Array } from '#utils/bytes';
@@ -184,8 +185,9 @@ const reservationHoldsLocked = (
 /**
  * Arm hart `hartId`'s slot for exact `address` / `byteLength`.
  * Clears any other hart's slot whose reserved line matches (single owner per line).
+ * Caller must hold the monitor lock.
  */
-const setReservation = (
+const setReservationLocked = (
   memory: Memory,
   hartId: number,
   address: ReadonlyUint8Array,
@@ -194,25 +196,23 @@ const setReservation = (
   if (!isValidHartId(hartId)) {
     return;
   }
-  withMonitorLock(memory, () => {
-    const guestAddress = bytesToBigInt(address);
-    const lineBase = reservationLineBase(guestAddress);
-    for (let otherHartId = 0; otherHartId < RESERVATION_HART_COUNT; otherHartId += 1) {
-      if (otherHartId === hartId) {
-        continue;
-      }
-      if (Atomics.load(reservationSlotValidInt32(memory, otherHartId), 0) === 0) {
-        continue;
-      }
-      const otherAddress = Atomics.load(reservationSlotAddressUint64(memory, otherHartId), 0);
-      if (reservationLineBase(otherAddress) === lineBase) {
-        clearReservationLocked(memory, otherHartId);
-      }
+  const guestAddress = bytesToBigInt(address);
+  const lineBase = reservationLineBase(guestAddress);
+  for (let otherHartId = 0; otherHartId < RESERVATION_HART_COUNT; otherHartId += 1) {
+    if (otherHartId === hartId) {
+      continue;
     }
-    Atomics.store(reservationSlotAddressUint64(memory, hartId), 0, guestAddress);
-    Atomics.store(reservationSlotWidthInt32(memory, hartId), 0, byteLength);
-    Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 1);
-  });
+    if (Atomics.load(reservationSlotValidInt32(memory, otherHartId), 0) === 0) {
+      continue;
+    }
+    const otherAddress = Atomics.load(reservationSlotAddressUint64(memory, otherHartId), 0);
+    if (reservationLineBase(otherAddress) === lineBase) {
+      clearReservationLocked(memory, otherHartId);
+    }
+  }
+  Atomics.store(reservationSlotAddressUint64(memory, hartId), 0, guestAddress);
+  Atomics.store(reservationSlotWidthInt32(memory, hartId), 0, byteLength);
+  Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 1);
 };
 
 /**
@@ -241,9 +241,9 @@ const tryTakeReservation = (
 
 /**
  * Clear every slot whose reserved line overlaps `[address, address + byteLength)`.
- * Called on RAM stores and AMO writes so remote LR/SC observers see the invalidate.
+ * Caller must hold the monitor lock.
  */
-const invalidateOverlappingReservations = (
+const invalidateOverlappingReservationsLocked = (
   memory: Memory,
   address: ReadonlyUint8Array,
   byteLength: number
@@ -251,27 +251,26 @@ const invalidateOverlappingReservations = (
   if (byteLength <= 0) {
     return;
   }
-  withMonitorLock(memory, () => {
-    const storeBase = bytesToBigInt(address);
-    const storeSize = BigInt(byteLength);
-    for (let hartId = 0; hartId < RESERVATION_HART_COUNT; hartId += 1) {
-      if (Atomics.load(reservationSlotValidInt32(memory, hartId), 0) === 0) {
-        continue;
-      }
-      const reservedAddress = Atomics.load(reservationSlotAddressUint64(memory, hartId), 0);
-      const lineBase = reservationLineBase(reservedAddress);
-      if (rangesOverlap(lineBase, BigInt(RESERVATION_LINE_SIZE), storeBase, storeSize)) {
-        clearReservationLocked(memory, hartId);
-      }
+  const storeBase = bytesToBigInt(address);
+  const storeSize = BigInt(byteLength);
+  for (let hartId = 0; hartId < RESERVATION_HART_COUNT; hartId += 1) {
+    if (Atomics.load(reservationSlotValidInt32(memory, hartId), 0) === 0) {
+      continue;
     }
-  });
+    const reservedAddress = Atomics.load(reservationSlotAddressUint64(memory, hartId), 0);
+    const lineBase = reservationLineBase(reservedAddress);
+    if (rangesOverlap(lineBase, BigInt(RESERVATION_LINE_SIZE), storeBase, storeSize)) {
+      clearReservationLocked(memory, hartId);
+    }
+  }
 };
 
 export {
   RESERVATION_HOST_BYTE_LENGTH,
   RESERVATION_REGION_ID,
-  setReservation,
-  invalidateOverlappingReservations,
+  invalidateOverlappingReservationsLocked,
   releaseScMonitorIfHeld,
+  setReservationLocked,
   tryTakeReservation,
+  withMonitorLock,
 };

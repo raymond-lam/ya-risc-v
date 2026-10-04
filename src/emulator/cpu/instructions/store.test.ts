@@ -18,8 +18,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
 import { sb, sw } from '#emulator/cpu/instructions/store';
-import { createRegisters, writeGeneralPurposeRegister, FOUR_BYTES } from '#emulator/cpu/registers';
-import { signedNumberToBytes } from '#utils/bytes';
+import {
+  createRegisters,
+  readProgramCounter,
+  writeGeneralPurposeRegister,
+  FOUR_BYTES,
+} from '#emulator/cpu/registers';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('store', () => {
   it('sb stores the low byte', () => {
@@ -38,6 +43,7 @@ describe('store', () => {
       FOUR_BYTES
     );
     assert.equal(guest.bytes[20], 0xab);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
   it('sw stores a word', () => {
@@ -60,5 +66,6 @@ describe('store', () => {
       FOUR_BYTES
     );
     assert.deepEqual(guest.bytes.subarray(24, 28), Uint8Array.of(0x11, 0x22, 0x33, 0x44));
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 });

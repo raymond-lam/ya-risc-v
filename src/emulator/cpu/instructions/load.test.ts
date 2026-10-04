@@ -21,10 +21,11 @@ import { lb, lbu, lw } from '#emulator/cpu/instructions/load';
 import {
   createRegisters,
   readGeneralPurposeRegister,
+  readProgramCounter,
   writeGeneralPurposeRegister,
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
-import { signedNumberToBytes } from '#utils/bytes';
+import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
 
 describe('load', () => {
   it('lb sign-extends and lbu zero-extends', () => {
@@ -47,6 +48,7 @@ describe('load', () => {
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), -128, 32)
     );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
 
     lbu(
       registers,
@@ -62,6 +64,7 @@ describe('load', () => {
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
     );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
   });
 
   it('lw loads a word', () => {
@@ -87,6 +90,7 @@ describe('load', () => {
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 0x12345678, 32)
     );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
   it('lb does not wrap a 2^32+offset address into low memory', () => {
@@ -109,5 +113,6 @@ describe('load', () => {
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 0, 32)
     );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 });

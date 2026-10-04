@@ -157,7 +157,12 @@ src/
     types.ts              EmulatorCreateOptions (private); EmulatorHandle re-exported from index
     memory.ts             createMemory, load/store (+ atomics), Memory type
     ram.ts                Dense RAM load/store + RV64A atomics
-    plic.ts               Sparse PLIC decode, claim/complete, wires
+    plic/
+      index.ts            Public API: MMIO, claim/complete, wires, initializePlic
+      layout.ts           Guest window / host slab indexing (private)
+      memory.ts           Guest loadBytes / storeBytes (private)
+      wires.ts            MEIP/SEIP wires + claim selection (private)
+      gateway.ts          Gateway lock, pending/claim/complete (private)
     reservation.ts        Host-only LR/SC monitor
     wake.ts               Int32 wake/level publish + waitWake
     irq-level.ts          Host-only IRQ level word + setIrqWire / waitIrqLevel
@@ -194,8 +199,11 @@ src/
   utils/
     bytes.ts              64-bit LE byte-array arithmetic
     int.ts                bigint → safe JS number
+    alignment.ts          Power-of-two alignUp for bigint
     atomics.ts            SAB byte/bit Atomics helpers
     binary-search.ts      findLastIndex (binary search on a true…false partition)
+    ranges.ts             findOverlappingPair for guest window overlap checks
+    worker-exec-argv.ts   tsx worker execArgv under npm run dev
     tty.ts                VT100 encode/paint helpers for the TUI terminal pane
 ```
 

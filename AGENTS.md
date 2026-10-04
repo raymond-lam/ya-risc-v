@@ -50,7 +50,8 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   dispatch, `Memory` type. Packs caller-supplied regions into one SAB; does not own
   device init or layout.
 - `src/emulator/ram.ts` — RAM region: dense guest load/store, `storeImageToRam`, RV64A RMW.
-- `src/emulator/plic.ts` — PLIC sparse MMIO, claim/complete, MEIP/SEIP wires.
+- `src/emulator/plic/` — PLIC package (`index` public API; private layout / memory / wires /
+  gateway): sparse MMIO, claim/complete, MEIP/SEIP wires.
 - `src/emulator/reservation.ts` — host-only LR/SC reservation monitor.
 - `src/emulator/wake.ts` — Int32 wake/level publish + `waitWake` (IRQ aggregate, UART TX).
 - `src/emulator/irq-level.ts` — host-only Int32 OR of device IRQ levels (`setIrqWire`,
@@ -68,6 +69,8 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - `src/utils/alignment.ts` — `alignUp` (power-of-two round-up for `bigint`).
 - `src/utils/atomics.ts` — SAB byte/bit Atomics helpers (`atomicLoadBit`, …).
 - `src/utils/binary-search.ts` — `findLastIndex` (MDN-shaped; O(log n) on a true…false partition).
+- `src/utils/ranges.ts` — `findOverlappingPair` for guest window overlap checks.
+- `src/utils/worker-exec-argv.ts` — `execArgv` for `tsx` worker entries under `npm run dev`.
 - `src/types.ts` — shared architectural types (`ReadonlyUint8Array`).
 - `test/` — shared test helpers (`guest-memory.ts`). Unit tests stay colocated as `*.test.ts`.
 
@@ -87,7 +90,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   size is `bigint` (also the RAM region's host length). UART guest window is 8 register bytes
   (dense prefix of the UART region); RBR/THR/IER/IIR/LSR have queue/IRQ side effects
   (`uart/registers.ts` — IER∧(RX ready / TX empty) asserts PLIC source 10). CLINT/PLIC are
-  sparse guest windows over packed host slabs (`clint/layout.ts` + `clint/memory.ts` / `plic.ts`); the hart
+  sparse guest windows over packed host slabs (`clint/layout.ts` + `clint/memory.ts` / `plic/`); the hart
   samples CLINT wires into `mip.MTIP`/`MSIP` and PLIC wires into `mip.MEIP`/`SEIP`. Transfer
   widths (`byteLength` on load/store) are `number`. `bytesToNumber` reads u32 from
   architectural bytes. `signedNumberToBytes`, `unsignedNumberToBytes`, `unsignedBigIntToBytes`,
@@ -174,12 +177,13 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 - **Package boundary:** a directory with `index.ts` is a package. Sibling modules
   (`cpu/types.ts`, …) are private; outside that directory import only from the package root.
   Public subpaths: worker entries `#emulator/*/run`. Leaf modules (`#emulator/memory`,
-  `#emulator/ram`, `#emulator/plic`, `#emulator/reservation`, `#emulator/wake`,
+  `#emulator/ram`, `#emulator/reservation`, `#emulator/wake`,
   `#emulator/irq-level`) are their own public API. Host code uses `#emulator` and `#tui`.
-  Inside `emulator/`, packages import each other via roots (hart samples CLINT via
-  `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
-  `#emulator/timer` / `#emulator/terminal`). Unit and `*.integration.test.ts` files may
-  deep-import cpu instruction / register / trap modules for coverage.
+  `#emulator/types` is private to the emulator package root. Inside `emulator/`, packages
+  import each other via roots (hart samples CLINT via `#emulator/clint`, PLIC via
+  `#emulator/plic`, irq via `#emulator/irq-level`; never `#emulator/timer` /
+  `#emulator/terminal`). Unit and `*.integration.test.ts` files may deep-import cpu
+  instruction / register / trap / sample helpers for coverage.
 - Arrow functions only — no `function` expressions or declarations, and no `export default function`.
 - Modules with a single export use `export default`; otherwise list named exports in one block at the
   bottom of the file, with `export type { … }` after it.

@@ -47,12 +47,20 @@ const main = async (imagePath: string, ramSize: bigint): Promise<void> => {
     stdin,
     stdout,
     onShutdown: () => {
-      emulator.stop();
+      try {
+        emulator.stop();
+      } catch {
+        // Already stopped / never started / peer already torn down.
+      }
     },
   });
 
   const shutdown = (): void => {
-    emulator.stop();
+    try {
+      emulator.stop();
+    } catch {
+      // Already stopped / never started / peer already torn down.
+    }
   };
 
   process.once('SIGTERM', shutdown);
@@ -63,8 +71,18 @@ const main = async (imagePath: string, ramSize: bigint): Promise<void> => {
   try {
     await emulator;
   } finally {
-    tui.stop();
-    await tui;
+    try {
+      tui.stop();
+    } catch {
+      // Already stopped / never started / peer already torn down.
+    }
+    try {
+      await tui;
+    } catch {
+      // TUI lifetime may already have rejected or resolved via unmount.
+    }
+    stdin.destroy();
+    stdout.destroy();
   }
 };
 
@@ -84,5 +102,8 @@ program
   });
 
 if (import.meta.main) {
-  void program.parseAsync(process.argv);
+  program.parseAsync(process.argv).catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

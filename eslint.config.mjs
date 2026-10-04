@@ -18,24 +18,49 @@ const importShapePatterns = [
 ];
 
 /**
- * Private siblings of packages that have an `index.ts`. Public exceptions:
- * the `#emulator/.../run` worker entries (resolved via `import.meta.resolve`, not imports).
+ * Private siblings of packages that have an `index.ts`, plus emulator host types.
+ * Public exceptions: `#emulator/.../run` worker entries (resolved via `import.meta.resolve`).
+ * `#emulator/types` is private to `#emulator` (`index.ts` only).
  */
-const packagePrivatePatterns = [
+const allPackagePrivatePatterns = [
   {
     group: [
       '#emulator/uart/*',
       '#emulator/terminal/*',
       '#emulator/timer/*',
       '#emulator/cpu/*',
-      '#emulator/clint/layout',
-      '#emulator/clint/memory',
-      '#emulator/clint/time',
-      '#emulator/clint/wires',
+      '#emulator/clint/*',
+      '#emulator/plic/*',
+      '#emulator/types',
       '#tui/*',
     ],
     message:
       'Import from the package root only (worker #emulator/.../run entries are public subpaths).',
+  },
+];
+
+/** Package-private patterns excluding one package's own `#pkg/*` siblings. */
+const packagePrivateExcept = (ownGroup) =>
+  allPackagePrivatePatterns.map((pattern) => ({
+    ...pattern,
+    group: pattern.group.filter((group) => group !== ownGroup),
+  }));
+
+/** Outside packages: full private surface. Tests may deep-import `#emulator/cpu/*` only. */
+const outsidePackagePrivatePatterns = allPackagePrivatePatterns;
+
+const testPackagePrivatePatterns = [
+  {
+    group: [
+      '#emulator/uart/*',
+      '#emulator/terminal/*',
+      '#emulator/timer/*',
+      '#emulator/clint/*',
+      '#emulator/plic/*',
+      '#emulator/types',
+      '#tui/*',
+    ],
+    message: 'Tests may deep-import #emulator/cpu/*; other packages only via their roots.',
   },
 ];
 
@@ -120,47 +145,72 @@ const eslintConfig = [
   },
   {
     /**
-     * Outside a package directory, import only that package's public surface.
-     * Packages may deep-import their own siblings; unit/integration tests may
-     * deep-import cpu instruction modules for coverage.
+     * Outside package directories: import only each package's public root.
+     * `emulator/index.ts` may import private `#emulator/types`.
      */
     files: ['src/**/*.ts', 'src/**/*.tsx', 'test/**/*.ts'],
     ignores: [
       'src/emulator/uart/**',
       'src/emulator/clint/**',
+      'src/emulator/plic/**',
       'src/emulator/terminal/**',
+      'src/emulator/timer/**',
       'src/emulator/cpu/**',
       'src/tui/**',
-      'src/emulator/**/*.test.ts',
-      'src/emulator/**/*.test.tsx',
-      'src/emulator/**/*.integration.test.ts',
+      'src/emulator/index.ts',
+      'src/emulator/types.ts',
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/*.integration.test.ts',
+      'test/**/*.ts',
     ],
     rules: {
       'no-restricted-imports': [
         'error',
         {
-          patterns: [...importShapePatterns, ...packagePrivatePatterns],
+          patterns: [...importShapePatterns, ...outsidePackagePrivatePatterns],
         },
       ],
     },
   },
   {
-    files: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    /** Emulator host entry may import `#emulator/types`. */
+    files: ['src/emulator/index.ts'],
     rules: {
-      /** Table-driven tests repeat literals on purpose; extracting them hurts readability. */
-      'sonarjs/no-duplicate-string': 'off',
-      /** `node:test` `describe`/`it` return promises the runner awaits. */
-      '@typescript-eslint/no-floating-promises': 'off',
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            ...importShapePatterns,
+            ...allPackagePrivatePatterns.map((pattern) => ({
+              ...pattern,
+              group: pattern.group.filter((group) => group !== '#emulator/types'),
+            })),
+          ],
+        },
+      ],
     },
   },
   {
-    /**
-     * Hart worker graph may use the CLINT device API (`#emulator/clint`) but must
-     * not pull host `#emulator/timer`, `#emulator/terminal`, or `Worker`.
-     * Host `cpu/index.ts` is excluded (it owns `new Worker`).
-     */
+    /** Tests may deep-import `#emulator/cpu/*`; other packages only via roots. */
+    files: [
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/*.integration.test.ts',
+      'test/**/*.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...testPackagePrivatePatterns],
+        },
+      ],
+    },
+  },
+  {
     files: ['src/emulator/cpu/**/*.ts'],
-    ignores: ['src/emulator/cpu/index.ts'],
+    ignores: ['src/emulator/cpu/**/*.test.ts', 'src/emulator/cpu/index.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -175,12 +225,9 @@ const eslintConfig = [
           ],
           patterns: [
             ...importShapePatterns,
+            ...packagePrivateExcept('#emulator/cpu/*'),
             {
               group: [
-                '#emulator/clint/layout',
-                '#emulator/clint/memory',
-                '#emulator/clint/time',
-                '#emulator/clint/wires',
                 '#emulator/timer',
                 '#emulator/timer/*',
                 '#emulator/terminal',
@@ -192,6 +239,98 @@ const eslintConfig = [
           ],
         },
       ],
+    },
+  },
+  {
+    files: ['src/emulator/cpu/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/cpu/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/uart/**/*.ts'],
+    ignores: ['src/emulator/uart/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/uart/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/clint/**/*.ts'],
+    ignores: ['src/emulator/clint/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/clint/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/plic/**/*.ts'],
+    ignores: ['src/emulator/plic/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/plic/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/timer/**/*.ts'],
+    ignores: ['src/emulator/timer/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/timer/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/terminal/**/*.ts'],
+    ignores: ['src/emulator/terminal/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/terminal/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/tui/**/*.ts', 'src/tui/**/*.tsx'],
+    ignores: ['src/tui/**/*.test.ts', 'src/tui/**/*.test.tsx'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#tui/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    rules: {
+      /** Table-driven tests repeat literals on purpose; extracting them hurts readability. */
+      'sonarjs/no-duplicate-string': 'off',
+      /** `node:test` `describe`/`it` return promises the runner awaits. */
+      '@typescript-eslint/no-floating-promises': 'off',
     },
   },
 ];

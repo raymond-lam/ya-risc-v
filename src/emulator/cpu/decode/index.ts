@@ -30,6 +30,9 @@ type ExecuteThunk = (
 
 type DecodeResult = readonly [ExecuteThunk, ReadonlyUint8Array];
 
+/** Cap memoized encodings so a guest walking unique opcodes cannot OOM the host. */
+const DECODE_CACHE_MAX_ENTRIES = 8192;
+
 /**
  * Decode one RV64IMAC instruction into an execute thunk and its encoded width.
  *
@@ -51,7 +54,7 @@ const decode = (instructionWord: ReadonlyUint8Array): DecodeResult => {
 const thunkByInstructionWord = new Map<number, ExecuteThunk>();
 
 /**
- * Like {@link decode}, but memoizes thunks by encoding.
+ * Like {@link decode}, but memoizes thunks by encoding with a bounded LRU Map.
  * 32-bit encodings key on the full word; RVC encodings key on the halfword so
  * identical compressed ops share a thunk regardless of the following halfword in the fetch.
  */
@@ -61,10 +64,20 @@ const decodeWithCache = (instructionWord: ReadonlyUint8Array): DecodeResult => {
   const isThirtyTwoBit = (encoded & 0x3) === 0x3;
   const instructionByteLength = isThirtyTwoBit ? FOUR_BYTES : TWO_BYTES;
   const key = isThirtyTwoBit ? encoded : encoded & 0xffff;
-  if (thunkByInstructionWord.has(key)) {
-    return [thunkByInstructionWord.get(key)!, instructionByteLength];
+  const cached = thunkByInstructionWord.get(key);
+  if (cached !== undefined) {
+    // Refresh LRU position (Map iteration order = insertion order).
+    thunkByInstructionWord.delete(key);
+    thunkByInstructionWord.set(key, cached);
+    return [cached, instructionByteLength];
   }
   const [thunk] = decode(instructionWord);
+  if (thunkByInstructionWord.size >= DECODE_CACHE_MAX_ENTRIES) {
+    const oldest = thunkByInstructionWord.keys().next().value;
+    if (oldest !== undefined) {
+      thunkByInstructionWord.delete(oldest);
+    }
+  }
   thunkByInstructionWord.set(key, thunk);
   return [thunk, instructionByteLength];
 };

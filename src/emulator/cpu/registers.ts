@@ -198,6 +198,16 @@ const SIE_SIP_MASK_BYTES = Uint8Array.of(0x22, 0x02, 0, 0, 0, 0, 0, 0) as Readon
 const MIDELEG_MASK_BYTES = Uint8Array.of(0x22, 0x02, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
 /**
+ * medeleg WARL: bit 11 (ecall from M) is read-only zero — M-mode ecall is never
+ * delegatable. All other bits remain writable for this hart.
+ */
+const MEDELEG_BYTE1_ECALL_FROM_M = 0x08; // bit 11 → little-endian bytes[1] bit 3
+
+/** xtvec MODE field (bits [1:0]): only 0 (Direct) and 1 (Vectored) are legal. */
+const XTVEC_MODE_MASK = 0x03;
+const XTVEC_MODE_VECTORED = 0x01;
+
+/**
  * MPP ("machine previous privilege") — mstatus bits 12:11, stored in byte1 bits 4:3.
  * On trap entry MPP ← current mode; on mret privilege ← MPP and MPP ← U (user).
  */
@@ -467,6 +477,18 @@ const legalizeXepc = (xepc: Uint8Array): Uint8Array => {
   return xepc;
 };
 
+/**
+ * mtvec/stvec MODE WARL: reserved encodings 2/3 must not stick — force Direct (0).
+ * Vectored (1) and Direct (0) are unchanged.
+ */
+const legalizeXtvec = (xtvec: Uint8Array): Uint8Array => {
+  const mode = xtvec[0]! & XTVEC_MODE_MASK;
+  if (mode !== 0 && mode !== XTVEC_MODE_VECTORED) {
+    xtvec[0]! &= ~XTVEC_MODE_MASK;
+  }
+  return xtvec;
+};
+
 /** Readable mip: CSR slot ORed with the PLIC supervisor-external wire into SEIP. */
 const readMipWithPlicSeip = (registers: Registers): Uint8Array => {
   const mip = copyBytes(new Uint8Array(8), registers.controlAndStatus[MIP]!);
@@ -595,6 +617,12 @@ const writeControlAndStatusRegister = (
         registers.controlAndStatus[MIDELEG]!,
         andBytes(new Uint8Array(8), value, MIDELEG_MASK_BYTES)
       );
+    case MEDELEG: {
+      const next = copyBytes(registers.controlAndStatus[MEDELEG]!, value);
+      // Bit 11 (M-mode ecall) is hardwired zero — not delegatable.
+      next[1]! &= ~MEDELEG_BYTE1_ECALL_FROM_M;
+      return next;
+    }
     case MCOUNTEREN:
     case SCOUNTEREN:
       return copyBytes(
@@ -605,6 +633,12 @@ const writeControlAndStatusRegister = (
       return copyBytes(
         registers.controlAndStatus[MCOUNTINHIBIT]!,
         andBytes(new Uint8Array(8), value, MCOUNTINHIBIT_MASK_BYTES)
+      );
+    case MTVEC:
+    case STVEC:
+      return copyBytes(
+        registers.controlAndStatus[index]!,
+        legalizeXtvec(copyBytes(new Uint8Array(8), value))
       );
     case MEPC:
     case SEPC:

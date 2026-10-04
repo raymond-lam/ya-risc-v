@@ -48,7 +48,14 @@ const App = ({ stdin, stdout, onShutdown }: AppProps) => {
 
   return (
     <Box flexDirection="column" width={columns} height={rows}>
-      <Terminal stdin={stdin} stdout={stdout} focused={terminalFocused} boxRef={terminalRef} />
+      <Terminal
+        stdin={stdin}
+        stdout={stdout}
+        focused={terminalFocused}
+        boxRef={terminalRef}
+        columns={columns}
+        rows={rows}
+      />
       <Box width="100%" backgroundColor="blue">
         <Box ref={shutdownRef} paddingX={1}>
           <Text color="white" backgroundColor="blue">

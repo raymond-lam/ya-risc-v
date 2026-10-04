@@ -79,6 +79,40 @@ describe('emulator create', () => {
     await emulator;
   });
 
+  it('stop before start is idempotent and unblocks await', async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const image = new Uint8Array([0x73, 0x00, 0x50, 0x10]);
+    const emulator = create({
+      image,
+      stdin,
+      stdout,
+      ramSize: 4096n,
+    });
+    emulator.stop();
+    emulator.stop();
+    await emulator;
+    assert.throws(
+      () => {
+        emulator.start();
+      },
+      { message: 'Already stopped.' }
+    );
+  });
+
+  it('timer and terminal stop before start is idempotent', async () => {
+    const memory = createTestMemory(256n);
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const timer = createTimer({ memory });
+    const terminal = createTerminal({ memory, stdin, stdout });
+    timer.stop();
+    terminal.stop();
+    timer.stop();
+    terminal.stop();
+    await Promise.all([timer, terminal]);
+  });
+
   it('stops live timer and terminal workers when a sibling rejects', async () => {
     const memory = createTestMemory(256n);
     const stdin = new PassThrough();

@@ -60,6 +60,7 @@ const CAUSE_INSTRUCTION_ADDRESS_MISALIGNED = 0;
 const CAUSE_ILLEGAL_INSTRUCTION = 2;
 const CAUSE_BREAKPOINT = 3;
 const CAUSE_STORE_AMO_ADDRESS_MISALIGNED = 6;
+const CAUSE_STORE_AMO_ACCESS_FAULT = 7;
 const CAUSE_ECALL_FROM_U = 8;
 const CAUSE_ECALL_FROM_S = 9;
 const CAUSE_ECALL_FROM_M = 11;
@@ -93,12 +94,15 @@ const INTERRUPT_PRIORITY = [
  *   MPIE = bit 7  → bytes[0] & 0x80
  *   SPP  = bit 8  → bytes[1] & 0x01
  *   MPP  = bits 12:11 → bytes[1] & 0x18
+ *   MPRV = bit 17 → bytes[2] & 0x02
  */
 const MSTATUS_BYTE0_SIE = 0x02; // S-mode interrupt enable
 const MSTATUS_BYTE0_MIE = 0x08; // M-mode interrupt enable
 const MSTATUS_BYTE0_SPIE = 0x20; // S previous interrupt enable (SIE saved on trap to S)
 const MSTATUS_BYTE0_MPIE = 0x80; // M previous interrupt enable (MIE saved on trap to M)
 const MSTATUS_BYTE1_SPP = 0x01; // S previous privilege (U/S; saved on trap to S)
+/** mstatus.MPRV — modify privilege for loads/stores; cleared on xRET when new mode ≠ M. */
+const MSTATUS_BYTE2_MPRV = 0x02;
 
 /** RV64 interrupt bit in xcause (bit 63). */
 const INTERRUPT_CAUSE_BIT = 1n << 63n;
@@ -166,7 +170,7 @@ const applyTrapEntryToSstatus = (registers: Registers): void => {
   writeControlAndStatusRegister(registers, MSTATUS, mstatus);
 };
 
-/** On mret: MIE ← MPIE, MPIE ← 1, privilege ← MPP, MPP ← U. */
+/** On mret: MIE ← MPIE, MPIE ← 1, privilege ← MPP, MPP ← U; clear MPRV if new mode ≠ M. */
 const applyMachineReturnToMstatus = (registers: Registers): void => {
   const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
   const mpieSet = (mstatus[0]! & MSTATUS_BYTE0_MPIE) !== 0;
@@ -178,11 +182,14 @@ const applyMachineReturnToMstatus = (registers: Registers): void => {
   mstatus[0]! |= MSTATUS_BYTE0_MPIE;
   const previous = privilegeModeFromMppBits(mstatus[1]! & MSTATUS_BYTE1_MPP_MASK);
   mstatus[1] = (mstatus[1]! & ~MSTATUS_BYTE1_MPP_MASK) | MSTATUS_BYTE1_MPP_USER;
+  if (compareUnsignedBytes(previous, PRIVILEGE_MACHINE) !== 0) {
+    mstatus[2]! &= ~MSTATUS_BYTE2_MPRV;
+  }
   writeControlAndStatusRegister(registers, MSTATUS, mstatus);
   setPrivilegeMode(registers, previous);
 };
 
-/** On sret: SIE ← SPIE, SPIE ← 1, privilege ← SPP, SPP ← U. */
+/** On sret: SIE ← SPIE, SPIE ← 1, privilege ← SPP, SPP ← U; clear MPRV (new mode ≠ M). */
 const applySupervisorReturnToSstatus = (registers: Registers): void => {
   const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
   const spieSet = (mstatus[0]! & MSTATUS_BYTE0_SPIE) !== 0;
@@ -194,6 +201,8 @@ const applySupervisorReturnToSstatus = (registers: Registers): void => {
   mstatus[0]! |= MSTATUS_BYTE0_SPIE;
   const previous = (mstatus[1]! & MSTATUS_BYTE1_SPP) !== 0 ? PRIVILEGE_SUPERVISOR : PRIVILEGE_USER;
   mstatus[1]! &= ~MSTATUS_BYTE1_SPP;
+  // sret always returns to S or U, so MPRV must be cleared.
+  mstatus[2]! &= ~MSTATUS_BYTE2_MPRV;
   writeControlAndStatusRegister(registers, MSTATUS, mstatus);
   setPrivilegeMode(registers, previous);
 };
@@ -404,6 +413,7 @@ export {
   CAUSE_ILLEGAL_INSTRUCTION,
   CAUSE_BREAKPOINT,
   CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
+  CAUSE_STORE_AMO_ACCESS_FAULT,
   enterTrap,
   trapIfInstructionAddressMisaligned,
   isPendingEnabledInterrupt,
