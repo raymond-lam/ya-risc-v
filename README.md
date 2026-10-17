@@ -58,11 +58,12 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   `mip ∧ mie` is nonzero (wake does not require global `MIE`/`SIE`); the interrupt is taken
   on the following run-loop check if globally enabled. `mstatus.TW` makes `wfi` in S/U illegal
   immediately (wait limit zero).
-- **CLINT:** MMIO at `0x02000000` — `msip` at `+0x0000` (bit 0), `mtimecmp` at
-  `+0x4000`, `mtime` at `+0xbff8`, 10 MHz timebase from `process.hrtime` on its own worker. Reset:
+- **CLINT:** MMIO at `--clint-base` (default `0x02000000`) — `msip` at `+0x0000` (bit 0), `mtimecmp` at
+  `+0x4000`, `mtime` at `+0xbff8`, frequency from `--timebase-frequency` (default 10 MHz) driven
+  by `process.hrtime` on its own worker. Reset:
   `mtime` = 0, `mtimecmp` = all-ones, `msip` clear. Guest may write `mtime` (reseats the epoch) or
   `mtimecmp` to arm/clear the timer; write `msip` bit 0 to assert/clear the software interrupt.
-- **PLIC:** MMIO at `0x0c000000` — priority / pending / enable / threshold / claim for M and S
+- **PLIC:** MMIO at `--plic-base` (default `0x0c000000`) — priority / pending / enable / threshold / claim for M and S
   contexts (sources 1–31). UART is source 10. Pending bits are device-driven; claim/complete gate
   re-presentation. Context output wires feed `mip.MEIP` / `mip.SEIP`.
 - `fence`, decoded and executed as a no-op, which is architecturally legal for this emulator.
@@ -71,10 +72,15 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   hardwired read-only.
 - A fetch/decode/execute loop running on a worker thread against shared guest memory, with decoded
   instructions memoized by encoding (full word for 32-bit; halfword for RVC).
-- **Guest memory map:** DRAM at `0x80000000` (size set by the caller / `--ram-size`), a fixed
-  8-byte **16550 UART** window at `0x10000000` (RBR/THR/IER/IIR/LSR; IER→PLIC source 10), a
-  **CLINT** at `0x02000000` (`msip` / `mtimecmp` / `mtime`), and a **PLIC** at `0x0c000000`. Flat
-  images are copied to the RAM base (reset PC matches). UART IER/IIR asserts PLIC source 10.
+- **Guest memory map:** caller-supplied bases. The CLI defaults are DRAM at `0x80000000`
+  (`--ram-base`; size from `--ram-size`), an 8-byte **16550 UART** window at `0x10000000`
+  (`--uart-base`; RBR/THR/IER/IIR/LSR; IER→PLIC source 10), a **CLINT** at `0x02000000`
+  (`--clint-base`; `msip` / `mtimecmp` / `mtime`), and a **PLIC** at `0x0c000000` (`--plic-base`).
+  Flat images are copied to the RAM base. The first fetch is `--reset-pc` (default: the RAM base).
+  On startup a device tree for this
+  map is written into DRAM (top of RAM, or `--dtb-address`; `--no-device-tree` skips it). `a0` is
+  hart 0 and `a1` is that guest address, or zero when the tree is skipped. UART IER/IIR
+  asserts PLIC source 10.
 - **Host console:** a terminal worker bridges UART RX/TX to streams (TX drain awaits a shared wake
   word when the ring is empty), and an Ink TUI paints guest
   output with a headless VT100 emulator (`@xterm/headless`), with click-to-focus and Shutdown.
@@ -87,8 +93,9 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **Virtual memory.** `satp` is stored; Sv39 page walks are not implemented yet.
 - **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
   as zero instead of trapping.
-- **Program loading.** Images are flat binaries copied to the RAM base (`0x80000000`); there is no
-  ELF loader, DTB, or multi-payload boot (OpenSBI + kernel).
+- **Program loading.** Images are flat binaries copied to the RAM base (CLI default `0x80000000`);
+  there is no ELF loader or multi-payload boot (OpenSBI + kernel). The device tree is generated
+  from the guest map and placed in DRAM for the `a1` handoff.
 - **Richer devices / CSRs.** Fuller 16550 (FCR, baud, line/modem status IRQs). Other standard CSRs
   raise illegal-instruction. Low guest physical addresses below the RAM base are unmapped (aside from
   UART/CLINT/PLIC).
@@ -110,9 +117,13 @@ npm run dev -- --ram-size 0x8000000 path/to/image.bin
 ```
 
 `npm run dev` runs straight from TypeScript sources via `tsx`. The image is treated as a flat binary:
-it is copied into guest DRAM at base `0x80000000` (reset PC matches). `--ram-size` is required
-(decimal or `0x…` hex) and must be large enough for the image. UART MMIO is at `0x10000000`
-(fixed 8-byte 16550 window).
+it is copied into guest DRAM at `--ram-base` (default `0x80000000`). `--reset-pc` defaults to that
+base. `--ram-size`
+is required (decimal or `0x…` hex) and must be large enough for the image. Device bases default to
+UART `0x10000000` (`--uart-base`, 8-byte 16550 window), CLINT `0x02000000` (`--clint-base`), and
+PLIC `0x0c000000` (`--plic-base`). `--timebase-frequency` defaults to 10000000 Hz. The device
+tree is stored at the top of RAM; `--dtb-address` selects another guest address and
+`--no-device-tree` skips it (`a1` stays zero). Addresses and the timebase are decimal or `0x…` hex.
 
 ```bash
 npm run dev -- --ram-size 134217728 path/to/image.bin
@@ -121,7 +132,7 @@ npm run dev -- --ram-size 134217728 path/to/image.bin
 Because traps vector to `mtvec`, a program that executes `ecall`, `ebreak`, or an unrecognized
 encoding continues at the handler if one is installed; with `mtvec` left at 0 the hart re-fetches
 from address 0 (unmapped — typically a repeated illegal-instruction trap unless a handler
-advances). Images must be linked for the `0x80000000` RAM base; zeros past the image in DRAM
+advances). Images must be linked for the RAM base (default `0x80000000`); zeros past the image in DRAM
 still decode as illegal instructions if execution falls through.
 
 To build and run the compiled output instead (no `tsx` required):

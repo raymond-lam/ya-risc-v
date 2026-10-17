@@ -66,9 +66,14 @@ type CpuCreateOptions = {
   memory: Memory;
   /** Reset PC as an 8-byte little-endian value (immutable after handoff). */
   resetPc: ReadonlyUint8Array;
+  /**
+   * Guest physical address of the device tree, or `null` when none is stored.
+   * Loaded into `a1` (`x11`) before fetch; `null` writes zero.
+   */
+  deviceTreeAddress: ReadonlyUint8Array | null;
 };
 
-/** Startup payload handed to the CPU worker (same fields as host options today). */
+/** Startup payload handed to the CPU worker (same fields as host options). */
 type CpuWorkerData = CpuCreateOptions;
 
 type CpuHandle = Promise<void> & {

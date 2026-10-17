@@ -25,21 +25,22 @@
 import { bytesToBigInt, unsignedBigIntToBytes } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 import {
-  CLINT_HOST_EPOCH_NS_UINT64,
-  CLINT_HOST_MTIMECMP_UINT64,
-  CLINT_HOST_MTIME_UINT64,
+  CLINT_HOST_EPOCH_NS_UINT64_INDEX,
+  CLINT_HOST_MTIMECMP_UINT64_INDEX,
+  CLINT_HOST_MTIME_UINT64_INDEX,
+  CLINT_HOST_TIMEBASE_HZ_UINT64_INDEX,
   clintHostUint64s,
   type ClintTimeRegister,
 } from '#emulator/clint/layout';
 import { setClintTimerWire } from '#emulator/clint/wires';
 import type { Memory } from '#emulator/memory';
 
-/** Free-running `mtime` frequency (10 MHz timebase). */
-const CLINT_TIMEBASE_HZ = 10_000_000n;
 const NS_PER_SECOND = 1_000_000_000n;
+/** `timebase-frequency` in the device tree is one cell. */
+const TIMEBASE_HZ_MAX = 0xffff_ffffn;
 
 const timeRegisterUint64Index = (register: ClintTimeRegister): number =>
-  register === 'mtime' ? CLINT_HOST_MTIME_UINT64 : CLINT_HOST_MTIMECMP_UINT64;
+  register === 'mtime' ? CLINT_HOST_MTIME_UINT64_INDEX : CLINT_HOST_MTIMECMP_UINT64_INDEX;
 
 const readTimeRegister = (memory: Memory, register: ClintTimeRegister): bigint =>
   Atomics.load(clintHostUint64s(memory), timeRegisterUint64Index(register));
@@ -66,11 +67,38 @@ const compareExchangeTimeRegister = (
   );
 
 const writeEpochNs = (memory: Memory, value: bigint): void => {
-  Atomics.store(clintHostUint64s(memory), CLINT_HOST_EPOCH_NS_UINT64, BigInt.asUintN(64, value));
+  Atomics.store(
+    clintHostUint64s(memory),
+    CLINT_HOST_EPOCH_NS_UINT64_INDEX,
+    BigInt.asUintN(64, value)
+  );
 };
 
 const readEpochNs = (memory: Memory): bigint =>
-  Atomics.load(clintHostUint64s(memory), CLINT_HOST_EPOCH_NS_UINT64);
+  Atomics.load(clintHostUint64s(memory), CLINT_HOST_EPOCH_NS_UINT64_INDEX);
+
+const readTimebaseHz = (memory: Memory): bigint =>
+  Atomics.load(clintHostUint64s(memory), CLINT_HOST_TIMEBASE_HZ_UINT64_INDEX);
+
+/** Store the free-running `mtime` frequency. Rejects 0 and values that do not fit in a u32. */
+const setClintTimebaseHz = (memory: Memory, timebaseHz: bigint): void => {
+  if (timebaseHz < 1n || timebaseHz > TIMEBASE_HZ_MAX) {
+    throw new RangeError('CLINT timebase frequency must be an integer from 1 through 2^32-1.');
+  }
+  Atomics.store(
+    clintHostUint64s(memory),
+    CLINT_HOST_TIMEBASE_HZ_UINT64_INDEX,
+    BigInt.asUintN(64, timebaseHz)
+  );
+};
+
+const timebaseHz = (memory: Memory): bigint => {
+  const hz = readTimebaseHz(memory);
+  if (hz === 0n) {
+    throw new Error('CLINT timebase frequency is not set.');
+  }
+  return hz;
+};
 
 const updateTimerWireFromCompare = (memory: Memory): void => {
   setClintTimerWire(
@@ -81,7 +109,7 @@ const updateTimerWireFromCompare = (memory: Memory): void => {
 
 /** Reseat epoch so `tickClint` reproduces `mtime` from `process.hrtime`. */
 const reseatEpochForMtime = (memory: Memory, mtime: bigint): void => {
-  writeEpochNs(memory, process.hrtime.bigint() - (mtime * NS_PER_SECOND) / CLINT_TIMEBASE_HZ);
+  writeEpochNs(memory, process.hrtime.bigint() - (mtime * NS_PER_SECOND) / timebaseHz(memory));
 };
 
 /**
@@ -93,7 +121,7 @@ const tickClint = (memory: Memory): void => {
   for (;;) {
     const epochNs = readEpochNs(memory);
     const elapsedNs = process.hrtime.bigint() - epochNs;
-    const ticks = BigInt.asUintN(64, (elapsedNs * CLINT_TIMEBASE_HZ) / NS_PER_SECOND);
+    const ticks = BigInt.asUintN(64, (elapsedNs * timebaseHz(memory)) / NS_PER_SECOND);
     const previous = readTimeRegister(memory, 'mtime');
     if (compareExchangeTimeRegister(memory, 'mtime', previous, ticks) !== previous) {
       continue;
@@ -206,6 +234,7 @@ export {
   loadClintTimeRegisterByte,
   readClintMtimeBytes,
   resetClintTimebase,
+  setClintTimebaseHz,
   storeClintTimeBytes,
   storeClintTimeRegisterByte,
   tickClint,

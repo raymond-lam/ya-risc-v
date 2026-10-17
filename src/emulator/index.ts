@@ -14,53 +14,54 @@
  * limitations under the License.
  */
 
-import {
-  CLINT_GUEST_BYTE_LENGTH,
-  CLINT_HOST_BYTE_LENGTH,
-  CLINT_REGION_ID,
-  initializeClint,
-} from '#emulator/clint';
+import { CLINT_HOST_BYTE_LENGTH, CLINT_REGION_ID, initializeClint } from '#emulator/clint';
 import { create as createCpu, type CpuHandle } from '#emulator/cpu';
 import { IRQ_LEVEL_HOST_BYTE_LENGTH, IRQ_LEVEL_REGION_ID } from '#emulator/irq-level';
 import { createMemory } from '#emulator/memory';
-import {
-  initializePlic,
-  PLIC_GUEST_BYTE_LENGTH,
-  PLIC_HOST_BYTE_LENGTH,
-  PLIC_REGION_ID,
-} from '#emulator/plic';
+import { initializePlic, PLIC_HOST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID, storeImageToRam } from '#emulator/ram';
 import { RESERVATION_HOST_BYTE_LENGTH, RESERVATION_REGION_ID } from '#emulator/reservation';
 import { create as createTerminal, type TerminalHandle } from '#emulator/terminal';
 import { create as createTimer, type TimerHandle } from '#emulator/timer';
-import { UART_GUEST_BYTE_LENGTH, UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
-import type { EmulatorCreateOptions, EmulatorHandle } from '#emulator/types';
-import type { ReadonlyUint8Array } from '#types';
-import { unsignedBigIntToBytes } from '#utils/bytes';
+import type { EmulatorCreateOptions, EmulatorHandle, GuestRegionWindow } from '#emulator/types';
+import { UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { storeDeviceTreeToRam } from '#fdt';
+import { bytesToBigInt } from '#utils/bytes';
 
-/** Default guest DRAM base address. */
-const DEFAULT_RAM_BASE = unsignedBigIntToBytes(
-  new Uint8Array(8),
-  0x8000_0000n
-) as ReadonlyUint8Array;
+/** Guest-mapped region ids, in pack order. */
+const GUEST_REGION_IDS: readonly string[] = [
+  RAM_REGION_ID,
+  UART_REGION_ID,
+  CLINT_REGION_ID,
+  PLIC_REGION_ID,
+];
 
-/** Fixed 16550 UART MMIO base. */
-const DEFAULT_UART_BASE = unsignedBigIntToBytes(
-  new Uint8Array(8),
-  0x1000_0000n
-) as ReadonlyUint8Array;
+const hostByteLength = (id: string, guestByteLength: bigint): bigint => {
+  if (id === RAM_REGION_ID) {
+    return guestByteLength;
+  }
+  if (id === UART_REGION_ID) {
+    return UART_HOST_BYTE_LENGTH;
+  }
+  if (id === CLINT_REGION_ID) {
+    return CLINT_HOST_BYTE_LENGTH;
+  }
+  if (id === PLIC_REGION_ID) {
+    return PLIC_HOST_BYTE_LENGTH;
+  }
+  throw new RangeError(`Unknown guest region '${id}'.`);
+};
 
-/** Fixed CLINT MMIO base (`msip` / `mtime` / `mtimecmp`). */
-const DEFAULT_CLINT_BASE = unsignedBigIntToBytes(
-  new Uint8Array(8),
-  0x0200_0000n
-) as ReadonlyUint8Array;
-
-/** Fixed PLIC MMIO base (UART IRQ = source 10). */
-const DEFAULT_PLIC_BASE = unsignedBigIntToBytes(
-  new Uint8Array(8),
-  0x0c00_0000n
-) as ReadonlyUint8Array;
+const guestRegion = (
+  guestRegions: ReadonlyMap<string, GuestRegionWindow>,
+  id: string
+): GuestRegionWindow => {
+  const region = guestRegions.get(id);
+  if (region === undefined) {
+    throw new RangeError(`Missing guest region '${id}'.`);
+  }
+  return region;
+};
 
 /* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
 class Emulator implements EmulatorHandle {
@@ -78,43 +79,38 @@ class Emulator implements EmulatorHandle {
 
   #stopped = false;
 
-  constructor({ image, stdin, stdout, ramSize }: EmulatorCreateOptions) {
-    if (ramSize < BigInt(image.byteLength)) {
+  constructor({
+    image,
+    stdin,
+    stdout,
+    guestRegions,
+    timebaseHz,
+    deviceTreeAddress,
+    resetPc,
+  }: EmulatorCreateOptions) {
+    for (const id of guestRegions.keys()) {
+      if (!GUEST_REGION_IDS.includes(id)) {
+        throw new RangeError(`Unknown guest region '${id}'.`);
+      }
+    }
+    const ram = guestRegion(guestRegions, RAM_REGION_ID);
+    if (ram.guestByteLength < BigInt(image.byteLength)) {
       throw new RangeError(
-        `image (${image.byteLength} bytes) does not fit in ramSize (${ramSize} bytes).`
+        `image (${image.byteLength} bytes) does not fit in ram region (${ram.guestByteLength} bytes).`
       );
     }
 
-    const ramBaseAddress = DEFAULT_RAM_BASE;
-    const uartBaseAddress = DEFAULT_UART_BASE;
-    const clintBaseAddress = DEFAULT_CLINT_BASE;
-    const plicBaseAddress = DEFAULT_PLIC_BASE;
     // Pack order: ram → uart → clint → plic → reservation → irqLevel
     const memory = createMemory([
-      {
-        id: RAM_REGION_ID,
-        hostByteLength: ramSize,
-        guestAddress: ramBaseAddress,
-        guestByteLength: ramSize,
-      },
-      {
-        id: UART_REGION_ID,
-        hostByteLength: UART_HOST_BYTE_LENGTH,
-        guestAddress: uartBaseAddress,
-        guestByteLength: UART_GUEST_BYTE_LENGTH,
-      },
-      {
-        id: CLINT_REGION_ID,
-        hostByteLength: CLINT_HOST_BYTE_LENGTH,
-        guestAddress: clintBaseAddress,
-        guestByteLength: CLINT_GUEST_BYTE_LENGTH,
-      },
-      {
-        id: PLIC_REGION_ID,
-        hostByteLength: PLIC_HOST_BYTE_LENGTH,
-        guestAddress: plicBaseAddress,
-        guestByteLength: PLIC_GUEST_BYTE_LENGTH,
-      },
+      ...GUEST_REGION_IDS.map((id) => {
+        const region = guestRegion(guestRegions, id);
+        return {
+          id,
+          hostByteLength: hostByteLength(id, region.guestByteLength),
+          guestAddress: region.guestAddress,
+          guestByteLength: region.guestByteLength,
+        };
+      }),
       {
         id: RESERVATION_REGION_ID,
         hostByteLength: RESERVATION_HOST_BYTE_LENGTH,
@@ -128,13 +124,27 @@ class Emulator implements EmulatorHandle {
         guestByteLength: 0n,
       },
     ]);
-    initializeClint(memory);
+    const ramBase = bytesToBigInt(ram.guestAddress);
+    const resetPcAddress = bytesToBigInt(resetPc);
+    if (resetPcAddress < ramBase || resetPcAddress >= ramBase + ram.guestByteLength) {
+      throw new RangeError('reset PC is outside the ram region.');
+    }
+    initializeClint(memory, timebaseHz);
     initializePlic(memory);
     storeImageToRam(memory, image);
-
     const cpu = createCpu({
       memory,
-      resetPc: ramBaseAddress,
+      resetPc,
+      deviceTreeAddress:
+        deviceTreeAddress === null
+          ? null
+          : storeDeviceTreeToRam(
+              memory,
+              guestRegions,
+              image.byteLength,
+              timebaseHz,
+              deviceTreeAddress
+            ),
     });
     const timer = createTimer({ memory });
     const terminal = createTerminal({

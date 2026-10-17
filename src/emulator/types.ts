@@ -16,11 +16,23 @@
 
 /* eslint-disable import/prefer-default-export -- emulator create option / handle types */
 import type { Readable, Writable } from 'node:stream';
+import type { DeviceTreeAddress } from '#fdt';
+import type { ReadonlyUint8Array } from '#types';
+
+/**
+ * Guest window for one region. Same fields `createMemory` stores for a
+ * guest-mapped spec (`guestAddress`, `guestByteLength`).
+ */
+type GuestRegionWindow = {
+  /** Guest physical base of this region's window. */
+  readonly guestAddress: ReadonlyUint8Array;
+  /** Guest-visible span length in bytes. */
+  readonly guestByteLength: bigint;
+};
 
 /**
  * Host arguments to create the emulator (CPU + UART terminal workers).
- * DRAM base is `0x8000_0000`; UART is at `0x1000_0000`; CLINT is at `0x0200_0000`.
- * `ramSize` is required.
+ * The caller supplies every guest window. Host-only slabs stay inside the emulator.
  */
 type EmulatorCreateOptions = {
   /** Flat program image copied into guest RAM at the RAM base. */
@@ -30,10 +42,24 @@ type EmulatorCreateOptions = {
   /** Bytes out of the guest (UART TX) for the host display. */
   stdout: Writable;
   /**
-   * Guest DRAM size in bytes. Must be at least `image.byteLength` and must not
-   * overlap the UART or CLINT windows.
+   * Guest windows keyed by region id (`ram`, `uart`, `clint`, `plic`).
+   * The `ram` window must cover `image`. Windows must not overlap.
+   * The image is copied to the `ram` base. The hart fetches from `resetPc`.
    */
-  ramSize: bigint;
+  guestRegions: ReadonlyMap<string, GuestRegionWindow>;
+  /** Guest address of the first fetch. Must lie in the RAM window. */
+  resetPc: ReadonlyUint8Array;
+  /**
+   * CLINT `mtime` frequency in hertz. Must be from 1 through 2^32-1.
+   * Published as `/cpus` `timebase-frequency` and used to advance `mtime`.
+   */
+  timebaseHz: bigint;
+  /**
+   * Where to store the device tree. The stored guest address is passed to the hart as `a1`.
+   * `'end'` is the top of the RAM window. `null` stores no blob and leaves `a1` zero.
+   * A byte buffer is that guest physical address.
+   */
+  deviceTreeAddress: DeviceTreeAddress;
 };
 
 type EmulatorHandle = Promise<void> & {
@@ -43,4 +69,4 @@ type EmulatorHandle = Promise<void> & {
   stop: () => void;
 };
 
-export type { EmulatorCreateOptions, EmulatorHandle };
+export type { EmulatorCreateOptions, EmulatorHandle, GuestRegionWindow };

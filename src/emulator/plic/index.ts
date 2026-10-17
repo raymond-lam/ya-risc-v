@@ -27,6 +27,7 @@ import { bigIntAsNumber } from '#utils/int';
 export {
   PLIC_GUEST_BYTE_LENGTH,
   PLIC_HOST_BYTE_LENGTH,
+  PLIC_MAX_SOURCE,
   PLIC_REGION_ID,
   PLIC_SOURCE_UART,
 } from '#emulator/plic/layout';

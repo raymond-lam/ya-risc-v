@@ -116,7 +116,7 @@ const createTestMemory = (ramSize: bigint): Memory => {
       plicBaseAddress: PLIC_BASE_ADDRESS,
     })
   );
-  initializeClint(memory);
+  initializeClint(memory, 10_000_000n);
   initializePlic(memory);
   return memory;
 };
