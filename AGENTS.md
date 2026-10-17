@@ -154,8 +154,9 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - **Zicsr checks CSR existence and privilege.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live
   in `system.ts` (SYSTEM opcode group). Only the implemented set is accessible (`mstatus`/
   `sstatus`, `misa`, `medeleg`/`mideleg`, `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/
-  `sscratch`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, `satp`, `cycle`/`time`/`instret`,
-  `mcycle`/`minstret`, `mcounteren`/`scounteren`, `mcountinhibit`, and the identity CSRs); any other
+  `sscratch`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, `satp`, `pmpcfg0`/`pmpcfg2`,
+  `pmpaddr0`–`pmpaddr15`, `cycle`/`time`/`instret`, `mcycle`/`minstret`, `mcounteren`/`scounteren`,
+  `mcountinhibit`, and the identity CSRs); any other
   index or an access above the current privilege raises illegal-instruction. Writes to read-only
   CSRs also illegal; `csrrs`/`csrrc` with `rs1` = `x0` and `csrrsi`/`csrrci` with a zero immediate
   are read-only and may touch identity CSRs. `sstatus`/`sie`/`sip` are masked aliases of
@@ -166,6 +167,11 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   traps cancel retire except `ecall`/`ebreak`. `mcounteren`/`scounteren` WARL to CY/TM/IR and gate
   S/U (U needs both). `satp` is stored but does not enable paging yet; with `mstatus.TVM` set,
   S-mode `satp` access is illegal. They snapshot the CSR slot before writing `rd` (the file is live).
+  PMP is 16 entries at 4-byte grain (NA4 legal). `pmpcfg` is WARL (locked bytes stick; W without R
+  is dropped). `pmpaddr` keeps address bits 55:2. A locked TOR entry also freezes the previous
+  `pmpaddr`. Fetch, load, store, and AMO use the lowest entry that overlaps the access; that entry
+  must cover the whole access or the access fails. M-mode ignores an unlocked entry, and S/U fault
+  when nothing matches (`mstatus.MPRV` makes loads and stores use MPP). `mseccfg` is not implemented.
 
 ## Adding instructions
 
