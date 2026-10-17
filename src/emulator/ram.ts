@@ -84,6 +84,23 @@ const storeImageToRam = (memory: Memory, image: ReadonlyUint8Array): void => {
   memory.bytes.set(image, bigIntAsNumber(ramRegion(memory).hostIndex));
 };
 
+/** Copy `source` into the packed RAM host slab at guest `address`. */
+const copyIntoRam = (
+  memory: Memory,
+  address: ReadonlyUint8Array,
+  source: ReadonlyUint8Array
+): void => {
+  const hostIndex = ramAddressToHostIndex(memory, address);
+  const ram = ramRegion(memory);
+  if (
+    hostIndex === null ||
+    hostIndex + BigInt(source.length) > ram.hostIndex + ram.hostByteLength
+  ) {
+    throw new RangeError('Copy exceeds the ram region.');
+  }
+  memory.bytes.set(source, bigIntAsNumber(hostIndex));
+};
+
 const loadRamByte = (memory: Memory, hostIndex: bigint): number =>
   memory.bytes[bigIntAsNumber(hostIndex)] ?? 0;
 
@@ -286,6 +303,7 @@ export {
   atomicRamLoad,
   atomicRamStore,
   loadBytesFromRam,
+  copyIntoRam,
   storeBytesToRam,
   storeImageToRam,
 };

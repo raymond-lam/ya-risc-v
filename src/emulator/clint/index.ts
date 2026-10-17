@@ -19,7 +19,12 @@
  * Timebase Worker host is `#emulator/timer`.
  */
 
-import { readClintMtimeBytes, resetClintTimebase, tickClint } from '#emulator/clint/time';
+import {
+  readClintMtimeBytes,
+  resetClintTimebase,
+  setClintTimebaseHz,
+  tickClint,
+} from '#emulator/clint/time';
 import {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
@@ -35,8 +40,9 @@ export {
 } from '#emulator/clint/layout';
 export { loadBytesFromClint, storeBytesToClint } from '#emulator/clint/memory';
 
-/** Initialize CLINT: timebase reset, both IRQ wires clear. */
-const initializeClint = (memory: Memory): void => {
+/** Initialize CLINT: store `timebaseHz`, reset the timebase, clear both IRQ wires. */
+const initializeClint = (memory: Memory, timebaseHz: bigint): void => {
+  setClintTimebaseHz(memory, timebaseHz);
   resetClintTimebase(memory);
   setClintTimerWire(memory, false);
   setClintSoftwareWire(memory, false);

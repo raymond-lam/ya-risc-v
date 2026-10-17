@@ -35,13 +35,25 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 
 - `src/index.ts` — Commander CLI; loads the image, `create`s the emulator and TUI, starts the TUI
   then the emulator (`onShutdown` / signals call `emulator.stop()`), awaits the emulator, then
-  stops and awaits the TUI.
+  stops and awaits the TUI. Guest-base defaults are CLI options: `--ram-base` `0x8000_0000`,
+  `--uart-base` `0x1000_0000`, `--clint-base` `0x0200_0000`, `--plic-base` `0x0c00_0000`,
+  `--timebase-frequency` `10000000`, `--reset-pc` the RAM base. The device tree is stored at the top
+  of RAM
+  (`--dtb-address` chooses another guest address; `--no-device-tree` skips it and leaves `a1` zero).
+  The CLI
+  builds `guestRegions` (region id → `guestAddress` / `guestByteLength`) from those flags,
+  `--ram-size`, and the UART/CLINT/PLIC window lengths.
 - `src/tui/` — host Ink UI (`create` / `start` / `stop`; `components/`, `hooks/use-mouse-left-click`);
   terminal pane over caller streams.
-- `src/emulator/index.ts` — host-side `create` (requires `ramSize`); maps the image into DRAM at
-  `0x8000_0000` (UART at `0x1000_0000`, CLINT at `0x0200_0000`, PLIC at `0x0c00_0000`), creates
-  CPU + timer + terminal handles, returns an awaitable. `start` / `stop` forward to all three;
-  awaiting joins all three.
+- `src/emulator/index.ts` — host-side `create` (requires `guestRegions`: region id →
+  `guestAddress` / `guestByteLength` for DRAM, UART, CLINT, and PLIC). Maps the image into DRAM
+  at the supplied base. The reset PC is caller-supplied. It encodes a device tree from that map and
+  passes its guest address to the hart as `a1` (`a0` is hart 0; `a1` is zero when the caller skips the tree).
+  The address is the top of DRAM, or a caller-supplied guest address. Creates CPU + timer +
+  terminal handles, returns an awaitable. `start` / `stop` forward to all three; awaiting joins
+  all three.
+- `src/fdt.ts` — flattened device tree for the live guest map (OpenSBI `riscv,clint0` /
+  `riscv,plic0` / `ns16550a`). `storeDeviceTreeToRam` copies it into RAM.
 - `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, trap,
   registers, instructions (one file per opcode group).
 - `src/emulator/cpu/decode/` — instruction decode package: `index` multiplexes to `decode-32`

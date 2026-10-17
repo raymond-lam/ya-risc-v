@@ -15,6 +15,7 @@
  */
 
 import { parentPort, workerData } from 'node:worker_threads';
+import applyBootHandoff from '#emulator/cpu/boot';
 import decode from '#emulator/cpu/decode';
 import {
   beginInstructionRetire,
@@ -34,9 +35,10 @@ const isThenable = (value: unknown): value is PromiseLike<void> =>
   typeof (value as PromiseLike<void>).then === 'function';
 
 const main = async (): Promise<void> => {
-  const { memory, resetPc } = workerData as CpuWorkerData;
+  const { memory, resetPc, deviceTreeAddress } = workerData as CpuWorkerData;
   const registers = createRegisters();
   setProgramCounter(registers, resetPc);
+  applyBootHandoff(registers, deviceTreeAddress);
   const instructionWord = new Uint8Array(4);
 
   // No exit condition: the hart runs until the host terminates us.

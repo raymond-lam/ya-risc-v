@@ -715,6 +715,7 @@ export {
   SCAUSE,
   STVAL,
   MSTATUS,
+  MHARTID,
   MEDELEG,
   MIDELEG,
   MIE,

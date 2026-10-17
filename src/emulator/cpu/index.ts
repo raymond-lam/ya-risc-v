@@ -46,6 +46,7 @@ class Cpu implements CpuHandle {
     const workerData = {
       memory: this.#options.memory,
       resetPc: this.#options.resetPc,
+      deviceTreeAddress: this.#options.deviceTreeAddress,
     } satisfies CpuWorkerData;
     // Assign worker before marking started so a constructor throw leaves state untouched.
     const worker = new Worker(new URL(import.meta.resolve('#emulator/cpu/run')), {
