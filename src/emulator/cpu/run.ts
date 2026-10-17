@@ -15,31 +15,78 @@
  */
 
 import { parentPort, workerData } from 'node:worker_threads';
+import { addBytes, copyBytes } from '#utils/bytes';
 import applyBootHandoff from '#emulator/cpu/boot';
-import decode from '#emulator/cpu/decode';
+import decode, { ENCODING_LENGTH_32_BIT, ENCODING_LENGTH_MASK } from '#emulator/cpu/decode';
+import { physicalMemoryAccessDenied } from '#emulator/cpu/pmp';
 import {
   beginInstructionRetire,
   commitInstructionRetire,
   createRegisters,
   readProgramCounter,
   setProgramCounter,
+  TWO_BYTES,
 } from '#emulator/cpu/registers';
 import sampleDevicePending from '#emulator/cpu/sample-device-pending';
-import { takeInterruptIfAny, trapIfInstructionAddressMisaligned } from '#emulator/cpu/trap';
-import type { CpuWorkerData } from '#emulator/cpu/types';
-import { loadBytes } from '#emulator/memory';
+import {
+  CAUSE_INSTRUCTION_ACCESS_FAULT,
+  enterTrap,
+  takeInterruptIfAny,
+  trapIfInstructionAddressMisaligned,
+} from '#emulator/cpu/trap';
+import type { CpuWorkerData, Registers } from '#emulator/cpu/types';
+import { loadBytes, type Memory } from '#emulator/memory';
 
 const isThenable = (value: unknown): value is PromiseLike<void> =>
   typeof value === 'object' &&
   value !== null &&
   typeof (value as PromiseLike<void>).then === 'function';
 
+/** Fetch the instruction at the PC. */
+const fetchInstruction = (
+  registers: Registers,
+  memory: Memory,
+  instructionBytes: Uint8Array
+): boolean => {
+  instructionBytes.fill(0);
+  const pc = readProgramCounter(registers);
+  // The length is in the low two bits, so the first check can only cover those two bytes.
+  // A 16-bit instruction stops after this and must not fault on bytes it does not fetch.
+  if (physicalMemoryAccessDenied({ registers, address: pc, byteLength: 2, access: 'fetch' })) {
+    enterTrap(registers, CAUSE_INSTRUCTION_ACCESS_FAULT, copyBytes(new Uint8Array(8), pc));
+    return false;
+  }
+  loadBytes({
+    destination: instructionBytes.subarray(0, 2),
+    memory,
+    address: pc,
+    byteLength: 2,
+  });
+  if ((instructionBytes[0]! & ENCODING_LENGTH_MASK) !== ENCODING_LENGTH_32_BIT) {
+    return true;
+  }
+  // The encoding is 32 bits, so re-check all four bytes as one access. The lowest matching
+  // entry has to cover the whole instruction; checking the upper parcel on its own would
+  // allow an instruction that straddles an execute boundary.
+  if (physicalMemoryAccessDenied({ registers, address: pc, byteLength: 4, access: 'fetch' })) {
+    enterTrap(registers, CAUSE_INSTRUCTION_ACCESS_FAULT, copyBytes(new Uint8Array(8), pc));
+    return false;
+  }
+  loadBytes({
+    destination: instructionBytes.subarray(2, 4),
+    memory,
+    address: addBytes(new Uint8Array(8), pc, TWO_BYTES),
+    byteLength: 2,
+  });
+  return true;
+};
+
 const main = async (): Promise<void> => {
   const { memory, resetPc, deviceTreeAddress } = workerData as CpuWorkerData;
   const registers = createRegisters();
   setProgramCounter(registers, resetPc);
   applyBootHandoff(registers, deviceTreeAddress);
-  const instructionWord = new Uint8Array(4);
+  const instructionBytes = new Uint8Array(4);
 
   // No exit condition: the hart runs until the host terminates us.
   for (;;) {
@@ -53,14 +100,11 @@ const main = async (): Promise<void> => {
     if (trapIfInstructionAddressMisaligned(registers)) {
       continue;
     }
-    loadBytes({
-      destination: instructionWord,
-      memory,
-      address: readProgramCounter(registers),
-      byteLength: 4,
-    });
+    if (!fetchInstruction(registers, memory, instructionBytes)) {
+      continue;
+    }
     beginInstructionRetire(registers);
-    const [execute, instructionByteLength] = decode(instructionWord);
+    const [execute, instructionByteLength] = decode(instructionBytes);
     // Only await async instructions (today: wfi). Sync thunks return void and must
     // not force a microtask per instruction on the hot path.
     const result = execute(registers, memory, instructionByteLength);

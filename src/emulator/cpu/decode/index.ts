@@ -33,6 +33,10 @@ type DecodeResult = readonly [ExecuteThunk, ReadonlyUint8Array];
 /** Cap memoized encodings so a guest walking unique opcodes cannot OOM the host. */
 const DECODE_CACHE_MAX_ENTRIES = 8192;
 
+/** Low two bits of the encoding. 0b11 means 32 bits; 0b00, 0b01, and 0b10 mean one 16-bit parcel. */
+const ENCODING_LENGTH_MASK = 0x03;
+const ENCODING_LENGTH_32_BIT = 0x03;
+
 /**
  * Decode one RV64IMAC instruction into an execute thunk and its encoded width.
  *
@@ -43,8 +47,7 @@ const DECODE_CACHE_MAX_ENTRIES = 8192;
 const decode = (instructionWord: ReadonlyUint8Array): DecodeResult => {
   const encodedInstructionWord = bytesToNumber(instructionWord);
 
-  // RVC: inst[1:0] ≠ 0b11 selects a 16-bit encoding in the low halfword.
-  if ((encodedInstructionWord & 0x3) !== 0x3) {
+  if ((encodedInstructionWord & ENCODING_LENGTH_MASK) !== ENCODING_LENGTH_32_BIT) {
     return [decodeC(encodedInstructionWord & 0xffff), TWO_BYTES];
   }
 
@@ -61,7 +64,7 @@ const thunkByInstructionWord = new Map<number, ExecuteThunk>();
 const decodeWithCache = (instructionWord: ReadonlyUint8Array): DecodeResult => {
   const encoded = bytesToNumber(instructionWord);
   // Fetch is always 4 bytes; for RVC only the low halfword is the insn (high half is PC+2).
-  const isThirtyTwoBit = (encoded & 0x3) === 0x3;
+  const isThirtyTwoBit = (encoded & ENCODING_LENGTH_MASK) === ENCODING_LENGTH_32_BIT;
   const instructionByteLength = isThirtyTwoBit ? FOUR_BYTES : TWO_BYTES;
   const key = isThirtyTwoBit ? encoded : encoded & 0xffff;
   const cached = thunkByInstructionWord.get(key);
@@ -82,4 +85,4 @@ const decodeWithCache = (instructionWord: ReadonlyUint8Array): DecodeResult => {
   return [thunk, instructionByteLength];
 };
 
-export default decodeWithCache;
+export { ENCODING_LENGTH_32_BIT, ENCODING_LENGTH_MASK, decodeWithCache as default };

@@ -33,7 +33,8 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **Zicsr:** `csrrw`, `csrrs`, `csrrc`, and the immediate forms `csrrwi`, `csrrsi`, `csrrci`.
   Only implemented CSRs are accessible (`mstatus`/`sstatus`, `misa`, `medeleg`/`mideleg`,
   `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/`sscratch`, `mepc`/`sepc`,
-  `mcause`/`scause`, `mtval`/`stval`, `satp`, `cycle`/`time`/`instret`, `mcycle`/`minstret`,
+  `mcause`/`scause`, `mtval`/`stval`, `satp`, `pmpcfg0`/`pmpcfg2`, `pmpaddr0`–`pmpaddr15`,
+  `cycle`/`time`/`instret`, `mcycle`/`minstret`,
   `mcounteren`/`scounteren`, `mcountinhibit`, identity); other indices, insufficient privilege,
   and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the write when
   the source is zero. `sstatus`/`sie`/`sip` are masked views of `mstatus`/`mie`/`mip`. WARL:
@@ -43,6 +44,9 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   `mcycle`/`minstret` and count retires at CPI=1 (traps cancel retire except `ecall`/`ebreak`).
   S/U reads need the matching enable bits (U needs both). `satp` is stored (OpenSBI clears it);
   Sv39 walks are not implemented yet. With `mstatus.TVM` set, S-mode `satp` access is illegal.
+  PMP is 16 entries (4-byte grain, no `mseccfg`). `pmpaddr` keeps address bits 55:2. The lowest
+  entry that overlaps an access must cover all of it. Fetch, load, store, and AMO fault when that
+  rule denies them; S/U fault when no rule matches.
 - **Privilege modes:** the hart tracks U/S/M (reset = M). Traps record `MPP`/`SPP`, switch mode,
   and vector through `mtvec` or `stvec` when `medeleg`/`mideleg` delegates. `mret`/`sret` restore
   the previous mode; `ecall` uses causes 8/9/11 by mode. `mret` is M-only; `sret` is illegal in U.
