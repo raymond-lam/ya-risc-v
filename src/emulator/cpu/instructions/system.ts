@@ -75,6 +75,12 @@ const MSTATUS_BYTE2_TW = 0x20;
  */
 const MSTATUS_BYTE2_TSR = 0x40;
 
+/**
+ * mstatus.TVM (Trap Virtual Memory), bit 20 → little-endian bytes[2] bit 4.
+ * When set, `sfence.vma` in S-mode raises illegal-instruction (M-mode stays legal).
+ */
+const MSTATUS_BYTE2_TVM = 0x10;
+
 const trapIllegalCsrAccess = (registers: Registers, instructionWord: number): void => {
   enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(instructionWord));
 };
@@ -130,6 +136,36 @@ const sret = (
     }
   }
   returnFromSupervisorTrap(registers);
+};
+
+/**
+ * sfence.vma: address-translation fence. Page walks are not cached, so this is a no-op.
+ * `rs1` and `rs2` select an address and ASID and are ignored. Illegal in U-mode.
+ * With `mstatus.TVM` set, also illegal in S-mode.
+ */
+const sfenceVma = (
+  registers: Registers,
+  _memory: Memory,
+  args: { instructionWord: number },
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  const privilege = readPrivilegeMode(registers);
+  if (compareUnsignedBytes(privilege, PRIVILEGE_SUPERVISOR) < 0) {
+    enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(args.instructionWord));
+    return;
+  }
+  if (compareUnsignedBytes(privilege, PRIVILEGE_SUPERVISOR) === 0) {
+    const mstatus = snapshotControlAndStatusRegister(registers, MSTATUS);
+    if ((mstatus[2]! & MSTATUS_BYTE2_TVM) !== 0) {
+      enterTrap(
+        registers,
+        CAUSE_ILLEGAL_INSTRUCTION,
+        instructionWordTrapValue(args.instructionWord)
+      );
+      return;
+    }
+  }
+  advanceProgramCounter(registers, instructionByteLength);
 };
 
 /**
@@ -353,4 +389,4 @@ const csrrci = (
   advanceProgramCounter(registers, instructionByteLength);
 };
 
-export { ecall, ebreak, mret, sret, wfi, csrrw, csrrs, csrrc, csrrwi, csrrsi, csrrci };
+export { ecall, ebreak, mret, sret, sfenceVma, wfi, csrrw, csrrs, csrrc, csrrwi, csrrsi, csrrci };
