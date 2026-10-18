@@ -14,6 +14,14 @@
  * limitations under the License.
  */
 
+import {
+  isPmpAddrRegister,
+  isPmpCfgRegister,
+  isPmpControlAndStatusRegister,
+  legalizePmpAddr,
+  legalizePmpCfg,
+  pmpAddressWriteIgnored,
+} from '#emulator/cpu/pmp';
 import type { Registers } from '#emulator/cpu/types';
 import { readClintMtimeBytes } from '#emulator/clint';
 import type { Memory } from '#emulator/memory';
@@ -253,7 +261,8 @@ const isImplementedControlAndStatusRegister = (index: number): boolean =>
   index === MIP ||
   index === MCYCLE ||
   index === MINSTRET ||
-  isIdentityControlAndStatusRegister(index);
+  isIdentityControlAndStatusRegister(index) ||
+  isPmpControlAndStatusRegister(index);
 
 const isReadOnlyControlAndStatusRegister = (index: number): boolean =>
   isIdentityControlAndStatusRegister(index) || isUnprivilegedCounterControlAndStatusRegister(index);
@@ -646,8 +655,21 @@ const writeControlAndStatusRegister = (
         registers.controlAndStatus[index]!,
         legalizeXepc(copyBytes(new Uint8Array(8), value))
       );
-    default:
+    default: {
+      if (isPmpCfgRegister(index)) {
+        return copyBytes(
+          registers.controlAndStatus[index]!,
+          legalizePmpCfg(registers.controlAndStatus[index]!, value)
+        );
+      }
+      if (isPmpAddrRegister(index)) {
+        if (pmpAddressWriteIgnored(registers, index)) {
+          return registers.controlAndStatus[index]!;
+        }
+        return copyBytes(registers.controlAndStatus[index]!, legalizePmpAddr(value));
+      }
       return copyBytes(registers.controlAndStatus[index]!, value);
+    }
   }
 };
 

@@ -45,6 +45,8 @@ import {
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import {
+  CAUSE_LOAD_ACCESS_FAULT,
+  CAUSE_LOAD_ADDRESS_MISALIGNED,
   CAUSE_STORE_AMO_ACCESS_FAULT,
   CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
 } from '#emulator/cpu/trap';
@@ -394,7 +396,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 20);
   });
 
-  it('misaligned lr.w traps with cause 6 and does not arm a reservation', () => {
+  it('misaligned lr.w traps with cause 4 and does not arm a reservation', () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -418,7 +420,7 @@ describe('amo', () => {
 
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
-      signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ADDRESS_MISALIGNED, 32)
+      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_ADDRESS_MISALIGNED, 32)
     );
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x343),
@@ -514,7 +516,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x3000);
   });
 
-  it('aligned lr.w to unmapped address traps with cause 7 and does not arm a reservation', () => {
+  it('aligned lr.w to unmapped address traps with cause 5 and does not arm a reservation', () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -543,7 +545,7 @@ describe('amo', () => {
 
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
-      signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ACCESS_FAULT, 32)
+      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_ACCESS_FAULT, 32)
     );
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x343),

@@ -15,11 +15,13 @@
  */
 
 import { addBytes, signExtendBytes, zeroExtendBytes } from '#utils/bytes';
+import { physicalMemoryAccessDenied } from '#emulator/cpu/pmp';
 import {
   readGeneralPurposeRegister,
   writeGeneralPurposeRegister,
   advanceProgramCounter,
 } from '#emulator/cpu/registers';
+import { CAUSE_LOAD_ACCESS_FAULT, enterTrap } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
@@ -38,6 +40,19 @@ const loadEffectiveAddress = (registers: Registers, args: LoadArgs): ReadonlyUin
     args.immediate
   );
 
+/** Load access fault (cause 5) when PMP denies the access. Does not write rd or advance the PC. */
+const denyLoad = (
+  registers: Registers,
+  address: ReadonlyUint8Array,
+  byteLength: number
+): boolean => {
+  if (!physicalMemoryAccessDenied({ registers, address, byteLength, access: 'load' })) {
+    return false;
+  }
+  enterTrap(registers, CAUSE_LOAD_ACCESS_FAULT, address);
+  return true;
+};
+
 /** lb: rd = sext(mem[rs1+imm], 8). */
 const lb = (
   registers: Registers,
@@ -45,11 +60,15 @@ const lb = (
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
 ): void => {
+  const address = loadEffectiveAddress(registers, args);
+  if (denyLoad(registers, address, 1)) {
+    return;
+  }
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
     memory,
-    address: loadEffectiveAddress(registers, args),
+    address,
     byteLength: 1,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 1));
@@ -63,11 +82,15 @@ const lh = (
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
 ): void => {
+  const address = loadEffectiveAddress(registers, args);
+  if (denyLoad(registers, address, 2)) {
+    return;
+  }
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
     memory,
-    address: loadEffectiveAddress(registers, args),
+    address,
     byteLength: 2,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 2));
@@ -81,11 +104,15 @@ const lw = (
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
 ): void => {
+  const address = loadEffectiveAddress(registers, args);
+  if (denyLoad(registers, address, 4)) {
+    return;
+  }
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
     memory,
-    address: loadEffectiveAddress(registers, args),
+    address,
     byteLength: 4,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, signExtendBytes(loaded, 4));
@@ -99,11 +126,15 @@ const ld = (
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
 ): void => {
+  const address = loadEffectiveAddress(registers, args);
+  if (denyLoad(registers, address, 8)) {
+    return;
+  }
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
     memory,
-    address: loadEffectiveAddress(registers, args),
+    address,
     byteLength: 8,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, loaded);
@@ -117,11 +148,15 @@ const lbu = (
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
 ): void => {
+  const address = loadEffectiveAddress(registers, args);
+  if (denyLoad(registers, address, 1)) {
+    return;
+  }
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
     memory,
-    address: loadEffectiveAddress(registers, args),
+    address,
     byteLength: 1,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 1));
@@ -135,11 +170,15 @@ const lhu = (
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
 ): void => {
+  const address = loadEffectiveAddress(registers, args);
+  if (denyLoad(registers, address, 2)) {
+    return;
+  }
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
     memory,
-    address: loadEffectiveAddress(registers, args),
+    address,
     byteLength: 2,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 2));
@@ -153,11 +192,15 @@ const lwu = (
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
 ): void => {
+  const address = loadEffectiveAddress(registers, args);
+  if (denyLoad(registers, address, 4)) {
+    return;
+  }
   const loaded = new Uint8Array(8);
   loadBytes({
     destination: loaded,
     memory,
-    address: loadEffectiveAddress(registers, args),
+    address,
     byteLength: 4,
   });
   writeGeneralPurposeRegister(registers, args.destinationRegister, zeroExtendBytes(loaded, 4));

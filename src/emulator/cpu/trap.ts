@@ -57,7 +57,10 @@ import type { ReadonlyUint8Array } from '#types';
 
 /** Synchronous exception codes (mcause/scause with interrupt bit clear). */
 const CAUSE_INSTRUCTION_ADDRESS_MISALIGNED = 0;
+const CAUSE_INSTRUCTION_ACCESS_FAULT = 1;
 const CAUSE_ILLEGAL_INSTRUCTION = 2;
+const CAUSE_LOAD_ADDRESS_MISALIGNED = 4;
+const CAUSE_LOAD_ACCESS_FAULT = 5;
 const CAUSE_BREAKPOINT = 3;
 const CAUSE_STORE_AMO_ADDRESS_MISALIGNED = 6;
 const CAUSE_STORE_AMO_ACCESS_FAULT = 7;
@@ -410,7 +413,10 @@ const instructionWordTrapValue = (instructionWord: number): ReadonlyUint8Array =
   unsignedNumberToBytes(new Uint8Array(8), instructionWord);
 
 export {
+  CAUSE_INSTRUCTION_ACCESS_FAULT,
   CAUSE_ILLEGAL_INSTRUCTION,
+  CAUSE_LOAD_ADDRESS_MISALIGNED,
+  CAUSE_LOAD_ACCESS_FAULT,
   CAUSE_BREAKPOINT,
   CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
   CAUSE_STORE_AMO_ACCESS_FAULT,
