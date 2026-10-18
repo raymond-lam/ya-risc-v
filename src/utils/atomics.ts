@@ -62,4 +62,37 @@ const atomicUpdateBit = ({
   }
 };
 
-export { atomicLoad32, atomicLoadBit, atomicUpdateBit };
+/**
+ * Atomically replace the bits selected by `mask` in the 32 little-endian bits at `index`
+ * (`index` must be 4-byte aligned). A mask of all ones is one atomic store.
+ */
+const atomicUpdate32 = ({
+  bytes,
+  index,
+  mask,
+  value,
+}: {
+  bytes: Uint8Array;
+  index: number;
+  mask: number;
+  value: number;
+}): void => {
+  const view = bytesToInt32Array(bytes, index);
+  const bits = mask >>> 0;
+  const replacement = (value >>> 0) & bits;
+  if (bits === 0xffff_ffff) {
+    Atomics.store(view, 0, replacement | 0);
+    return;
+  }
+  let previous = Atomics.load(view, 0);
+  for (;;) {
+    const next = (((previous >>> 0) & (~bits >>> 0)) | replacement) >>> 0;
+    const current = Atomics.compareExchange(view, 0, previous, next | 0);
+    if (current === previous) {
+      return;
+    }
+    previous = current;
+  }
+};
+
+export { atomicLoad32, atomicLoadBit, atomicUpdate32, atomicUpdateBit };

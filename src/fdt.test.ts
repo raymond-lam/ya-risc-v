@@ -25,6 +25,14 @@ import {
   PLIC_SOURCE_UART,
 } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
+import {
+  SYSCON_GUEST_BYTE_LENGTH,
+  SYSCON_POWEROFF_OFFSET,
+  SYSCON_POWEROFF_VALUE,
+  SYSCON_REBOOT_OFFSET,
+  SYSCON_REBOOT_VALUE,
+  SYSCON_REGION_ID,
+} from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
 import { storeDeviceTreeToRam, type DeviceTreeAddress } from '#fdt';
 import { machineRegionSpecs } from '#test/guest-memory';
@@ -51,19 +59,29 @@ const regionsFor = ({
   uartBase,
   clintBase,
   plicBase,
+  sysconBase,
 }: {
   ramBase: bigint;
   ramSize: bigint;
   uartBase: bigint;
   clintBase: bigint;
   plicBase: bigint;
-}): Map<string, { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }> =>
-  new Map([
+  sysconBase?: bigint;
+}): Map<string, { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }> => {
+  const regions = new Map<string, { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }>([
     [RAM_REGION_ID, { guestAddress: guest(ramBase), guestByteLength: ramSize }],
     [UART_REGION_ID, { guestAddress: guest(uartBase), guestByteLength: UART_GUEST_BYTE_LENGTH }],
     [CLINT_REGION_ID, { guestAddress: guest(clintBase), guestByteLength: CLINT_GUEST_BYTE_LENGTH }],
     [PLIC_REGION_ID, { guestAddress: guest(plicBase), guestByteLength: PLIC_GUEST_BYTE_LENGTH }],
   ]);
+  if (sysconBase !== undefined) {
+    regions.set(SYSCON_REGION_ID, {
+      guestAddress: guest(sysconBase),
+      guestByteLength: SYSCON_GUEST_BYTE_LENGTH,
+    });
+  }
+  return regions;
+};
 
 const viewOf = (bytes: Uint8Array): DataView =>
   new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -231,6 +249,7 @@ const virt = regionsFor({
   uartBase: 0x1000_0000n,
   clintBase: 0x0200_0000n,
   plicBase: 0x0c00_0000n,
+  sysconBase: 0x0010_0000n,
 });
 
 describe('storeDeviceTreeToRam', () => {
@@ -260,6 +279,22 @@ describe('storeDeviceTreeToRam', () => {
     assert.ok(stringList(uart, 'compatible').includes('ns16550a'));
     assert.deepEqual(reg(uart), { address: 0x1000_0000n, size: UART_GUEST_BYTE_LENGTH });
     assert.equal(cells(uart, 'interrupts')[0], PLIC_SOURCE_UART);
+
+    const syscon = child(soc, 'syscon@100000');
+    assert.ok(stringList(syscon, 'compatible').includes('syscon'));
+    assert.deepEqual(reg(syscon), { address: 0x0010_0000n, size: SYSCON_GUEST_BYTE_LENGTH });
+    assert.equal(cells(syscon, 'phandle')[0], 3);
+    const poweroff = child(syscon, 'poweroff');
+    assert.ok(stringList(poweroff, 'compatible').includes('syscon-poweroff'));
+    assert.equal(cells(poweroff, 'regmap')[0], 3);
+    assert.equal(cells(poweroff, 'offset')[0], SYSCON_POWEROFF_OFFSET);
+    assert.equal(cells(poweroff, 'value')[0], SYSCON_POWEROFF_VALUE);
+    assert.equal(cells(poweroff, 'mask')[0], 0xffff_ffff);
+    const reboot = child(syscon, 'reboot');
+    assert.ok(stringList(reboot, 'compatible').includes('syscon-reboot'));
+    assert.equal(cells(reboot, 'offset')[0], SYSCON_REBOOT_OFFSET);
+    assert.equal(cells(reboot, 'value')[0], SYSCON_REBOOT_VALUE);
+
     assert.equal(text(child(root, 'chosen'), 'stdout-path'), '/soc/uart@10000000');
   });
 

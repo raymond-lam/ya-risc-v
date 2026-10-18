@@ -21,6 +21,7 @@ import { create } from '#emulator';
 import { CLINT_GUEST_BYTE_LENGTH, CLINT_REGION_ID } from '#emulator/clint';
 import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
+import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
 import { create as createTerminal } from '#emulator/terminal';
 import { create as createTimer } from '#emulator/timer';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
@@ -49,6 +50,7 @@ const virtRegions = (
     [UART_REGION_ID, window(0x1000_0000n, UART_GUEST_BYTE_LENGTH)],
     [CLINT_REGION_ID, window(0x0200_0000n, CLINT_GUEST_BYTE_LENGTH)],
     [PLIC_REGION_ID, window(0x0c00_0000n, PLIC_GUEST_BYTE_LENGTH)],
+    [SYSCON_REGION_ID, window(0x0010_0000n, SYSCON_GUEST_BYTE_LENGTH)],
   ]);
 
 /** Minimal thenable handle that can reject like a worker lifetime. */

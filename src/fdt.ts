@@ -26,6 +26,13 @@ import { CLINT_REGION_ID } from '#emulator/clint';
 import type { Memory } from '#emulator/memory';
 import { PLIC_MAX_SOURCE, PLIC_REGION_ID, PLIC_SOURCE_UART } from '#emulator/plic';
 import { copyIntoRam, RAM_REGION_ID } from '#emulator/ram';
+import {
+  SYSCON_POWEROFF_OFFSET,
+  SYSCON_POWEROFF_VALUE,
+  SYSCON_REBOOT_OFFSET,
+  SYSCON_REBOOT_VALUE,
+  SYSCON_REGION_ID,
+} from '#emulator/syscon';
 import { UART_REGION_ID } from '#emulator/uart';
 import type { ReadonlyUint8Array } from '#types';
 import { bytesToBigInt, unsignedBigIntToBytes } from '#utils/bytes';
@@ -61,6 +68,11 @@ const FDT_ALIGN = 8n;
 const PHANDLE_CPU_INTC = 1;
 /** PLIC phandle. The UART `interrupt-parent` points here. */
 const PHANDLE_PLIC = 2;
+/** Syscon phandle. `syscon-poweroff` and `syscon-reboot` `regmap` point here. */
+const PHANDLE_SYSCON = 3;
+
+/** `regmap` update mask for a full 32-bit poweroff or reboot register. */
+const SYSCON_REGISTER_MASK = 0xffff_ffff;
 
 /** RISC-V interrupt causes the OpenSBI CLINT/PLIC parsers match. */
 const IRQ_MACHINE_SOFTWARE = 3;
@@ -222,6 +234,44 @@ const plicNode = (window: GuestWindow): FdtNode => {
   };
 };
 
+/** One `syscon-poweroff` or `syscon-reboot` node bound to the syscon phandle. */
+const sysconResetNode = (
+  name: string,
+  compatible: string,
+  offset: number,
+  value: number
+): FdtNode => ({
+  name,
+  properties: [
+    property(PROP_COMPATIBLE, cstring(compatible)),
+    property('regmap', u32(PHANDLE_SYSCON)),
+    property('offset', u32(offset)),
+    property('value', u32(value)),
+    property('mask', u32(SYSCON_REGISTER_MASK)),
+  ],
+  children: [],
+});
+
+/**
+ * `syscon` node at `window`, with poweroff and reboot children.
+ * OpenSBI's early reset drivers match the child compatible strings.
+ */
+const sysconNode = (window: GuestWindow): FdtNode => {
+  const address = bytesToBigInt(window.guestAddress);
+  return {
+    name: `syscon@${unitAddress(address)}`,
+    properties: [
+      property(PROP_COMPATIBLE, cstring('syscon')),
+      property(PROP_REG, reg64(address, window.guestByteLength)),
+      property(PROP_PHANDLE, u32(PHANDLE_SYSCON)),
+    ],
+    children: [
+      sysconResetNode('poweroff', 'syscon-poweroff', SYSCON_POWEROFF_OFFSET, SYSCON_POWEROFF_VALUE),
+      sysconResetNode('reboot', 'syscon-reboot', SYSCON_REBOOT_OFFSET, SYSCON_REBOOT_VALUE),
+    ],
+  };
+};
+
 /**
  * ns16550a node at `window`.
  * `interrupt-parent` is included when `plic` is present.
@@ -261,6 +311,7 @@ const machineNode = (
   const uart = guestRegions.get(UART_REGION_ID);
   const clint = guestRegions.get(CLINT_REGION_ID);
   const plic = guestRegions.get(PLIC_REGION_ID);
+  const syscon = guestRegions.get(SYSCON_REGION_ID);
   const socChildren: FdtNode[] = [];
   if (clint !== undefined) {
     socChildren.push(clintNode(clint));
@@ -270,6 +321,9 @@ const machineNode = (
   }
   if (uart !== undefined) {
     socChildren.push(uartNode(uart, plic));
+  }
+  if (syscon !== undefined) {
+    socChildren.push(sysconNode(syscon));
   }
   const children: FdtNode[] = [
     {

@@ -81,7 +81,10 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **Guest memory map:** caller-supplied bases. The CLI defaults are DRAM at `0x80000000`
   (`--ram-base`; size from `--ram-size`), an 8-byte **16550 UART** window at `0x10000000`
   (`--uart-base`; RBR/THR/IER/IIR/LSR; IER→PLIC source 10), a **CLINT** at `0x02000000`
-  (`--clint-base`; `msip` / `mtimecmp` / `mtime`), and a **PLIC** at `0x0c000000` (`--plic-base`).
+  (`--clint-base`; `msip` / `mtimecmp` / `mtime`), a **PLIC** at `0x0c000000` (`--plic-base`),
+  and an 8-byte **syscon** at `0x00100000` (`--syscon-base`). A 4-byte store of `1` at the
+  syscon base requests poweroff; the same store at base+4 requests reboot. Either request
+  stops the emulator, the same way the TUI Shutdown control does.
   Flat images are copied to the RAM base. The first fetch is `--reset-pc` (default: the RAM base).
   On startup a device tree for this
   map is written into DRAM (top of RAM, or `--dtb-address`; `--no-device-tree` skips it). `a0` is
@@ -126,8 +129,9 @@ npm run dev -- --ram-size 0x8000000 path/to/image.bin
 it is copied into guest DRAM at `--ram-base` (default `0x80000000`). `--reset-pc` defaults to that
 base. `--ram-size`
 is required (decimal or `0x…` hex) and must be large enough for the image. Device bases default to
-UART `0x10000000` (`--uart-base`, 8-byte 16550 window), CLINT `0x02000000` (`--clint-base`), and
-PLIC `0x0c000000` (`--plic-base`). `--timebase-frequency` defaults to 10000000 Hz. The device
+UART `0x10000000` (`--uart-base`, 8-byte 16550 window), CLINT `0x02000000` (`--clint-base`),
+PLIC `0x0c000000` (`--plic-base`), and syscon `0x00100000` (`--syscon-base`, 8-byte poweroff
+and reboot registers). `--timebase-frequency` defaults to 10000000 Hz. The device
 tree is stored at the top of RAM; `--dtb-address` selects another guest address and
 `--no-device-tree` skips it (`a1` stays zero). Addresses and the timebase are decimal or `0x…` hex.
 
