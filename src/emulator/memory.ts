@@ -65,6 +65,7 @@ import {
   releaseScMonitorIfHeld,
   withMonitorLock,
 } from '#emulator/reservation';
+import { loadBytesFromSyscon, storeBytesToSyscon, SYSCON_REGION_ID } from '#emulator/syscon';
 import { loadBytesFromUart, storeBytesToUart, UART_REGION_ID } from '#emulator/uart';
 import type { ReadonlyUint8Array } from '#types';
 import { alignUp } from '#utils/alignment';
@@ -293,6 +294,7 @@ const REGION_LOAD_STORE: ReadonlyMap<string, readonly [RegionLoadBytes, RegionSt
     [UART_REGION_ID, [loadBytesFromUart, storeBytesToUart]],
     [CLINT_REGION_ID, [loadBytesFromClint, storeBytesToClint]],
     [PLIC_REGION_ID, [loadBytesFromPlic, storeBytesToPlic]],
+    [SYSCON_REGION_ID, [loadBytesFromSyscon, storeBytesToSyscon]],
   ]);
 
 /** Atomic ops on non-RAM (or unmapped) regions fail — callers trap. */
@@ -318,6 +320,7 @@ const REGION_ATOMIC_LOAD_STORE: ReadonlyMap<
   [UART_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
   [CLINT_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
   [PLIC_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
+  [SYSCON_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
 ]);
 
 /** Copy `byteLength` bytes from `memory` at guest `address` into `destination` (high bytes cleared). */

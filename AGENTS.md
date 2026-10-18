@@ -42,18 +42,18 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   (`--dtb-address` chooses another guest address; `--no-device-tree` skips it and leaves `a1` zero).
   The CLI
   builds `guestRegions` (region id → `guestAddress` / `guestByteLength`) from those flags,
-  `--ram-size`, and the UART/CLINT/PLIC window lengths.
+  `--ram-size`, and the UART/CLINT/PLIC/syscon window lengths.
 - `src/tui/` — host Ink UI (`create` / `start` / `stop`; `components/`, `hooks/use-mouse-left-click`);
   terminal pane over caller streams.
 - `src/emulator/index.ts` — host-side `create` (requires `guestRegions`: region id →
-  `guestAddress` / `guestByteLength` for DRAM, UART, CLINT, and PLIC). Maps the image into DRAM
+  `guestAddress` / `guestByteLength` for DRAM, UART, CLINT, PLIC, and syscon). Maps the image into DRAM
   at the supplied base. The reset PC is caller-supplied. It encodes a device tree from that map and
   passes its guest address to the hart as `a1` (`a0` is hart 0; `a1` is zero when the caller skips the tree).
   The address is the top of DRAM, or a caller-supplied guest address. Creates CPU + timer +
   terminal handles, returns an awaitable. `start` / `stop` forward to all three; awaiting joins
   all three.
 - `src/fdt.ts` — flattened device tree for the live guest map (OpenSBI `riscv,clint0` /
-  `riscv,plic0` / `ns16550a`). `storeDeviceTreeToRam` copies it into RAM.
+  `riscv,plic0` / `ns16550a` / `syscon` with `syscon-poweroff` and `syscon-reboot`). `storeDeviceTreeToRam` copies it into RAM.
 - `src/emulator/cpu/` — CPU package: host `create` / `start` / `stop`, worker `run.ts`, trap,
   registers, instructions (one file per opcode group).
 - `src/emulator/cpu/decode/` — instruction decode package: `index` multiplexes to `decode-32`
@@ -74,6 +74,10 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   (ticks `mtime` via `#emulator/clint`).
 - `src/emulator/uart/` — UART 16550 package (`index` public API; private `region` / `queues` /
   `registers` / `memory`). Terminal uses RX/TX via `#emulator/uart`.
+- `src/emulator/syscon/` — syscon package (`index` public API; private `region`):
+  8-byte guest window (poweroff at +0, reboot at +4) plus a host request word. A matching store
+  publishes the request; the emulator host watch stops the process. `--syscon-base` defaults to
+  `0x00100000`. The device tree binds `syscon-poweroff` and `syscon-reboot` at that window.
 - `src/emulator/terminal/` — UART↔stream bridge: host `create` / `start` / `stop`, worker
   `run.ts` (async TX pump awaits `waitUartTransmit`; stdin pushes RX).
 - `src/utils/bytes.ts` — architectural byte helpers.

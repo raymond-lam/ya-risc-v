@@ -21,6 +21,12 @@ import { createMemory } from '#emulator/memory';
 import { initializePlic, PLIC_HOST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID, storeImageToRam } from '#emulator/ram';
 import { RESERVATION_HOST_BYTE_LENGTH, RESERVATION_REGION_ID } from '#emulator/reservation';
+import {
+  SYSCON_HOST_BYTE_LENGTH,
+  SYSCON_REGION_ID,
+  cancelSysconWatch,
+  watchSyscon,
+} from '#emulator/syscon';
 import { create as createTerminal, type TerminalHandle } from '#emulator/terminal';
 import { create as createTimer, type TimerHandle } from '#emulator/timer';
 import type { EmulatorCreateOptions, EmulatorHandle, GuestRegionWindow } from '#emulator/types';
@@ -34,6 +40,7 @@ const GUEST_REGION_IDS: readonly string[] = [
   UART_REGION_ID,
   CLINT_REGION_ID,
   PLIC_REGION_ID,
+  SYSCON_REGION_ID,
 ];
 
 const hostByteLength = (id: string, guestByteLength: bigint): bigint => {
@@ -48,6 +55,9 @@ const hostByteLength = (id: string, guestByteLength: bigint): bigint => {
   }
   if (id === PLIC_REGION_ID) {
     return PLIC_HOST_BYTE_LENGTH;
+  }
+  if (id === SYSCON_REGION_ID) {
+    return SYSCON_HOST_BYTE_LENGTH;
   }
   throw new RangeError(`Unknown guest region '${id}'.`);
 };
@@ -75,6 +85,8 @@ class Emulator implements EmulatorHandle {
 
   readonly #done: Promise<void>;
 
+  readonly #memory: ReturnType<typeof createMemory>;
+
   #started = false;
 
   #stopped = false;
@@ -100,7 +112,7 @@ class Emulator implements EmulatorHandle {
       );
     }
 
-    // Pack order: ram → uart → clint → plic → reservation → irqLevel
+    // Pack order: ram → uart → clint → plic → syscon → reservation → irqLevel
     const memory = createMemory([
       ...GUEST_REGION_IDS.map((id) => {
         const region = guestRegion(guestRegions, id);
@@ -131,6 +143,7 @@ class Emulator implements EmulatorHandle {
     }
     initializeClint(memory, timebaseHz);
     initializePlic(memory);
+    this.#memory = memory;
     storeImageToRam(memory, image);
     const cpu = createCpu({
       memory,
@@ -185,6 +198,7 @@ class Emulator implements EmulatorHandle {
       throw error;
     }
     this.#started = true;
+    void this.#watchSyscon();
   };
 
   stop = (): void => {
@@ -193,9 +207,18 @@ class Emulator implements EmulatorHandle {
     }
     // Idempotent: safe before start, after partial-start rollback, and after stop.
     this.#stopped = true;
+    cancelSysconWatch(this.#memory);
     this.#cpu.stop();
     this.#timer.stop();
     this.#terminal.stop();
+  };
+
+  #watchSyscon = async (): Promise<void> => {
+    const request = await watchSyscon(this.#memory);
+    if (this.#stopped || request === 'idle') {
+      return;
+    }
+    this.stop();
   };
 
   then<TResult1 = void, TResult2 = never>(

@@ -30,11 +30,16 @@ import {
 } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { RESERVATION_HOST_BYTE_LENGTH, RESERVATION_REGION_ID } from '#emulator/reservation';
+import {
+  SYSCON_GUEST_BYTE_LENGTH,
+  SYSCON_HOST_BYTE_LENGTH,
+  SYSCON_REGION_ID,
+} from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
-/** Test map: RAM at guest physical address 0; UART/CLINT/PLIC at fixed MMIO bases. */
+/** Test map: RAM at guest physical address 0; UART/CLINT/PLIC/syscon at fixed MMIO bases. */
 const RAM_BASE_ADDRESS = new Uint8Array(8) as ReadonlyUint8Array;
 const UART_BASE_ADDRESS = unsignedBigIntToBytes(
   new Uint8Array(8),
@@ -48,20 +53,26 @@ const PLIC_BASE_ADDRESS = unsignedBigIntToBytes(
   new Uint8Array(8),
   0x0c00_0000n
 ) as ReadonlyUint8Array;
+const SYSCON_BASE_ADDRESS = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  0x0010_0000n
+) as ReadonlyUint8Array;
 
-/** Standard machine region list (pack order: ram → uart → clint → plic → reservation → irqLevel). */
+/** Standard machine region list (pack order: ram → uart → clint → plic → syscon → reservation → irqLevel). */
 const machineRegionSpecs = ({
   ramBaseAddress,
   ramSize,
   uartBaseAddress,
   clintBaseAddress,
   plicBaseAddress,
+  sysconBaseAddress = SYSCON_BASE_ADDRESS,
 }: {
   ramBaseAddress: ReadonlyUint8Array;
   ramSize: bigint;
   uartBaseAddress: ReadonlyUint8Array;
   clintBaseAddress: ReadonlyUint8Array;
   plicBaseAddress: ReadonlyUint8Array;
+  sysconBaseAddress?: ReadonlyUint8Array;
 }): Parameters<typeof createMemory>[0] => {
   if (ramSize < 0n) {
     throw new RangeError('ramSize must be non-negative.');
@@ -92,6 +103,12 @@ const machineRegionSpecs = ({
       guestByteLength: PLIC_GUEST_BYTE_LENGTH,
     },
     {
+      id: SYSCON_REGION_ID,
+      hostByteLength: SYSCON_HOST_BYTE_LENGTH,
+      guestAddress: sysconBaseAddress,
+      guestByteLength: SYSCON_GUEST_BYTE_LENGTH,
+    },
+    {
       id: RESERVATION_REGION_ID,
       hostByteLength: RESERVATION_HOST_BYTE_LENGTH,
       guestAddress: null,
@@ -114,6 +131,7 @@ const createTestMemory = (ramSize: bigint): Memory => {
       uartBaseAddress: UART_BASE_ADDRESS,
       clintBaseAddress: CLINT_BASE_ADDRESS,
       plicBaseAddress: PLIC_BASE_ADDRESS,
+      sysconBaseAddress: SYSCON_BASE_ADDRESS,
     })
   );
   initializeClint(memory, 10_000_000n);

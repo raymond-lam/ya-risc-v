@@ -39,6 +39,7 @@ import {
 } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { RESERVATION_REGION_ID } from '#emulator/reservation';
+import { SYSCON_REGION_ID } from '#emulator/syscon';
 import { popUartTransmit, pushUartReceive, UART_REGION_ID } from '#emulator/uart';
 import { bigIntAsNumber } from '#utils/int';
 import createTestMemory, { machineRegionSpecs } from '#test/guest-memory';
@@ -137,12 +138,14 @@ describe('memory', () => {
     const uart = memory.regions.get(UART_REGION_ID);
     const clint = memory.regions.get(CLINT_REGION_ID);
     const plic = memory.regions.get(PLIC_REGION_ID);
+    const syscon = memory.regions.get(SYSCON_REGION_ID);
     const reservation = memory.regions.get(RESERVATION_REGION_ID);
     const irqLevel = memory.regions.get(IRQ_LEVEL_REGION_ID);
     assert.ok(ram);
     assert.ok(uart);
     assert.ok(clint);
     assert.ok(plic);
+    assert.ok(syscon);
     assert.ok(reservation);
     assert.ok(irqLevel);
     assert.equal(ram.hostIndex, 0n);
@@ -155,16 +158,19 @@ describe('memory', () => {
     assert.ok(clint.hostIndex >= uart.hostIndex + uart.hostByteLength);
     assert.equal(plic.hostIndex % 8n, 0n);
     assert.ok(plic.hostIndex >= clint.hostIndex + clint.hostByteLength);
+    assert.equal(syscon.hostIndex % 8n, 0n);
+    assert.equal(syscon.guestByteLength, 8n);
+    assert.ok(syscon.hostIndex >= plic.hostIndex + plic.hostByteLength);
     assert.equal(reservation.hostIndex % 8n, 0n);
     assert.equal(reservation.guestAddress, null);
-    assert.ok(reservation.hostIndex >= plic.hostIndex + plic.hostByteLength);
+    assert.ok(reservation.hostIndex >= syscon.hostIndex + syscon.hostByteLength);
     assert.equal(irqLevel.hostIndex % 8n, 0n);
     assert.equal(irqLevel.guestAddress, null);
     assert.ok(irqLevel.hostIndex >= reservation.hostIndex + reservation.hostByteLength);
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
     assert.deepEqual(
       memory.regionsByBaseGuestAddress.map(([, id]) => id),
-      [RAM_REGION_ID, CLINT_REGION_ID, PLIC_REGION_ID, UART_REGION_ID]
+      [RAM_REGION_ID, SYSCON_REGION_ID, CLINT_REGION_ID, PLIC_REGION_ID, UART_REGION_ID]
     );
     for (let index = 1; index < memory.regionsByBaseGuestAddress.length; index += 1) {
       const previous = memory.regionsByBaseGuestAddress[index - 1];

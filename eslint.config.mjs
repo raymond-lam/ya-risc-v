@@ -31,6 +31,7 @@ const allPackagePrivatePatterns = [
       '#emulator/cpu/*',
       '#emulator/clint/*',
       '#emulator/plic/*',
+      '#emulator/syscon/*',
       '#emulator/types',
       '#tui/*',
     ],
@@ -57,6 +58,7 @@ const testPackagePrivatePatterns = [
       '#emulator/timer/*',
       '#emulator/clint/*',
       '#emulator/plic/*',
+      '#emulator/syscon/*',
       '#emulator/types',
       '#tui/*',
     ],
@@ -153,6 +155,7 @@ const eslintConfig = [
       'src/emulator/uart/**',
       'src/emulator/clint/**',
       'src/emulator/plic/**',
+      'src/emulator/syscon/**',
       'src/emulator/terminal/**',
       'src/emulator/timer/**',
       'src/emulator/cpu/**',
@@ -284,6 +287,18 @@ const eslintConfig = [
         'error',
         {
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/plic/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/syscon/**/*.ts'],
+    ignores: ['src/emulator/syscon/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/syscon/*')],
         },
       ],
     },
