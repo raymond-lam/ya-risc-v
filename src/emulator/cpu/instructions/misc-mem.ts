@@ -28,4 +28,16 @@ const fence = (
   advanceProgramCounter(registers, instructionByteLength);
 };
 
-export default fence;
+/**
+ * fence.i: instruction-fetch fence (no-op in this emulator).
+ * Fetch reads guest memory on every instruction, and decode is cached by encoding.
+ */
+const fenceI = (
+  registers: Registers,
+  _memory: Memory,
+  instructionByteLength: ReadonlyUint8Array
+): void => {
+  advanceProgramCounter(registers, instructionByteLength);
+};
+
+export { fence, fenceI };
