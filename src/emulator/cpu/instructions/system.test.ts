@@ -17,6 +17,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
+import decode from '#emulator/cpu/decode';
 import {
   csrrc,
   csrrci,
@@ -28,6 +29,7 @@ import {
   ecall,
   mret,
   sret,
+  sfenceVma,
   wfi,
 } from '#emulator/cpu/instructions/system';
 import {
@@ -1431,5 +1433,125 @@ describe('system', () => {
       snapshotControlAndStatusRegister(registers, MINSTRET),
       signedNumberToBytes(new Uint8Array(8), 1, 32)
     );
+  });
+
+  /** Pack a 32-bit instruction encoding as little-endian bytes and execute it. */
+  const runEncoded = (
+    encoding: number,
+    registers: ReturnType<typeof createRegisters>,
+    memory: ReturnType<typeof testMemory>
+  ): void => {
+    const bytes = new Uint8Array(4);
+    bytes[0] = encoding & 0xff;
+    bytes[1] = (encoding >>> 8) & 0xff;
+    bytes[2] = (encoding >>> 16) & 0xff;
+    bytes[3] = (encoding >>> 24) & 0xff;
+    const [execute, instructionByteLength] = decode(bytes);
+    const result = execute(registers, memory, instructionByteLength);
+    if (result !== undefined) {
+      throw new Error('sfence.vma is synchronous');
+    }
+  };
+
+  it('decodes sfence.vma and advances pc', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    // sfence.vma x0, x0
+    runEncoded(0x12000073, registers, memory);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+    // sfence.vma x1, x2
+    runEncoded(0x12208073, registers, memory);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
+  });
+
+  it('sfence.vma with rd set raises illegal-instruction', () => {
+    const registers = createRegisters();
+    const instructionWord = 0x120000f3;
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    runEncoded(instructionWord, registers, testMemory(256n));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+  });
+
+  it('sfence.vma in U-mode raises illegal-instruction', () => {
+    const registers = createRegisters();
+    const instructionWord = 0x12000073;
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    sfenceVma(registers, testMemory(256n), { instructionWord }, FOUR_BYTES);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+  });
+
+  it('sfence.vma in S-mode advances pc', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    sfenceVma(registers, testMemory(256n), { instructionWord: 0x12000073 }, FOUR_BYTES);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
+  });
+
+  it('sfence.vma in S-mode with mstatus.TVM set raises illegal-instruction', () => {
+    const registers = createRegisters();
+    const instructionWord = 0x12208073;
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x10_0000, 32)
+    );
+    sfenceVma(registers, testMemory(256n), { instructionWord }, FOUR_BYTES);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+  });
+
+  it('sfence.vma in M-mode with mstatus.TVM set still advances pc', () => {
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x10_0000, 32)
+    );
+    sfenceVma(registers, testMemory(256n), { instructionWord: 0x12000073 }, FOUR_BYTES);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 });

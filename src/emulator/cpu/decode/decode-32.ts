@@ -74,6 +74,7 @@ import {
   ebreak,
   mret,
   sret,
+  sfenceVma,
   wfi,
   csrrw,
   csrrs,
@@ -103,7 +104,7 @@ const OPCODE_OP_32 = 0x3b; // 32-bit register–register ops (RV64): addw/subw/s
 const OPCODE_BRANCH = 0x63; // conditional branches: beq/bne/blt/bge/bltu/bgeu
 const OPCODE_JALR = 0x67; // jump and link register
 const OPCODE_JAL = 0x6f; // jump and link
-const OPCODE_SYSTEM = 0x73; // system: ecall/ebreak/mret/sret/wfi/csrrw/csrrs/csrrc/csrrwi/csrrsi/csrrci
+const OPCODE_SYSTEM = 0x73; // system: ecall/ebreak/mret/sret/wfi/sfence.vma/csrrw/csrrs/csrrc/csrrwi/csrrsi/csrrci
 
 const FUNCT3_ADD_SUB = 0x0; // addition (OP also uses funct7 for subtraction)
 const FUNCT3_SLL = 0x1; // shift left logical
@@ -165,6 +166,7 @@ const FUNCT12_EBREAK = 0x001;
 const FUNCT12_SRET = 0x102;
 const FUNCT12_WFI = 0x105;
 const FUNCT12_MRET = 0x302;
+const FUNCT7_SFENCE_VMA = 0x09; // sfence.vma; rs2 sits in imm[4:0], so funct12 is not fixed
 
 const FUNCT7_NORMAL = 0x00; // default funct7: add/sll/srl/…
 const FUNCT7_MUL_DIV = 0x01; // M extension: mul/div/rem (and *w forms on OP-32)
@@ -1070,6 +1072,19 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
       const controlAndStatusRegister = encodedInstructionWord >>> 20;
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_SYSTEM:
+          if (function7Of(encodedInstructionWord) === FUNCT7_SFENCE_VMA) {
+            if (destinationRegister !== 0) {
+              return (registers, _memory, _instructionByteLength) =>
+                illegalInstruction(registers, encodedInstructionWord);
+            }
+            return (registers, memory, instructionByteLength) =>
+              sfenceVma(
+                registers,
+                memory,
+                { instructionWord: encodedInstructionWord },
+                instructionByteLength
+              );
+          }
           switch (controlAndStatusRegister) {
             case FUNCT12_ECALL:
               if (destinationRegister !== 0 || sourceRegister1 !== 0) {

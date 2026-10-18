@@ -43,7 +43,8 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   `mcountinhibit` to CY/IR. `time` mirrors CLINT `mtime`; `cycle`/`instret` alias
   `mcycle`/`minstret` and count retires at CPI=1 (traps cancel retire except `ecall`/`ebreak`).
   S/U reads need the matching enable bits (U needs both). `satp` is stored (OpenSBI clears it);
-  Sv39 walks are not implemented yet. With `mstatus.TVM` set, S-mode `satp` access is illegal.
+  Sv39 walks are not implemented yet. With `mstatus.TVM` set, S-mode `satp` access and
+  `sfence.vma` are illegal.
   PMP is 16 entries (4-byte grain, no `mseccfg`). `pmpaddr` keeps address bits 55:2. The lowest
   entry that overlaps an access must cover all of it. Fetch, load, store, and AMO fault when that
   rule denies them; S/U fault when no rule matches.
@@ -71,6 +72,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   contexts (sources 1–31). UART is source 10. Pending bits are device-driven; claim/complete gate
   re-presentation. Context output wires feed `mip.MEIP` / `mip.SEIP`.
 - `fence` and `fence.i`, decoded and executed as no-ops, which is architecturally legal for this emulator. Fetch reads guest memory on every instruction.
+  `sfence.vma` is also a no-op: page walks are not cached. It is illegal in U-mode, and in S-mode when `mstatus.TVM` is set.
 - Integer registers x0–x31, the program counter, and a dense 4096-entry CSR file backing the
   implemented set, with x0 and the identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`)
   hardwired read-only.

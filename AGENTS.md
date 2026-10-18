@@ -147,8 +147,8 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   IRQ levels; `Atomics.waitAsync` until the level word changes) until
   `mip ∧ mie` is nonzero (wake ignores global
   `mstatus.MIE`/`SIE`). With `mstatus.TW` set, `wfi` below M raises illegal-instruction
-  immediately (limit = 0). With `mstatus.TVM` set, S-mode access to `satp` raises
-  illegal-instruction (M still allowed).
+  immediately (limit = 0). With `mstatus.TVM` set, S-mode access to `satp` and
+  S-mode `sfence.vma` raise illegal-instruction (M still allowed).
   `mip.MSIP`/`MTIP` (CLINT) and `mip.MEIP`/`SEIP` (PLIC) are not CSR-writable; other pending
   bits remain software-writable until more devices exist.
 - **Zicsr checks CSR existence and privilege.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live
@@ -166,7 +166,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `mcycle`/`minstret` and advance together on retire (CPI=1) unless `mcountinhibit` freezes CY/IR;
   traps cancel retire except `ecall`/`ebreak`. `mcounteren`/`scounteren` WARL to CY/TM/IR and gate
   S/U (U needs both). `satp` is stored but does not enable paging yet; with `mstatus.TVM` set,
-  S-mode `satp` access is illegal. They snapshot the CSR slot before writing `rd` (the file is live).
+  S-mode `satp` access and S-mode `sfence.vma` are illegal. They snapshot the CSR slot before writing `rd` (the file is live).
   PMP is 16 entries at 4-byte grain (NA4 legal). `pmpcfg` is WARL (locked bytes stick; W without R
   is dropped). `pmpaddr` keeps address bits 55:2. A locked TOR entry also freezes the previous
   `pmpaddr`. Fetch, load, store, and AMO use the lowest entry that overlaps the access; that entry
