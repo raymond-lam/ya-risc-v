@@ -68,7 +68,7 @@ import { mul, mulh, mulhsu, mulhu, div, divu, rem, remu } from '#emulator/cpu/in
 import { addiw, slliw, srliw, sraiw } from '#emulator/cpu/instructions/op-imm-32';
 import { addw, subw, sllw, srlw, sraw } from '#emulator/cpu/instructions/op-32';
 import { mulw, divw, divuw, remw, remuw } from '#emulator/cpu/instructions/op-32-m';
-import fence from '#emulator/cpu/instructions/misc-mem';
+import { fence, fenceI } from '#emulator/cpu/instructions/misc-mem';
 import {
   ecall,
   ebreak,
@@ -91,7 +91,7 @@ type ExecuteThunk = (
 ) => void | Promise<void>;
 
 const OPCODE_LOAD = 0x03; // loads: lb/lh/lw/ld/lbu/lhu/lwu
-const OPCODE_MISC_MEM = 0x0f; // fence (memory ordering)
+const OPCODE_MISC_MEM = 0x0f; // fence, fence.i
 const OPCODE_OP_IMM = 0x13; // integer ops with immediate: addi/slti/…/andi/slli/srli/srai
 const OPCODE_AUIPC = 0x17; // add upper immediate to pc
 const OPCODE_OP_IMM_32 = 0x1b; // 32-bit integer ops with immediate (RV64): addiw/slliw/srliw/sraiw
@@ -150,6 +150,7 @@ const FUNCT5_AMOMINU = 0x18; // atomic unsigned min
 const FUNCT5_AMOMAXU = 0x1c; // atomic unsigned max
 
 const FUNCT3_FENCE = 0x0; // fence under MISC-MEM
+const FUNCT3_FENCE_I = 0x1; // fence.i under MISC-MEM
 const FUNCT3_SYSTEM = 0x0; // ecall/ebreak/mret/sret under SYSTEM (distinguished by imm)
 const FUNCT3_CSRRW = 0x1; // atomic CSR read/write
 const FUNCT3_CSRRS = 0x2; // atomic CSR read and set
@@ -1050,9 +1051,14 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
     }
 
     case OPCODE_MISC_MEM: {
-      if (function3Of(encodedInstructionWord) === FUNCT3_FENCE) {
+      const function3 = function3Of(encodedInstructionWord);
+      if (function3 === FUNCT3_FENCE) {
         return (registers, memory, instructionByteLength) =>
           fence(registers, memory, instructionByteLength);
+      }
+      if (function3 === FUNCT3_FENCE_I) {
+        return (registers, memory, instructionByteLength) =>
+          fenceI(registers, memory, instructionByteLength);
       }
       return (registers, _memory, _instructionByteLength) =>
         illegalInstruction(registers, encodedInstructionWord);

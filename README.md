@@ -66,7 +66,7 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **PLIC:** MMIO at `--plic-base` (default `0x0c000000`) — priority / pending / enable / threshold / claim for M and S
   contexts (sources 1–31). UART is source 10. Pending bits are device-driven; claim/complete gate
   re-presentation. Context output wires feed `mip.MEIP` / `mip.SEIP`.
-- `fence`, decoded and executed as a no-op, which is architecturally legal for this emulator.
+- `fence` and `fence.i`, decoded and executed as no-ops, which is architecturally legal for this emulator. Fetch reads guest memory on every instruction.
 - Integer registers x0–x31, the program counter, and a dense 4096-entry CSR file backing the
   implemented set, with x0 and the identity CSRs (`mvendorid`, `marchid`, `mimpid`, `mhartid`)
   hardwired read-only.
