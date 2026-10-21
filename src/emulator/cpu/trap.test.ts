@@ -16,6 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#test/guest-memory';
+import { isClintSupervisorTimerPending } from '#emulator/clint';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ILLEGAL_INSTRUCTION,
@@ -53,14 +55,19 @@ import {
   setMachineTimerInterruptPending,
   setPrivilegeMode,
   setProgramCounter,
+  setSupervisorTimerInterruptPending,
+  publishSupervisorTimerCompare,
   writeControlAndStatusRegister,
 } from '#emulator/cpu/registers';
+import { storeBytes } from '#emulator/memory';
 import {
+  bytesToBigInt,
   bytesToNumber,
   signedNumberToBytes,
   unsignedBigIntToBytes,
   unsignedNumberToBytes,
 } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#types';
 
 /** mcause code for instruction-address misaligned (matches trap.ts). */
 const CAUSE_INSTRUCTION_ADDRESS_MISALIGNED = 0;
@@ -78,6 +85,39 @@ const interruptCauseBytes = (code: number): Uint8Array =>
 /** mstatus low fields with hardwired UXL/SXL=64 (byte4 = 0x0a). */
 const mstatusBytes = (low32: number): Uint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), BigInt(low32 >>> 0) | (0xan << 32n));
+
+/** Sstc CSR addresses (not part of the registers public surface). */
+const MENVCFG = 0x30a;
+const STIMECMP = 0x14d;
+/** menvcfg.STCE (bit 63). */
+const MENVCFG_STCE = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
+/** CLINT `mtime` guest address (test map). */
+const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as ReadonlyUint8Array;
+
+/**
+ * Make mip.STIP pending through Sstc: menvcfg.STCE set, `stimecmp` at the seeded `mtime`, the
+ * compare published into the CLINT mirror, then the mirror's STIP wire sampled into `mip`.
+ * STIP is read-only in that mode, so it cannot be poked through a CSR write.
+ */
+const armSupervisorTimerCompare = (
+  registers: ReturnType<typeof createRegisters>,
+  memory: ReturnType<typeof testMemory>
+): void => {
+  writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+  storeBytes({
+    memory,
+    address: CLINT_MTIME,
+    source: unsignedBigIntToBytes(new Uint8Array(8), 100n),
+    byteLength: 8,
+  });
+  writeControlAndStatusRegister(
+    registers,
+    STIMECMP,
+    unsignedBigIntToBytes(new Uint8Array(8), 100n)
+  );
+  publishSupervisorTimerCompare(registers, memory);
+  setSupervisorTimerInterruptPending(registers, isClintSupervisorTimerPending(memory));
+};
 
 describe('trap', () => {
   it('enterTrap saves mepc/mcause/mtval, updates mstatus, and jumps to mtvec', () => {
@@ -807,5 +847,85 @@ describe('trap', () => {
     enterTrap(registers, CAUSE_BREAKPOINT);
 
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
+  });
+
+  it('mideleg still gates STIP delivery when menvcfg.STCE is set', () => {
+    // Delegated: mideleg[5] sends the Sstc interrupt to the S handler.
+    const delegated = createRegisters();
+    const delegatedMemory = testMemory(256n);
+    armSupervisorTimerCompare(delegated, delegatedMemory);
+    writeControlAndStatusRegister(
+      delegated,
+      MIDELEG,
+      signedNumberToBytes(new Uint8Array(8), 1 << CAUSE_SUPERVISOR_TIMER_INTERRUPT, 32)
+    );
+    writeControlAndStatusRegister(
+      delegated,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), 1 << CAUSE_SUPERVISOR_TIMER_INTERRUPT, 32)
+    );
+    writeControlAndStatusRegister(
+      delegated,
+      STVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x6000, 32)
+    );
+    // mstatus.SIE
+    writeControlAndStatusRegister(
+      delegated,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x02, 32)
+    );
+    setPrivilegeMode(delegated, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(delegated, signedNumberToBytes(new Uint8Array(8), 0x90, 32));
+
+    assert.equal(takeInterruptIfAny(delegated), true);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(delegated, SEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x90, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(delegated, SCAUSE),
+      interruptCauseBytes(CAUSE_SUPERVISOR_TIMER_INTERRUPT)
+    );
+    assert.deepEqual(readPrivilegeMode(delegated), PRIVILEGE_SUPERVISOR);
+    assert.equal(bytesToNumber(readProgramCounter(delegated)), 0x6000);
+
+    // Undelegated: the same pending STIP never reaches S — it is an M-level interrupt and
+    // traps to M (guarding against an undocumented "Sstc is always delivered in S" rule).
+    const undelegated = createRegisters();
+    const undelegatedMemory = testMemory(256n);
+    armSupervisorTimerCompare(undelegated, undelegatedMemory);
+    writeControlAndStatusRegister(
+      undelegated,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), 1 << CAUSE_SUPERVISOR_TIMER_INTERRUPT, 32)
+    );
+    writeControlAndStatusRegister(
+      undelegated,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x4000, 32)
+    );
+    writeControlAndStatusRegister(
+      undelegated,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), 0x02, 32)
+    );
+    setPrivilegeMode(undelegated, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(undelegated, signedNumberToBytes(new Uint8Array(8), 0x90, 32));
+
+    assert.equal(takeInterruptIfAny(undelegated), true);
+    assert.deepEqual(readPrivilegeMode(undelegated), PRIVILEGE_MACHINE);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(undelegated, MCAUSE),
+      interruptCauseBytes(CAUSE_SUPERVISOR_TIMER_INTERRUPT)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(undelegated, MEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x90, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(undelegated)), 0x4000);
+    // No S-level state was written.
+    assert.equal(bytesToBigInt(snapshotControlAndStatusRegister(undelegated, SCAUSE)), 0n);
+    assert.equal(bytesToNumber(snapshotControlAndStatusRegister(undelegated, SEPC)), 0);
   });
 });

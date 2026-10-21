@@ -23,7 +23,7 @@ import {
   pmpAddressWriteIgnored,
 } from '#emulator/cpu/pmp';
 import type { Registers } from '#emulator/cpu/types';
-import { readClintMtimeBytes } from '#emulator/clint';
+import { readClintMtimeBytes, setClintStimecmpMirror } from '#emulator/clint';
 import type { Memory } from '#emulator/memory';
 import {
   addBytes,
@@ -71,6 +71,7 @@ const SEPC = 0x141; // PC saved on trap to S
 const SCAUSE = 0x142; // exception/interrupt code for S traps
 const STVAL = 0x143; // faulting address/instruction for S traps
 const SIP = 0x144; // S-visible interrupt pending (masked view of mip)
+const STIMECMP = 0x14d; // supervisor timer compare (Sstc; below M needs menvcfg.STCE)
 const SATP = 0x180; // address translation / protection (stub until Sv39)
 
 /** Machine-mode CSRs used by trap entry, `mret`, and delegation. */
@@ -87,6 +88,7 @@ const MEPC = 0x341; // PC saved on trap to M
 const MCAUSE = 0x342; // exception/interrupt code for M traps
 const MTVAL = 0x343; // faulting address/instruction for M traps
 const MIP = 0x344; // machine interrupt-pending bits
+const MENVCFG = 0x30a; // machine environment config (STCE / ADUE)
 /** Machine counters (canonical storage; `cycle` / `instret` alias these). */
 const MCYCLE = 0xb00;
 const MINSTRET = 0xb02;
@@ -152,6 +154,61 @@ const MIP_HARDWARE_MASK_BYTES = Uint8Array.of(0x88, 0x08, 0, 0, 0, 0, 0, 0) as R
 const SIP_WRITABLE_MASK_BYTES = Uint8Array.of(0x22, 0, 0, 0, 0, 0, 0, 0) as ReadonlyUint8Array;
 
 /**
+ * `stimecmp` value published while `menvcfg.STCE` is clear (matching the CSR's all-ones reset):
+ * S/U cannot reach the compare and STIP is software-owned, so the CLINT mirror must report
+ * "never expires".
+ */
+const STIMECMP_DISABLED_BYTES = new Uint8Array(8).fill(0xff) as ReadonlyUint8Array;
+
+/** menvcfg.STCE — Sstc timer compare enable (bit 63 → byte7 bit 7). */
+const MENVCFG_BYTE7_STCE = 0x80;
+
+/**
+ * WARL: STCE (63) is the only writable bit. ADUE (61) stays read-only zero until Svadu lands,
+ * and FIOM/CBIE/CBCFE/CBZE/PBMTE read as zero (no state modelled).
+ */
+const MENVCFG_WRITABLE_MASK_BYTES = Uint8Array.of(0, 0, 0, 0, 0, 0, 0, 0x80) as ReadonlyUint8Array;
+
+/** mip writable bits with STIP hardware-owned (menvcfg.STCE=1): SSIP + SEIP only. */
+const MIP_WRITABLE_MASK_BYTES_WITHOUT_STIP = Uint8Array.of(
+  0x02,
+  0x02,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0
+) as ReadonlyUint8Array;
+
+/**
+ * mip bits driven by devices/spec while menvcfg.STCE=1: MSIP (3) + STIP (5) + MTIP (7) + MEIP (11)
+ * → 0xa8, 0x08. STIP joins the hardware side because `stimecmp` owns it.
+ */
+const MIP_HARDWARE_MASK_BYTES_WITH_STIP = Uint8Array.of(
+  0xa8,
+  0x08,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0
+) as ReadonlyUint8Array;
+
+/** sip writable bits with STIP hardware-owned (menvcfg.STCE=1): SSIP only. */
+const SIP_WRITABLE_MASK_BYTES_WITHOUT_STIP = Uint8Array.of(
+  0x02,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0
+) as ReadonlyUint8Array;
+
+/**
  * mcounteren / scounteren WARL: CY (bit 0), TM (bit 1), IR (bit 2). HPM bits stay
  * read-only zero until those counters exist.
  */
@@ -175,6 +232,9 @@ const MIP_BYTE0_MTIP = 0x80;
 
 /** mip.MSIP — machine software interrupt pending (byte0 bit 3). */
 const MIP_BYTE0_MSIP = 0x08;
+
+/** mip.STIP — supervisor timer interrupt pending (byte0 bit 5). */
+const MIP_BYTE0_STIP = 0x20;
 
 /** mip.MEIP — machine external interrupt pending (byte1 bit 3). */
 const MIP_BYTE1_MEIP = 0x08;
@@ -245,6 +305,7 @@ const isImplementedControlAndStatusRegister = (index: number): boolean =>
   index === SCAUSE ||
   index === STVAL ||
   index === SIP ||
+  index === STIMECMP ||
   index === SATP ||
   index === MSTATUS ||
   index === MISA ||
@@ -259,6 +320,7 @@ const isImplementedControlAndStatusRegister = (index: number): boolean =>
   index === MCAUSE ||
   index === MTVAL ||
   index === MIP ||
+  index === MENVCFG ||
   index === MCYCLE ||
   index === MINSTRET ||
   isIdentityControlAndStatusRegister(index) ||
@@ -307,6 +369,14 @@ const isCounterAccessEnabled = (registers: Registers, index: number): boolean =>
   return true;
 };
 
+/**
+ * menvcfg.STCE: S/U may reach `stimecmp` and `mip.STIP` / `sip.STIP` are hardware-driven.
+ * When clear, `stimecmp` is an M-mode-only slot and STIP stays software-writable
+ * (SBI-style timer delivery).
+ */
+const isSupervisorTimerCompareEnabled = (registers: Registers): boolean =>
+  (registers.controlAndStatus[MENVCFG]![7]! & MENVCFG_BYTE7_STCE) !== 0;
+
 /** `mstatus.TVM` blocks S-mode `satp` access. */
 const isSatpBlockedByTvm = (registers: Registers, index: number): boolean =>
   index === SATP &&
@@ -318,6 +388,7 @@ const isSatpBlockedByTvm = (registers: Registers, index: number): boolean =>
  * privilege are illegal on any access; read-only CSRs are illegal only when writing.
  * With `mstatus.TVM` set, S-mode access to `satp` is also illegal.
  * `cycle`/`time` below M need `mcounteren`; U-mode also needs `scounteren`.
+ * `stimecmp` (Sstc) is always legal in M; below M it needs `menvcfg.STCE` and `mcounteren.TM`.
  */
 const isControlAndStatusRegisterAccessAllowed = (
   registers: Registers,
@@ -334,6 +405,19 @@ const isControlAndStatusRegisterAccessAllowed = (
     ) < 0
   ) {
     return false;
+  }
+  if (index === STIMECMP) {
+    // Sstc gates `stimecmp` below M only: with STCE clear, an access in a mode other than M
+    // raises illegal-instruction, while M-mode access stays legal and the slot keeps its value
+    // (STIP simply stays software-owned until STCE is set). Below M the compare is also a
+    // counter-like register, gated by mcounteren.TM (U additionally by scounteren.TM).
+    const belowM = compareUnsignedBytes(registers.privilegeMode, PRIVILEGE_MACHINE) < 0;
+    if (
+      belowM &&
+      (!isSupervisorTimerCompareEnabled(registers) || !isCounterAccessEnabled(registers, TIME))
+    ) {
+      return false;
+    }
   }
   if (writes && isReadOnlyControlAndStatusRegister(index)) {
     return false;
@@ -416,6 +500,9 @@ const createRegisters = (): Registers => {
   // Hardwire mstatus.UXL/SXL to 64 and misa (RV64IMAC + S/U) on reset.
   controlAndStatus[MSTATUS]![4] = MSTATUS_BYTE4_UXL_SXL_64;
   copyBytes(controlAndStatus[MISA]!, MISA_HARDWIRED_BYTES);
+  // stimecmp resets all-ones (mirrors CLINT mtimecmp): `time >= 0` would otherwise assert
+  // mip.STIP from reset, before the guest programs the compare.
+  copyBytes(controlAndStatus[STIMECMP]!, STIMECMP_DISABLED_BYTES);
 
   return {
     generalPurpose: generalPurpose as unknown as Registers['generalPurpose'],
@@ -424,6 +511,7 @@ const createRegisters = (): Registers => {
     privilegeMode: copyBytes(new Uint8Array(8), PRIVILEGE_MACHINE),
     plicSupervisorExternalPending: false,
     retireInstruction: false,
+    publishedSupervisorTimerCompare: copyBytes(new Uint8Array(8), STIMECMP_DISABLED_BYTES),
   };
 };
 
@@ -547,6 +635,27 @@ const snapshotControlAndStatusRegister = (
 ): Uint8Array =>
   copyBytes(new Uint8Array(8), readControlAndStatusRegister(registers, index, memory));
 
+/**
+ * mip CSR-writable mask. While menvcfg.STCE is set, `stimecmp` owns STIP, so a CSR write
+ * cannot touch it; with STCE clear STIP stays software-writable (SBI-style timer delivery).
+ */
+const mipWritableMaskBytes = (registers: Registers): ReadonlyUint8Array =>
+  isSupervisorTimerCompareEnabled(registers)
+    ? MIP_WRITABLE_MASK_BYTES_WITHOUT_STIP
+    : MIP_WRITABLE_MASK_BYTES;
+
+/** mip bits preserved across CSR writes; STIP joins them while menvcfg.STCE is set. */
+const mipHardwareMaskBytes = (registers: Registers): ReadonlyUint8Array =>
+  isSupervisorTimerCompareEnabled(registers)
+    ? MIP_HARDWARE_MASK_BYTES_WITH_STIP
+    : MIP_HARDWARE_MASK_BYTES;
+
+/** sip CSR-writable mask (SSIP, plus STIP while it is software-owned). */
+const sipWritableMaskBytes = (registers: Registers): ReadonlyUint8Array =>
+  isSupervisorTimerCompareEnabled(registers)
+    ? SIP_WRITABLE_MASK_BYTES_WITHOUT_STIP
+    : SIP_WRITABLE_MASK_BYTES;
+
 const writeControlAndStatusRegister = (
   registers: Registers,
   index: number,
@@ -587,11 +696,11 @@ const writeControlAndStatusRegister = (
       const keep = orBytes(
         new Uint8Array(8),
         andBytes(new Uint8Array(8), mip, MIE_MIP_KEEP_OUTSIDE_SIE_SIP),
-        andBytes(new Uint8Array(8), mip, MIP_HARDWARE_MASK_BYTES)
+        andBytes(new Uint8Array(8), mip, mipHardwareMaskBytes(registers))
       );
       // Also preserve soft SEIP (writable only via mip, not sip).
       keep[1]! |= mip[1]! & MIP_BYTE1_SEIP;
-      const incoming = andBytes(new Uint8Array(8), value, SIP_WRITABLE_MASK_BYTES);
+      const incoming = andBytes(new Uint8Array(8), value, sipWritableMaskBytes(registers));
       return copyBytes(
         registers.controlAndStatus[MIP]!,
         orBytes(new Uint8Array(8), keep, incoming)
@@ -612,14 +721,30 @@ const writeControlAndStatusRegister = (
         andBytes(new Uint8Array(8), value, MIE_MASK_BYTES)
       );
     case MIP: {
-      // Soft SEIP is writable; preserve device-driven MSIP/MTIP/MEIP. PLIC SEIP is not in the slot.
+      // Soft SEIP is writable; preserve device-driven MSIP/MTIP/MEIP, plus STIP while the
+      // stimecmp compare owns it (menvcfg.STCE=1). PLIC SEIP is not in the slot.
       const previous = registers.controlAndStatus[MIP]!;
-      const writable = andBytes(new Uint8Array(8), value, MIP_WRITABLE_MASK_BYTES);
-      const hardware = andBytes(new Uint8Array(8), previous, MIP_HARDWARE_MASK_BYTES);
+      const writable = andBytes(new Uint8Array(8), value, mipWritableMaskBytes(registers));
+      const hardware = andBytes(new Uint8Array(8), previous, mipHardwareMaskBytes(registers));
       return copyBytes(
         registers.controlAndStatus[MIP]!,
         orBytes(new Uint8Array(8), writable, hardware)
       );
+    }
+    case MENVCFG: {
+      // WARL: only STCE has modelled state; ADUE is read-only zero (no Svadu).
+      const hadStce = isSupervisorTimerCompareEnabled(registers);
+      const next = copyBytes(
+        registers.controlAndStatus[MENVCFG]!,
+        andBytes(new Uint8Array(8), value, MENVCFG_WRITABLE_MASK_BYTES)
+      );
+      // Turning STCE off hands STIP back to software: drop the hardware-owned bit so a stale
+      // compare result cannot resurface as a software-written pending bit. Turning it on needs
+      // no clearing — the per-instruction sampler recomputes before the next fetch.
+      if (hadStce && !isSupervisorTimerCompareEnabled(registers)) {
+        registers.controlAndStatus[MIP]![0]! &= ~MIP_BYTE0_STIP;
+      }
+      return next;
     }
     case MIDELEG:
       return copyBytes(
@@ -703,6 +828,41 @@ const setMachineTimerInterruptPending = (registers: Registers, pending: boolean)
   }
 };
 
+/**
+ * Publish the hart's Sstc compare into the CLINT mirror. `stimecmp` lives in this hart's CSR file
+ * and the CLINT timebase worker only sees the shared slab, so the hart pushes the value on every
+ * sample pass; while `menvcfg.STCE` is clear it publishes all-ones so the wire drops. The last
+ * published bytes are cached on the hart, so the steady-state sample pass is one 8-byte compare
+ * and never crosses into the CLINT slab.
+ */
+const publishSupervisorTimerCompare = (registers: Registers, memory: Memory): void => {
+  const desired = isSupervisorTimerCompareEnabled(registers)
+    ? registers.controlAndStatus[STIMECMP]!
+    : STIMECMP_DISABLED_BYTES;
+  if (compareUnsignedBytes(registers.publishedSupervisorTimerCompare, desired) === 0) {
+    return;
+  }
+  copyBytes(registers.publishedSupervisorTimerCompare, desired);
+  setClintStimecmpMirror(memory, desired);
+};
+
+/**
+ * Set or clear mip.STIP from the CLINT supervisor timer wire (not a guest CSR write).
+ * A no-op while `menvcfg.STCE` is clear: the extension is disabled, so STIP reverts to
+ * software ownership (M-mode may still read and write the `stimecmp` slot).
+ */
+const setSupervisorTimerInterruptPending = (registers: Registers, pending: boolean): void => {
+  if (!isSupervisorTimerCompareEnabled(registers)) {
+    return;
+  }
+  const mip = registers.controlAndStatus[MIP]!;
+  if (pending) {
+    mip[0]! |= MIP_BYTE0_STIP;
+  } else {
+    mip[0]! &= ~MIP_BYTE0_STIP;
+  }
+};
+
 /** Set or clear mip.MSIP from the CLINT msip register (not a guest CSR write). */
 const setMachineSoftwareInterruptPending = (registers: Registers, pending: boolean): void => {
   const mip = registers.controlAndStatus[MIP]!;
@@ -768,7 +928,9 @@ export {
   isControlAndStatusRegisterAccessAllowed,
   privilegeModeFromMppBits,
   mppBitsFromPrivilegeMode,
+  publishSupervisorTimerCompare,
   setMachineTimerInterruptPending,
+  setSupervisorTimerInterruptPending,
   setMachineSoftwareInterruptPending,
   setMachineExternalInterruptPending,
   setSupervisorExternalInterruptPending,

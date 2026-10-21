@@ -15,15 +15,17 @@
  */
 
 /**
- * CLINT IRQ wires — level-sensitive timer / software pending bits in the host slab.
+ * CLINT IRQ wires — level-sensitive machine timer / machine software / supervisor timer pending
+ * bits in the host slab.
  */
 
 import {
-  CLINT_HOST_SOFTWARE_WIRE_OFFSET,
-  CLINT_HOST_TIMER_WIRE_OFFSET,
+  CLINT_HOST_MACHINE_TIMER_WIRE_OFFSET,
+  CLINT_HOST_MACHINE_SOFTWARE_WIRE_OFFSET,
+  CLINT_HOST_SUPERVISOR_TIMER_WIRE_OFFSET,
   clintByteIndex,
 } from '#emulator/clint/layout';
-import { setIrqWire, IRQ_LEVEL_MSIP, IRQ_LEVEL_MTIP } from '#emulator/irq-level';
+import { setIrqWire, IRQ_LEVEL_MSIP, IRQ_LEVEL_MTIP, IRQ_LEVEL_STIP } from '#emulator/irq-level';
 import type { Memory } from '#emulator/memory';
 
 /** Drive a level-sensitive CLINT IRQ wire (1 = pending) and publish into the irq-level word. */
@@ -36,27 +38,38 @@ const setClintIrqWire = (
   setIrqWire(memory, clintByteIndex(memory, wireOffset), pending, levelBit);
 };
 
-/** Drive the level-sensitive CLINT timer IRQ wire (1 = pending). */
-const setClintTimerWire = (memory: Memory, pending: boolean): void => {
-  setClintIrqWire(memory, CLINT_HOST_TIMER_WIRE_OFFSET, pending, IRQ_LEVEL_MTIP);
+/** Drive the level-sensitive CLINT machine timer IRQ wire (1 = pending). */
+const setClintMachineTimerWire = (memory: Memory, pending: boolean): void => {
+  setClintIrqWire(memory, CLINT_HOST_MACHINE_TIMER_WIRE_OFFSET, pending, IRQ_LEVEL_MTIP);
 };
 
-/** Level of the CLINT timer interrupt wire (sampled by the hart into `mip.MTIP`). */
+/** Level of the CLINT machine timer wire (sampled by the hart into `mip.MTIP`). */
 const isClintMachineTimerPending = (memory: Memory): boolean =>
-  Atomics.load(memory.bytes, clintByteIndex(memory, CLINT_HOST_TIMER_WIRE_OFFSET)) !== 0;
+  Atomics.load(memory.bytes, clintByteIndex(memory, CLINT_HOST_MACHINE_TIMER_WIRE_OFFSET)) !== 0;
 
-/** Drive the level-sensitive CLINT software IRQ wire (1 = pending). */
-const setClintSoftwareWire = (memory: Memory, pending: boolean): void => {
-  setClintIrqWire(memory, CLINT_HOST_SOFTWARE_WIRE_OFFSET, pending, IRQ_LEVEL_MSIP);
+/** Drive the level-sensitive CLINT supervisor timer IRQ wire (1 = pending). */
+const setClintSupervisorTimerWire = (memory: Memory, pending: boolean): void => {
+  setClintIrqWire(memory, CLINT_HOST_SUPERVISOR_TIMER_WIRE_OFFSET, pending, IRQ_LEVEL_STIP);
 };
 
-/** Level of the CLINT software interrupt wire (sampled by the hart into `mip.MSIP`). */
+/** Level of the CLINT supervisor timer wire (sampled by the hart into `mip.STIP`). */
+const isClintSupervisorTimerPending = (memory: Memory): boolean =>
+  Atomics.load(memory.bytes, clintByteIndex(memory, CLINT_HOST_SUPERVISOR_TIMER_WIRE_OFFSET)) !== 0;
+
+/** Drive the level-sensitive CLINT machine software IRQ wire (1 = pending). */
+const setClintMachineSoftwareWire = (memory: Memory, pending: boolean): void => {
+  setClintIrqWire(memory, CLINT_HOST_MACHINE_SOFTWARE_WIRE_OFFSET, pending, IRQ_LEVEL_MSIP);
+};
+
+/** Level of the CLINT machine software wire (sampled by the hart into `mip.MSIP`). */
 const isClintMachineSoftwarePending = (memory: Memory): boolean =>
-  Atomics.load(memory.bytes, clintByteIndex(memory, CLINT_HOST_SOFTWARE_WIRE_OFFSET)) !== 0;
+  Atomics.load(memory.bytes, clintByteIndex(memory, CLINT_HOST_MACHINE_SOFTWARE_WIRE_OFFSET)) !== 0;
 
 export {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
-  setClintSoftwareWire,
-  setClintTimerWire,
+  isClintSupervisorTimerPending,
+  setClintMachineTimerWire,
+  setClintMachineSoftwareWire,
+  setClintSupervisorTimerWire,
 };

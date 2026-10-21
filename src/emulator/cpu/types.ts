@@ -33,7 +33,9 @@ type Registers = {
    * XLEND scratch slots. `time` mirrors CLINT `mtime` (not the CSR slot). `cycle`/`instret`
    * alias `mcycle`/`minstret` (CPI=1 retire counts; `mcountinhibit` can freeze them).
    * `mcounteren`/`scounteren` gate S/U reads of the unprivileged counters. `satp` is stored
-   * but paging is not implemented yet.
+   * but paging is not implemented yet. `menvcfg.STCE` enables Sstc: `stimecmp` resets all-ones
+   * and `mip.STIP`/`sip.STIP` are then read-only results of `time >= stimecmp`; with STCE clear
+   * `stimecmp` is an M-mode-only slot (S/U access faults) and STIP is software-writable.
    */
   controlAndStatus: readonly Uint8Array[] & {
     readonly 0xf11: ReadonlyUint8Array; // mvendorid
@@ -51,6 +53,12 @@ type Registers = {
    * this level and the software-writable SEIP bit in the `mip` CSR slot.
    */
   plicSupervisorExternalPending: boolean;
+  /**
+   * Host-only: last `stimecmp` bytes handed to the CLINT mirror (all-ones at reset, matching the
+   * CSR and CLINT reset). `publishSupervisorTimerCompare` skips the slab write while the hart's
+   * compare still matches, so the per-sample cost stays a local 8-byte compare.
+   */
+  publishedSupervisorTimerCompare: Uint8Array;
   /**
    * Host-only: when true after execute, `commitInstructionRetire` bumps mcycle/minstret.
    * Cleared by traps that abort the instruction; set again by `ecall`/`ebreak` before trap.

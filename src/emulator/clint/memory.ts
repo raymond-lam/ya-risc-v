@@ -31,7 +31,7 @@ import {
   storeClintTimeBytes,
   storeClintTimeRegisterByte,
 } from '#emulator/clint/time';
-import { isClintMachineSoftwarePending, setClintSoftwareWire } from '#emulator/clint/wires';
+import { isClintMachineSoftwarePending, setClintMachineSoftwareWire } from '#emulator/clint/wires';
 import type { Memory } from '#emulator/memory';
 
 /** True when `byteLength` bytes from `offset` lie entirely inside `mtime` or `mtimecmp`. */
@@ -78,7 +78,7 @@ const storeClintByte = (
     case 'msip':
       // Only byte 0 bit 0 is defined (software IRQ wire).
       if (byteOffset === 0) {
-        setClintSoftwareWire(memory, (value & 1) !== 0);
+        setClintMachineSoftwareWire(memory, (value & 1) !== 0);
       }
       return;
     case 'mtime':

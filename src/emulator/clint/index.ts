@@ -22,14 +22,17 @@
 import {
   readClintMtimeBytes,
   resetClintTimebase,
+  setClintStimecmpMirror,
   setClintTimebaseHz,
   tickClint,
 } from '#emulator/clint/time';
 import {
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
-  setClintSoftwareWire,
-  setClintTimerWire,
+  isClintSupervisorTimerPending,
+  setClintMachineSoftwareWire,
+  setClintMachineTimerWire,
+  setClintSupervisorTimerWire,
 } from '#emulator/clint/wires';
 import type { Memory } from '#emulator/memory';
 
@@ -40,12 +43,13 @@ export {
 } from '#emulator/clint/layout';
 export { loadBytesFromClint, storeBytesToClint } from '#emulator/clint/memory';
 
-/** Initialize CLINT: store `timebaseHz`, reset the timebase, clear both IRQ wires. */
+/** Initialize CLINT: store `timebaseHz`, reset the timebase, clear the IRQ wires. */
 const initializeClint = (memory: Memory, timebaseHz: bigint): void => {
   setClintTimebaseHz(memory, timebaseHz);
   resetClintTimebase(memory);
-  setClintTimerWire(memory, false);
-  setClintSoftwareWire(memory, false);
+  setClintMachineTimerWire(memory, false);
+  setClintMachineSoftwareWire(memory, false);
+  setClintSupervisorTimerWire(memory, false);
 };
 
 export {
@@ -54,4 +58,6 @@ export {
   readClintMtimeBytes,
   isClintMachineSoftwarePending,
   isClintMachineTimerPending,
+  isClintSupervisorTimerPending,
+  setClintStimecmpMirror,
 };

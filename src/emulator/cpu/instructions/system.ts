@@ -179,6 +179,9 @@ const sfenceVma = (
  *
  * When `mstatus.TW` is set and privilege is below M, `wfi` raises illegal-instruction
  * immediately (implementation-defined wait limit of zero).
+ *
+ * With `menvcfg.STCE` set, mip.STIP is driven by the CLINT supervisor timer wire (the
+ * `stimecmp` compare in the CLINT) just like mip.MTIP, so an expiring compare notifies the wait.
  */
 const wfi = async (
   registers: Registers,

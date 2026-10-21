@@ -16,7 +16,9 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import testMemory from '#test/guest-memory';
+import { isClintSupervisorTimerPending, tickClint } from '#emulator/clint';
 import decode from '#emulator/cpu/decode';
 import {
   csrrc,
@@ -36,6 +38,7 @@ import {
   MCAUSE,
   MEPC,
   MIE,
+  MIP,
   MSTATUS,
   MTVAL,
   MTVEC,
@@ -52,8 +55,10 @@ import {
   readProgramCounter,
   setPrivilegeMode,
   setProgramCounter,
+  setSupervisorTimerInterruptPending,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
+  publishSupervisorTimerCompare,
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
 import { CAUSE_BREAKPOINT, CAUSE_ILLEGAL_INSTRUCTION } from '#emulator/cpu/trap';
@@ -71,6 +76,8 @@ const MINSTRET = 0xb02;
 const MCOUNTEREN = 0x306;
 const SCOUNTEREN = 0x106;
 const MCOUNTINHIBIT = 0x320;
+const MENVCFG = 0x30a;
+const STIMECMP = 0x14d;
 import { storeBytes, type Memory } from '#emulator/memory';
 import {
   bytesToBigInt,
@@ -83,6 +90,20 @@ import type { ReadonlyUint8Array } from '#types';
 
 /** mie bit for machine timer interrupt (cause 7). */
 const MIE_MTIE = 1 << 7;
+/** mie/sie bit for supervisor timer interrupt (cause 5). */
+const MIE_STIE = 1 << 5;
+
+/** menvcfg.STCE (bit 63) — enables Sstc `stimecmp` / hardware STIP. */
+const MENVCFG_STCE = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
+/** menvcfg WARL keeps STCE (63); ADUE (61) and the cache-block bits stay read-only zero. */
+const MENVCFG_WARL_KEEP = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
+/** menvcfg.ADUE (bit 61) — read-only zero until Svadu is implemented. */
+const MENVCFG_ADUE = unsignedBigIntToBytes(new Uint8Array(8), 1n << 61n) as ReadonlyUint8Array;
+/** stimecmp slot after reset (all ones). */
+const STIMECMP_RESET = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  0xffff_ffff_ffff_ffffn
+) as ReadonlyUint8Array;
 
 const CLINT_MTIMECMP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_4000n) as ReadonlyUint8Array;
 const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as ReadonlyUint8Array;
@@ -1553,5 +1574,314 @@ describe('system', () => {
     );
     sfenceVma(registers, testMemory(256n), { instructionWord: 0x12000073 }, FOUR_BYTES);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
+  });
+
+  it('csrrw from M-mode reaches menvcfg and keeps only STCE', () => {
+    const registers = createRegisters();
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    // All ones: only the WARL-implemented field survives (STCE 63).
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
+    );
+
+    csrrw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 2,
+        sourceRegister1: 1,
+        controlAndStatusRegister: MENVCFG,
+        instructionWord: 0x30a09173, // csrrw x2, menvcfg, x1
+      },
+      FOUR_BYTES
+    );
+
+    // rd gets the reset value (0); the CSR takes rs1 through the WARL mask; pc advances by 4.
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 2),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MENVCFG), MENVCFG_WARL_KEEP);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
+
+    // FIOM (bit 3) is read-only zero: writing it reads STCE back and stores 0.
+    writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 1n << 3n));
+    csrrw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 2,
+        sourceRegister1: 1,
+        controlAndStatusRegister: MENVCFG,
+        instructionWord: 0x30a09173,
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), MENVCFG_WARL_KEEP);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MENVCFG),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+
+    // ADUE (bit 61) is read-only zero while Svadu is unimplemented: it never sticks.
+    writeGeneralPurposeRegister(registers, 1, MENVCFG_ADUE);
+    csrrw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 2,
+        sourceRegister1: 1,
+        controlAndStatusRegister: MENVCFG,
+        instructionWord: 0x30a09173,
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), new Uint8Array(8));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MENVCFG),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+  });
+
+  it('S-mode csrr stimecmp works when menvcfg.STCE and mcounteren.TM are set', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0x02, 32)
+    );
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    const value = unsignedBigIntToBytes(new Uint8Array(8), 0x1234n);
+    writeGeneralPurposeRegister(registers, 2, value);
+
+    csrrw(
+      registers,
+      memory,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        controlAndStatusRegister: STIMECMP,
+        instructionWord: 0x14d110f3, // csrrw x1, stimecmp, x2
+      },
+      FOUR_BYTES
+    );
+
+    // rd gets the reset compare (all ones); the CSR takes rs1; pc advances by 4.
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), STIMECMP_RESET);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, STIMECMP), value);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
+  });
+
+  it('S-mode stimecmp traps with illegal-instruction when mcounteren.TM is clear', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    const instructionWord = 0x14d110f3; // csrrw x1, stimecmp, x2
+    writeGeneralPurposeRegister(registers, 2, unsignedBigIntToBytes(new Uint8Array(8), 0x1234n));
+
+    csrrw(
+      registers,
+      memory,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        controlAndStatusRegister: STIMECMP,
+        instructionWord,
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
+    // The trap handler PC replaces the unchanged (unretired) instruction PC.
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x40, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, STIMECMP), STIMECMP_RESET);
+
+    // M-mode with mcounteren.TM clear still succeeds.
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    csrrw(
+      registers,
+      memory,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        controlAndStatusRegister: STIMECMP,
+        instructionWord,
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, STIMECMP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1234n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
+  });
+
+  it('M-mode stimecmp works while menvcfg.STCE is clear', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    const instructionWord = 0x14d090f3; // csrrw x1, stimecmp, x1
+    writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 0x1234n));
+
+    // Sstc gates the compare below M only: with STCE clear, M-mode reads and writes stay legal.
+    csrrw(
+      registers,
+      memory,
+      {
+        destinationRegister: 2,
+        sourceRegister1: 1,
+        controlAndStatusRegister: STIMECMP,
+        instructionWord,
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(readGeneralPurposeRegister(registers, 2), STIMECMP_RESET);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, STIMECMP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1234n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
+    // No trap was taken, and the compare does not own STIP: it stays software-owned.
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MCAUSE), new Uint8Array(8));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MIP), new Uint8Array(8));
+
+    // The same access in S-mode still faults while STCE is clear.
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
+    );
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    csrrw(
+      registers,
+      memory,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 1,
+        controlAndStatusRegister: STIMECMP,
+        instructionWord,
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
+    );
+    assert.equal(
+      bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)),
+      instructionWord
+    );
+    // The faulting instruction did not advance past its own pc.
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, STIMECMP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1234n)
+    );
+  });
+
+  // Bounded: a lost notify would park this test forever (node:test has no default timeout), so
+  // bound it and let the failure surface as an assertion failure.
+  it('wfi in S-mode returns when stimecmp expires', { timeout: 5000 }, async () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    // stimecmp just ahead of the reset mtime (0); mie.STIE makes the interrupt count for
+    // `wfi`'s pending ∧ enabled check.
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 1_000n)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), MIE_STIE, 32)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+
+    const waiting = wfi(registers, memory, FOUR_BYTES);
+    // Let the wait install, then prove the hart is still parked: without this the test would pass
+    // even if `wfi` returned immediately. The STIP wire is what notifies the parked hart, so the
+    // hart must already have published `stimecmp` into the mirror (it does so on the sample pass
+    // before it parks).
+    await delay(20);
+    assert.equal(
+      await Promise.race([waiting.then(() => 'woke'), delay(1).then(() => 'waiting')]),
+      'waiting'
+    );
+
+    // Expire the compare through the CLINT guest window.
+    storeBytes({
+      memory,
+      address: CLINT_MTIME,
+      source: unsignedBigIntToBytes(new Uint8Array(8), 1_000n),
+      byteLength: 8,
+    });
+    tickClint(memory);
+    await waiting;
+
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
+    assert.notEqual(snapshotControlAndStatusRegister(registers, MIP)[0]! & 0x20, 0);
+  });
+
+  it('disabling menvcfg.STCE drops the supervisor timer wire', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    storeBytes({
+      memory,
+      address: CLINT_MTIME,
+      source: unsignedBigIntToBytes(new Uint8Array(8), 10n),
+      byteLength: 8,
+    });
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 5n)
+    );
+    publishSupervisorTimerCompare(registers, memory);
+    assert.equal(isClintSupervisorTimerPending(memory), true);
+
+    // STCE clear: the compare does not exist, so the publish parks the mirror at all-ones and a
+    // stale `mtime >= stimecmp` result cannot stay on the wire.
+    writeControlAndStatusRegister(registers, MENVCFG, new Uint8Array(8));
+    publishSupervisorTimerCompare(registers, memory);
+    assert.equal(isClintSupervisorTimerPending(memory), false);
+    setSupervisorTimerInterruptPending(registers, isClintSupervisorTimerPending(memory));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
   });
 });

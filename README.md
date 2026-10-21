@@ -6,7 +6,8 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 > **This is a work in progress and nowhere near finished.** RV64I, RV64M, RV64A (LR/SC + AMOs),
 > RV64C (compressed), and Zicsr execute and are covered by tests. U/S/M privilege modes,
 > `mret`/`sret`, trap CSRs, synchronous traps, interrupt delivery (including `wfi`), a CLINT
-> (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), and a PLIC (→ `mip.MEIP`/`SEIP`, UART
+> (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), Sstc (`menvcfg.STCE` + `stimecmp` →
+> `mip.STIP`), and a PLIC (→ `mip.MEIP`/`SEIP`, UART
 > source 10) are in place. A 16550 UART (IER/IIR → PLIC source 10) plus an Ink TUI console path
 > exist. There are no further ISA extensions and no OS boot path. It cannot run Linux yet. Anything
 > listed under [Not yet implemented](#not-yet-implemented) is unfinished work rather than a
@@ -35,14 +36,17 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/`sscratch`, `mepc`/`sepc`,
   `mcause`/`scause`, `mtval`/`stval`, `satp`, `pmpcfg0`/`pmpcfg2`, `pmpaddr0`–`pmpaddr15`,
   `cycle`/`time`/`instret`, `mcycle`/`minstret`,
-  `mcounteren`/`scounteren`, `mcountinhibit`, identity); other indices, insufficient privilege,
+  `mcounteren`/`scounteren`, `mcountinhibit`, `menvcfg`/`stimecmp`, identity); other indices, insufficient privilege,
   and writes to read-only CSRs raise illegal-instruction. `csrrs`/`csrrc` skip the write when
   the source is zero. `sstatus`/`sie`/`sip` are masked views of `mstatus`/`mie`/`mip`. WARL:
   `misa` hardwired (RV64IMAC + S/U); MPP legalization; `mie`/`mideleg` to implemented IRQ bits;
-  `mip` preserves hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`; `mcounteren`/`scounteren` to CY/TM/IR;
+  `mip` preserves hardware `MSIP`/`MTIP`/`SEIP`/`MEIP` (plus `STIP` while `menvcfg.STCE` is
+  set); `menvcfg` to `STCE` only (`ADUE` is read-only zero until Svadu);
+  `mcounteren`/`scounteren` to CY/TM/IR;
   `mcountinhibit` to CY/IR. `time` mirrors CLINT `mtime`; `cycle`/`instret` alias
   `mcycle`/`minstret` and count retires at CPI=1 (traps cancel retire except `ecall`/`ebreak`).
-  S/U reads need the matching enable bits (U needs both). `satp` is stored (OpenSBI clears it);
+  S/U reads need the matching enable bits (U needs both). `stimecmp` (Sstc) is always reachable in
+  M; below M it needs `menvcfg.STCE` and `mcounteren.TM`. `satp` is stored (OpenSBI clears it);
   Sv39 walks are not implemented yet. With `mstatus.TVM` set, S-mode `satp` access and
   `sfence.vma` are illegal.
   PMP is 16 entries (4-byte grain, no `mseccfg`). `pmpaddr` keeps address bits 55:2. The lowest
@@ -54,11 +58,16 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 - **Synchronous traps:** `ecall`, `ebreak`, and illegal encodings write `xepc` / `xcause` /
   `xtval`, update status enable stacks, and jump to the chosen `xtvec` (direct mode).
 - **Interrupts:** the CLINT tick worker advances `mtime` and drives a timer IRQ wire; guest `msip`
-  stores drive a software IRQ wire; the PLIC drives machine/supervisor external wires from enabled
-  sources (UART = 10). The CPU run loop samples those into `mip.MTIP` / `mip.MSIP` / `mip.MEIP` /
-  `mip.SEIP`, then calls `takeInterruptIfAny` before each fetch. Pending∧enabled interrupts vector
+  stores drive a software IRQ wire; with `menvcfg.STCE` set the hart publishes its `stimecmp` into
+  a CLINT mirror whose compare drives a supervisor timer IRQ wire; the PLIC drives
+  machine/supervisor external wires from enabled
+  sources (UART = 10). The CPU run loop samples those into `mip.MTIP` / `mip.MSIP` / `mip.STIP` /
+  `mip.MEIP` / `mip.SEIP`, then calls `takeInterruptIfAny` before each fetch. Pending∧enabled
+  interrupts vector
   with the `xcause` interrupt bit set; global `MIE`/`SIE` and privilege rules apply; `mideleg` sends
-  supervisor causes to S. `mip.MSIP`/`MTIP` (CLINT) and `mip.MEIP`/`SEIP` (PLIC) are not CSR-writable.
+  supervisor causes to S. `mip.MSIP`/`MTIP` (CLINT), `mip.MEIP`/`SEIP` (PLIC), and — while
+  `menvcfg.STCE` is set — `mip.STIP` are not CSR-writable; with STCE clear `STIP` is
+  software-writable (SBI-style timer delivery).
   `wfi` advances the PC then waits on a shared IRQ-level word (OR of device wires) until
   `mip ∧ mie` is nonzero (wake does not require global `MIE`/`SIE`); the interrupt is taken
   on the following run-loop check if globally enabled. `mstatus.TW` makes `wfi` in S/U illegal
@@ -68,6 +77,9 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   by `process.hrtime` on its own worker. Reset:
   `mtime` = 0, `mtimecmp` = all-ones, `msip` clear. Guest may write `mtime` (reseats the epoch) or
   `mtimecmp` to arm/clear the timer; write `msip` bit 0 to assert/clear the software interrupt.
+  The host slab also holds the `stimecmp` mirror the hart publishes into (Sstc), which the same
+  compare pass turns into the supervisor timer wire. There is one `mtimecmp` and one `stimecmp`
+  mirror for the whole machine, so timers are single-hart for now.
 - **PLIC:** MMIO at `--plic-base` (default `0x0c000000`) — priority / pending / enable / threshold / claim for M and S
   contexts (sources 1–31). UART is source 10. Pending bits are device-driven; claim/complete gate
   re-presentation. Context output wires feed `mip.MEIP` / `mip.SEIP`.
@@ -206,7 +218,7 @@ src/
       layout.ts           Guest window / host slab indexing (private)
       memory.ts           Guest loadBytes / storeBytes (private)
       wires.ts            Timer / software IRQ wires (private)
-      time.ts             mtime/mtimecmp shadows, tickClint (private)
+      time.ts             mtime/mtimecmp shadows, stimecmp mirror, tickClint (private)
     timer/
       index.ts            Host-side create()/start()/stop() (timebase Worker)
       run.ts              Worker: tick loop (calls tickClint)
