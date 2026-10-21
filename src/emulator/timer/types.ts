@@ -19,7 +19,7 @@ import type { Memory } from '#emulator/memory';
 
 /** Host arguments to create the CLINT timebase worker. */
 type TimerCreateOptions = {
-  /** Shared guest address space (CLINT `mtime` / timer wire live here). */
+  /** Shared guest address space (CLINT `mtime` / timer IRQ wires live here). */
   memory: Memory;
 };
 

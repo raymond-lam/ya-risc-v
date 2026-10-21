@@ -19,7 +19,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { tickClint } from '#emulator/clint';
 import type { TimerWorkerData } from '#emulator/timer/types';
 
-/** How often the timebase domain wakes to advance `mtime` and the timer wire. */
+/** How often the timebase domain wakes to advance `mtime` and the timer IRQ wires. */
 const TIMER_TICK_PERIOD_MS = 1;
 
 const main = async (): Promise<void> => {

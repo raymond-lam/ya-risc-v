@@ -32,6 +32,7 @@ const IRQ_LEVEL_HOST_BYTE_LENGTH = BigInt(WAKE_HOST_SIZE);
 
 /** IRQ level bits (match `mip` interrupt numbers for clarity). */
 const IRQ_LEVEL_MSIP = 1 << 3;
+const IRQ_LEVEL_STIP = 1 << 5;
 const IRQ_LEVEL_MTIP = 1 << 7;
 const IRQ_LEVEL_SEIP = 1 << 9;
 const IRQ_LEVEL_MEIP = 1 << 11;
@@ -97,6 +98,7 @@ export {
   IRQ_LEVEL_MTIP,
   IRQ_LEVEL_REGION_ID,
   IRQ_LEVEL_SEIP,
+  IRQ_LEVEL_STIP,
   loadIrqLevel,
   setIrqWire,
   waitIrqLevel,

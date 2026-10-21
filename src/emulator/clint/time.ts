@@ -28,16 +28,19 @@ import {
   CLINT_HOST_EPOCH_NS_UINT64_INDEX,
   CLINT_HOST_MTIMECMP_UINT64_INDEX,
   CLINT_HOST_MTIME_UINT64_INDEX,
+  CLINT_HOST_STIMECMP_UINT64_INDEX,
   CLINT_HOST_TIMEBASE_HZ_UINT64_INDEX,
   clintHostUint64s,
   type ClintTimeRegister,
 } from '#emulator/clint/layout';
-import { setClintTimerWire } from '#emulator/clint/wires';
+import { setClintMachineTimerWire, setClintSupervisorTimerWire } from '#emulator/clint/wires';
 import type { Memory } from '#emulator/memory';
 
 const NS_PER_SECOND = 1_000_000_000n;
 /** `timebase-frequency` in the device tree is one cell. */
 const TIMEBASE_HZ_MAX = 0xffff_ffffn;
+/** Bound on the wire-refresh verify loop (the compared inputs converge well within this). */
+const TIMER_WIRE_UPDATE_ATTEMPTS = 4;
 
 const timeRegisterUint64Index = (register: ClintTimeRegister): number =>
   register === 'mtime' ? CLINT_HOST_MTIME_UINT64_INDEX : CLINT_HOST_MTIMECMP_UINT64_INDEX;
@@ -80,6 +83,14 @@ const readEpochNs = (memory: Memory): bigint =>
 const readTimebaseHz = (memory: Memory): bigint =>
   Atomics.load(clintHostUint64s(memory), CLINT_HOST_TIMEBASE_HZ_UINT64_INDEX);
 
+/** `stimecmp` mirror published by the hart; the CLINT only compares it against `mtime`. */
+const readStimecmpMirror = (memory: Memory): bigint =>
+  Atomics.load(clintHostUint64s(memory), CLINT_HOST_STIMECMP_UINT64_INDEX);
+
+const writeStimecmpMirror = (memory: Memory, value: bigint): void => {
+  Atomics.store(clintHostUint64s(memory), CLINT_HOST_STIMECMP_UINT64_INDEX, value);
+};
+
 /** Store the free-running `mtime` frequency. Rejects 0 and values that do not fit in a u32. */
 const setClintTimebaseHz = (memory: Memory, timebaseHz: bigint): void => {
   if (timebaseHz < 1n || timebaseHz > TIMEBASE_HZ_MAX) {
@@ -100,11 +111,41 @@ const timebaseHz = (memory: Memory): bigint => {
   return hz;
 };
 
-const updateTimerWireFromCompare = (memory: Memory): void => {
-  setClintTimerWire(
-    memory,
-    readTimeRegister(memory, 'mtime') >= readTimeRegister(memory, 'mtimecmp')
-  );
+const updateTimerWiresFromCompare = (memory: Memory): void => {
+  for (let attempt = 0; attempt < TIMER_WIRE_UPDATE_ATTEMPTS; attempt += 1) {
+    const mtime = readTimeRegister(memory, 'mtime');
+    const mtimecmp = readTimeRegister(memory, 'mtimecmp');
+    const stimecmp = readStimecmpMirror(memory);
+    setClintMachineTimerWire(memory, mtime >= mtimecmp);
+    setClintSupervisorTimerWire(memory, mtime >= stimecmp);
+    // The two wire stores are not atomic with the reads that derived them, and any of the three
+    // inputs can move concurrently (timer worker, guest stores, hart publishes). Retry from a
+    // fresh snapshot while one changed, so a later store is never derived from stale values
+    // (which would drop or invent an interrupt for up to one tick). Bounded: the inputs converge,
+    // and the cap keeps a pathological host from spinning.
+    if (
+      readTimeRegister(memory, 'mtime') === mtime &&
+      readTimeRegister(memory, 'mtimecmp') === mtimecmp &&
+      readStimecmpMirror(memory) === stimecmp
+    ) {
+      return;
+    }
+  }
+};
+
+/**
+ * Publish the hart's `stimecmp` into the mirror and re-derive both timer wires. The hart owns
+ * that CSR and the timer worker only sees this slab, so the hart pushes it on each sample pass;
+ * on change the wires are refreshed immediately, so raising `stimecmp` clears `mip.STIP` without
+ * waiting for the next timebase tick.
+ */
+const setClintStimecmpMirror = (memory: Memory, value: ReadonlyUint8Array): void => {
+  const stimecmp = BigInt.asUintN(64, bytesToBigInt(value));
+  if (stimecmp === readStimecmpMirror(memory)) {
+    return;
+  }
+  writeStimecmpMirror(memory, stimecmp);
+  updateTimerWiresFromCompare(memory);
 };
 
 /** Reseat epoch so `tickClint` reproduces `mtime` from `process.hrtime`. */
@@ -113,7 +154,7 @@ const reseatEpochForMtime = (memory: Memory, mtime: bigint): void => {
 };
 
 /**
- * Advance free-running `mtime` from the host clock and refresh the timer IRQ wire.
+ * Advance free-running `mtime` from the host clock and refresh both timer IRQ wires.
  * Called by the CLINT timebase worker and on guest `mtime` reads (sync-on-read).
  * CAS-retries when a guest `mtime`/epoch RMW wins the race.
  */
@@ -130,17 +171,21 @@ const tickClint = (memory: Memory): void => {
     if (readEpochNs(memory) !== epochNs) {
       continue;
     }
-    updateTimerWireFromCompare(memory);
+    updateTimerWiresFromCompare(memory);
     return;
   }
 };
 
-/** Reset time shadows: `mtime` = 0, `mtimecmp` = all-ones, epoch = now, timer wire from compare. */
+/**
+ * Reset time shadows: `mtime` = 0, `mtimecmp` = all-ones, `stimecmp` mirror = all-ones, epoch =
+ * now, both timer wires from compare.
+ */
 const resetClintTimebase = (memory: Memory): void => {
   writeTimeRegister(memory, 'mtime', 0n);
   writeTimeRegister(memory, 'mtimecmp', 0xffff_ffff_ffff_ffffn);
+  writeStimecmpMirror(memory, 0xffff_ffff_ffff_ffffn);
   writeEpochNs(memory, process.hrtime.bigint());
-  updateTimerWireFromCompare(memory);
+  updateTimerWiresFromCompare(memory);
 };
 
 /**
@@ -194,7 +239,7 @@ const storeClintTimeBytes = (
     if (register === 'mtime') {
       reseatEpochForMtime(memory, next);
     }
-    updateTimerWireFromCompare(memory);
+    updateTimerWiresFromCompare(memory);
     return;
   }
 };
@@ -234,6 +279,7 @@ export {
   loadClintTimeRegisterByte,
   readClintMtimeBytes,
   resetClintTimebase,
+  setClintStimecmpMirror,
   setClintTimebaseHz,
   storeClintTimeBytes,
   storeClintTimeRegisterByte,

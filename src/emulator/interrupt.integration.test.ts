@@ -37,7 +37,11 @@ import {
 } from '#emulator/cpu/registers';
 import sampleDevicePending from '#emulator/cpu/sample-device-pending';
 import { takeInterruptIfAny } from '#emulator/cpu/trap';
-import { isClintMachineSoftwarePending, isClintMachineTimerPending } from '#emulator/clint';
+import {
+  isClintMachineSoftwarePending,
+  isClintMachineTimerPending,
+  isClintSupervisorTimerPending,
+} from '#emulator/clint';
 import {
   IRQ_LEVEL_MEIP,
   IRQ_LEVEL_MSIP,
@@ -58,12 +62,14 @@ import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#util
 
 /** Interrupt codes (mcause/scause with interrupt bit set). */
 const CAUSE_MACHINE_SOFTWARE_INTERRUPT = 3;
+const CAUSE_SUPERVISOR_TIMER_INTERRUPT = 5;
 const CAUSE_MACHINE_TIMER_INTERRUPT = 7;
 const CAUSE_SUPERVISOR_EXTERNAL_INTERRUPT = 9;
 const CAUSE_MACHINE_EXTERNAL_INTERRUPT = 11;
 
 /** mie / sie enable bits (bit index = cause). */
 const MIE_MSIE = 1 << CAUSE_MACHINE_SOFTWARE_INTERRUPT;
+const MIE_STIE = 1 << CAUSE_SUPERVISOR_TIMER_INTERRUPT;
 const MIE_MTIE = 1 << CAUSE_MACHINE_TIMER_INTERRUPT;
 const MIE_SEIE = 1 << CAUSE_SUPERVISOR_EXTERNAL_INTERRUPT;
 const MIE_MEIE = 1 << CAUSE_MACHINE_EXTERNAL_INTERRUPT;
@@ -72,8 +78,15 @@ const MIE_MEIE = 1 << CAUSE_MACHINE_EXTERNAL_INTERRUPT;
 const MSTATUS_SIE = 0x02;
 const MSTATUS_MIE = 0x08;
 
-/** mideleg bit for supervisor external interrupt. */
+/** mideleg bits for supervisor timer / supervisor external interrupts. */
+const MIDELEG_STI = 1 << CAUSE_SUPERVISOR_TIMER_INTERRUPT;
 const MIDELEG_SEI = 1 << CAUSE_SUPERVISOR_EXTERNAL_INTERRUPT;
+
+/** Sstc CSRs (M-mode `menvcfg`, S-mode `stimecmp`). */
+const MENVCFG = 0x30a;
+const STIMECMP = 0x14d;
+/** menvcfg.STCE (bit 63) — makes the compare own `mip.STIP`. */
+const MENVCFG_STCE = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
 
 const CLINT_MSIP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n) as ReadonlyUint8Array;
 const CLINT_MTIMECMP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_4000n) as ReadonlyUint8Array;
@@ -260,6 +273,60 @@ describe('device wire → mip → takeInterruptIfAny', () => {
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, SCAUSE),
       interruptCauseBytes(CAUSE_SUPERVISOR_EXTERNAL_INTERRUPT)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
+  });
+
+  it('takes a supervisor timer interrupt after the Sstc compare expires', () => {
+    const registers = createRegisters();
+    const memory = createTestMemory(256n);
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
+    writeControlAndStatusRegister(
+      registers,
+      STVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x5000, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MIDELEG,
+      signedNumberToBytes(new Uint8Array(8), MIDELEG_STI, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MSTATUS,
+      signedNumberToBytes(new Uint8Array(8), MSTATUS_SIE, 32)
+    );
+    writeControlAndStatusRegister(
+      registers,
+      MIE,
+      signedNumberToBytes(new Uint8Array(8), MIE_STIE, 32)
+    );
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+
+    // Compare at `mtime` (seeded through the guest window), so the sampler's publish of the
+    // hart's `stimecmp` drives the STIP wire high.
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 1n)
+    );
+    storeBytes({
+      memory,
+      address: CLINT_MTIME,
+      source: unsignedBigIntToBytes(new Uint8Array(8), 1n),
+      byteLength: 8,
+    });
+
+    // The guest store re-derives the wires from the all-ones mirror; the hart's publish on the
+    // sample pass is what drives STIP.
+    assert.equal(isClintSupervisorTimerPending(memory), false);
+    sampleDevicePending(registers, memory);
+    assert.equal(isClintSupervisorTimerPending(memory), true);
+    assert.equal(takeInterruptIfAny(registers), true);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SCAUSE),
+      interruptCauseBytes(CAUSE_SUPERVISOR_TIMER_INTERRUPT)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
   });

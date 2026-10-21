@@ -16,6 +16,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import testMemory from '#test/guest-memory';
+import { isClintSupervisorTimerPending } from '#emulator/clint';
 import {
   MEDELEG,
   MIDELEG,
@@ -24,11 +26,14 @@ import {
   MSTATUS,
   MTVEC,
   PRIVILEGE_MACHINE,
+  PRIVILEGE_SUPERVISOR,
+  PRIVILEGE_USER,
   STVEC,
   advanceProgramCounter,
   beginInstructionRetire,
   commitInstructionRetire,
   createRegisters,
+  isControlAndStatusRegisterAccessAllowed,
   snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
   readPrivilegeMode,
@@ -36,13 +41,18 @@ import {
   setBooleanGeneralPurposeRegister,
   setMachineExternalInterruptPending,
   setMachineTimerInterruptPending,
+  publishSupervisorTimerCompare,
+  setPrivilegeMode,
   setProgramCounter,
   setSupervisorExternalInterruptPending,
+  setSupervisorTimerInterruptPending,
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
+import { storeBytes } from '#emulator/memory';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
+import type { ReadonlyUint8Array } from '#types';
 
 /** CSR addresses used only in these tests (not part of the registers public surface). */
 const MISA = 0x301;
@@ -55,6 +65,36 @@ const MCOUNTINHIBIT = 0x320;
 const MCYCLE = 0xb00;
 const MINSTRET = 0xb02;
 const CYCLE = 0xc00;
+const MENVCFG = 0x30a;
+const STIMECMP = 0x14d;
+
+/** menvcfg.STCE (bit 63). */
+const MENVCFG_STCE = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
+/** menvcfg WARL keeps STCE (63); ADUE stays read-only zero (no Svadu). */
+const MENVCFG_WARL_KEEP = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
+/** mip/sip.STIP (bit 5). */
+const STIP = 1 << 5;
+/** CLINT `mtime` guest address (test map). */
+const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as ReadonlyUint8Array;
+
+/** Seed CLINT `mtime` with a fixed value (no timebase worker runs in unit tests). */
+const seedClintMtime = (memory: ReturnType<typeof testMemory>, mtime: bigint): void => {
+  storeBytes({
+    memory,
+    address: CLINT_MTIME,
+    source: unsignedBigIntToBytes(new Uint8Array(8), mtime),
+    byteLength: 8,
+  });
+};
+
+/** Publish the hart's `stimecmp` into the CLINT mirror, then sample the STIP wire into `mip`. */
+const publishAndSampleSupervisorTimer = (
+  registers: ReturnType<typeof createRegisters>,
+  memory: ReturnType<typeof testMemory>
+): void => {
+  publishSupervisorTimerCompare(registers, memory);
+  setSupervisorTimerInterruptPending(registers, isClintSupervisorTimerPending(memory));
+};
 
 /** Hardwired misa: MXL=64 and extensions A, C, I, M, S, U. */
 const MISA_HARDWIRED = unsignedBigIntToBytes(
@@ -478,6 +518,262 @@ describe('registers', () => {
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x141),
       signedNumberToBytes(new Uint8Array(8), 0x456, 32)
+    );
+  });
+
+  it('menvcfg WARL keeps only STCE', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MENVCFG,
+      unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
+    );
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MENVCFG), MENVCFG_WARL_KEEP);
+
+    // menvcfg is an M-mode CSR (address bits [9:8] = 11): S-mode access is illegal.
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, MENVCFG, false), false);
+  });
+
+  it('M-mode stimecmp is legal while menvcfg.STCE is clear', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+
+    // Sstc gates the compare below M only: M-mode reads and writes work with STCE clear.
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, false), true);
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, true), true);
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1234n)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, STIMECMP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1234n)
+    );
+
+    // STIP stays software-owned: publishing the compare must not drive it from the mirror.
+    seedClintMtime(memory, 0x2000n);
+    publishAndSampleSupervisorTimer(registers, memory);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+
+    // Below M the same access faults while STCE is clear.
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, false), false);
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, false), false);
+
+    // With STCE set, S-mode succeeds (mcounteren.TM permitting).
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, false), true);
+  });
+
+  it('S-mode stimecmp needs mcounteren.TM but M-mode does not', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, false), false);
+
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0x02, 32)
+    );
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, false), true);
+
+    // M-mode ignores the counter-enable bits.
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    writeControlAndStatusRegister(
+      registers,
+      MCOUNTEREN,
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, false), true);
+  });
+
+  it('stimecmp compare sets and clears mip.STIP', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    seedClintMtime(memory, 500n);
+
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 500n)
+    );
+    publishAndSampleSupervisorTimer(registers, memory);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), BigInt(STIP))
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SIP),
+      unsignedBigIntToBytes(new Uint8Array(8), BigInt(STIP))
+    );
+
+    // Writing a compare above `mtime` clears the pending bit (the publish updates the wire at
+    // once, so this does not wait for a timebase tick).
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 501n)
+    );
+    publishAndSampleSupervisorTimer(registers, memory);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+  });
+
+  it('reset stimecmp does not assert STIP', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+
+    // The CSR and the CLINT mirror both reset all-ones, so `mtime >= stimecmp` is false.
+    publishSupervisorTimerCompare(registers, memory);
+    assert.equal(isClintSupervisorTimerPending(memory), false);
+    setSupervisorTimerInterruptPending(registers, false);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+  });
+
+  it('setSupervisorTimerInterruptPending sets and clears mip.STIP', () => {
+    const registers = createRegisters();
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+
+    setSupervisorTimerInterruptPending(registers, true);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), BigInt(STIP))
+    );
+
+    setSupervisorTimerInterruptPending(registers, false);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+
+    // With STCE clear, STIP is software-owned: the wire sample must not touch it.
+    const software = createRegisters();
+    writeControlAndStatusRegister(
+      software,
+      MIP,
+      unsignedBigIntToBytes(new Uint8Array(8), BigInt(STIP))
+    );
+    setSupervisorTimerInterruptPending(software, false);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(software, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), BigInt(STIP))
+    );
+  });
+
+  it('mip and sip STIP are read-only while menvcfg.STCE is set', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    seedClintMtime(memory, 10n);
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+    publishAndSampleSupervisorTimer(registers, memory);
+
+    // CSR writes cannot clear the hardware-owned bit, through mip or sip.
+    writeControlAndStatusRegister(registers, MIP, new Uint8Array(8));
+    writeControlAndStatusRegister(registers, SIP, new Uint8Array(8));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), BigInt(STIP))
+    );
+
+    // With STCE clear, STIP is software-writable again.
+    writeControlAndStatusRegister(registers, MENVCFG, new Uint8Array(8));
+    writeControlAndStatusRegister(registers, MIP, new Uint8Array(8));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+  });
+
+  it('mip and sip STIP writes are dropped while the compare is not pending', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    seedClintMtime(memory, 10n);
+    // Compare above `mtime`: STIP is not pending, so a surviving write would be visible.
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 11n)
+    );
+    publishAndSampleSupervisorTimer(registers, memory);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+
+    // SSIP is software-writable, STIP is not: the same write keeps only SSIP.
+    const stipAndSsip = unsignedBigIntToBytes(new Uint8Array(8), BigInt(STIP) | 0b10n);
+    writeControlAndStatusRegister(registers, MIP, stipAndSsip);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0b10n)
+    );
+    writeControlAndStatusRegister(registers, MIP, new Uint8Array(8));
+    writeControlAndStatusRegister(registers, SIP, stipAndSsip);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0b10n)
+    );
+  });
+
+  it('clearing menvcfg.STCE clears a hardware STIP', () => {
+    const registers = createRegisters();
+    const memory = testMemory(256n);
+    writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
+    seedClintMtime(memory, 10n);
+    writeControlAndStatusRegister(
+      registers,
+      STIMECMP,
+      unsignedBigIntToBytes(new Uint8Array(8), 5n)
+    );
+    publishAndSampleSupervisorTimer(registers, memory);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), BigInt(STIP))
+    );
+
+    // The compare owns STIP only while STCE is set; dropping STCE must not leave it set.
+    writeControlAndStatusRegister(registers, MENVCFG, new Uint8Array(8));
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
+    );
+    // Disabling STCE publishes all-ones, so the wire drops and the compare cannot re-assert it.
+    publishAndSampleSupervisorTimer(registers, memory);
+    assert.equal(isClintSupervisorTimerPending(memory), false);
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MIP),
+      unsignedBigIntToBytes(new Uint8Array(8), 0n)
     );
   });
 });

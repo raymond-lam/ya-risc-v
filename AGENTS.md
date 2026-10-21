@@ -6,9 +6,9 @@ reads a raw program image, starts the emulator and Ink TUI, and wires them over 
 **Work in progress.** RV64I, RV64M, RV64A (LR/SC + AMOs), RV64C (compressed), Zicsr, U/S/M
 privilege (`mret`/`sret`, `medeleg`/`mideleg`, S-mode trap CSRs), synchronous traps
 (`ecall`/`ebreak`/illegal → `mtvec`/`stvec`), interrupt delivery (`mie`/`mip`/`sie`/`sip`,
-run-loop take, `wfi`), a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), and a
-PLIC (priority/enable/claim → `mip.MEIP`/`SEIP`, UART source 10) are implemented; further
-extensions and virtual memory are still to come.
+run-loop take, `wfi`), a CLINT (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), Sstc
+(`menvcfg.STCE` + `stimecmp` → `mip.STIP`), and a PLIC (priority/enable/claim → `mip.MEIP`/`SEIP`,
+UART source 10) are implemented; further extensions and virtual memory are still to come.
 Missing instructions and features are unfinished work, not deliberate scope — don't treat the
 current opcode coverage in `decode/` as the intended ceiling, and don't add code that assumes
 today's ISA is all there will ever be.
@@ -69,7 +69,11 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
 - `src/emulator/irq-level.ts` — host-only Int32 OR of device IRQ levels (`setIrqWire`,
   `waitIrqLevel`); packed as the `irqLevel` region.
 - `src/emulator/clint/` — device API (`index`: MMIO / init / `tickClint` / wire samples); private
-  `layout` / `memory` / `wires` / `time`.
+  `layout` / `memory` / `wires` / `time`. The host slab carries `mtime`/`mtimecmp` plus a
+  `stimecmp` mirror the hart publishes its CSR into; one `updateTimerWiresFromCompare` drives the
+  machine-timer (`MTIP`) and supervisor-timer (`STIP`) wires from those compares (`tickClint`, and
+  immediately on a mirror change), re-reading its inputs and retrying while they move. One
+  machine-wide `mtimecmp` and `stimecmp` mirror: per-hart timers would need per-hart slots.
 - `src/emulator/timer/` — CLINT timebase host `create` / `start` / `stop`, worker `run.ts`
   (ticks `mtime` via `#emulator/clint`).
 - `src/emulator/uart/` — UART 16550 package (`index` public API; private `region` / `queues` /
@@ -107,7 +111,7 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   (dense prefix of the UART region); RBR/THR/IER/IIR/LSR have queue/IRQ side effects
   (`uart/registers.ts` — IER∧(RX ready / TX empty) asserts PLIC source 10). CLINT/PLIC are
   sparse guest windows over packed host slabs (`clint/layout.ts` + `clint/memory.ts` / `plic/`); the hart
-  samples CLINT wires into `mip.MTIP`/`MSIP` and PLIC wires into `mip.MEIP`/`SEIP`. Transfer
+  samples CLINT wires into `mip.MSIP`/`MTIP`/`STIP` and PLIC wires into `mip.MEIP`/`SEIP`. Transfer
   widths (`byteLength` on load/store) are `number`. `bytesToNumber` reads u32 from
   architectural bytes. `signedNumberToBytes`, `unsignedNumberToBytes`, `unsignedBigIntToBytes`,
   and `low32Bytes` pack values into a caller-allocated buffer (same destination/return
@@ -150,27 +154,42 @@ Pre-commit hooks run Prettier, `eslint --fix`, and `tsc` on `src/`.
   `wfi` advances the PC then waits on the shared irq-level Int32 (published OR of device
   IRQ levels; `Atomics.waitAsync` until the level word changes) until
   `mip ∧ mie` is nonzero (wake ignores global
-  `mstatus.MIE`/`SIE`). With `mstatus.TW` set, `wfi` below M raises illegal-instruction
+  `mstatus.MIE`/`SIE`). With `menvcfg.STCE` set, `mip.STIP` is published on a CLINT wire like
+  `mip.MTIP` (the hart publishes its `stimecmp` into the CLINT mirror), so an expiring compare
+  notifies a parked `wfi`. The mirror is machine-wide, so this is single-hart for now. With `mstatus.TW` set, `wfi` below M raises illegal-instruction
   immediately (limit = 0). With `mstatus.TVM` set, S-mode access to `satp` and
   S-mode `sfence.vma` raise illegal-instruction (M still allowed).
-  `mip.MSIP`/`MTIP` (CLINT) and `mip.MEIP`/`SEIP` (PLIC) are not CSR-writable; other pending
-  bits remain software-writable until more devices exist.
+  `mip.MSIP`/`MTIP` (CLINT), `mip.MEIP`/`SEIP` (PLIC), and — while `menvcfg.STCE` is set —
+  `mip.STIP` are not CSR-writable; with STCE clear `STIP` stays software-writable (SBI-style
+  timer delivery), and interrupt delivery is still `mideleg`-based. Other pending bits remain
+  software-writable until more devices exist.
 - **Zicsr checks CSR existence and privilege.** `csrrw`/`csrrs`/`csrrc` and the immediate forms live
   in `system.ts` (SYSTEM opcode group). Only the implemented set is accessible (`mstatus`/
   `sstatus`, `misa`, `medeleg`/`mideleg`, `mie`/`mip`, `sie`/`sip`, `mtvec`/`stvec`, `mscratch`/
   `sscratch`, `mepc`/`sepc`, `mcause`/`scause`, `mtval`/`stval`, `satp`, `pmpcfg0`/`pmpcfg2`,
   `pmpaddr0`–`pmpaddr15`, `cycle`/`time`/`instret`, `mcycle`/`minstret`, `mcounteren`/`scounteren`,
-  `mcountinhibit`, and the identity CSRs); any other
+  `mcountinhibit`, `menvcfg`/`stimecmp`, and the identity CSRs); any other
   index or an access above the current privilege raises illegal-instruction. Writes to read-only
   CSRs also illegal; `csrrs`/`csrrc` with `rs1` = `x0` and `csrrsi`/`csrrci` with a zero immediate
   are read-only and may touch identity CSRs. `sstatus`/`sie`/`sip` are masked aliases of
   `mstatus`/`mie`/`mip`; `misa` is hardwired WARL (RV64IMAC + S/U); `mstatus` MPP is WARL
   (reserved → U); `mie`/`mideleg` WARL to implemented interrupt bits; `mip` WARL preserves
-  hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`. `time` mirrors CLINT `mtime`; `cycle`/`instret` alias
+  hardware `MSIP`/`MTIP`/`SEIP`/`MEIP`, plus `STIP` while `menvcfg.STCE` is set. `time`
+  mirrors CLINT `mtime`; `cycle`/`instret` alias
   `mcycle`/`minstret` and advance together on retire (CPI=1) unless `mcountinhibit` freezes CY/IR;
   traps cancel retire except `ecall`/`ebreak`. `mcounteren`/`scounteren` WARL to CY/TM/IR and gate
-  S/U (U needs both). `satp` is stored but does not enable paging yet; with `mstatus.TVM` set,
-  S-mode `satp` access and S-mode `sfence.vma` are illegal. They snapshot the CSR slot before writing `rd` (the file is live).
+  S/U (U needs both). `stimecmp` (Sstc) is always legal in M; below M it needs `menvcfg.STCE`
+  and `mcounteren.TM`, so with STCE clear an S/U access faults while an M-mode access still reads
+  and writes the slot (STIP just stays software-owned). It
+  resets all-ones (`mip.STIP` would otherwise assert from reset) and the hart publishes it into
+  the CLINT `stimecmp` mirror on every sample pass, where the unsigned `mtime >= stimecmp`
+  compare drives the STIP wire. The publish skips the CLINT when the last published bytes match,
+  so the steady state is one 8-byte compare and no slab access. Single hart only: one `stimecmp`
+  mirror (and one `mtimecmp`) serves the whole machine, so an SMP change needs per-hart slots.
+  `menvcfg` WARL keeps only `STCE`; `ADUE` is read-only zero until Svadu is implemented.
+  `satp` is stored but does not enable paging yet; with
+  `mstatus.TVM` set, S-mode `satp` access and S-mode `sfence.vma` are illegal. They snapshot the
+  CSR slot before writing `rd` (the file is live).
   PMP is 16 entries at 4-byte grain (NA4 legal). `pmpcfg` is WARL (locked bytes stick; W without R
   is dropped). `pmpaddr` keeps address bits 55:2. A locked TOR entry also freezes the previous
   `pmpaddr`. Fetch, load, store, and AMO use the lowest entry that overlaps the access; that entry

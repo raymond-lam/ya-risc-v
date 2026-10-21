@@ -22,8 +22,12 @@
  *   +0x4000  mtimecmp (8 bytes)
  *   +0xbff8  mtime (8 bytes)
  *
- * Host slab (CLINT region's hostIndex, 40 bytes) — not a linear guest map:
- *   [mtime u64][mtimecmp u64][timerWire 1][softwareWire 1][pad 6][epochNs u64][timebaseHz u64]
+ * Host slab (CLINT region's hostIndex, 48 bytes) — not a linear guest map:
+ *   [mtime u64][mtimecmp u64][machineTimerWire 1][machineSoftwareWire 1][supervisorTimerWire 1]
+ *   [pad 5][epochNs u64][timebaseHz u64][stimecmp u64]
+ *
+ * The `stimecmp` u64 is a mirror of the hart's Sstc compare CSR: the hart worker owns that CSR
+ * and publishes it here so the timer worker can drive the supervisor timer wire.
  */
 
 import type { Memory } from '#emulator/memory';
@@ -45,11 +49,13 @@ const CLINT_HOST_MTIME_UINT64_INDEX = 0;
 const CLINT_HOST_MTIMECMP_UINT64_INDEX = 1;
 const CLINT_HOST_EPOCH_NS_UINT64_INDEX = 3;
 const CLINT_HOST_TIMEBASE_HZ_UINT64_INDEX = 4;
-const CLINT_HOST_UINT64_COUNT = 5;
-/** Packed host slab size (time shadows + wires + epoch). */
+const CLINT_HOST_STIMECMP_UINT64_INDEX = 5;
+const CLINT_HOST_UINT64_COUNT = 6;
+/** Packed host slab size (time shadows + wires + epoch + Sstc compare mirror). */
 const CLINT_HOST_BYTE_LENGTH = BigInt(CLINT_HOST_UINT64_COUNT * 8);
-const CLINT_HOST_TIMER_WIRE_OFFSET = 16;
-const CLINT_HOST_SOFTWARE_WIRE_OFFSET = 17;
+const CLINT_HOST_MACHINE_TIMER_WIRE_OFFSET = 16;
+const CLINT_HOST_MACHINE_SOFTWARE_WIRE_OFFSET = 17;
+const CLINT_HOST_SUPERVISOR_TIMER_WIRE_OFFSET = 18;
 
 type ClintTimeRegister = 'mtime' | 'mtimecmp';
 type ClintRegister = 'msip' | ClintTimeRegister;
@@ -88,7 +94,10 @@ const clintOffsetToRegister = (
   return null;
 };
 
-/** `BigUint64Array` over the CLINT host slab (`mtime` / `mtimecmp` / pad / `epochNs` / timebase). */
+/**
+ * `BigUint64Array` over the CLINT host slab
+ * (`mtime` / `mtimecmp` / wires+pad / `epochNs` / timebase / `stimecmp`).
+ */
 const clintHostUint64s = (memory: Memory): BigUint64Array =>
   new BigUint64Array(
     memory.bytes.buffer,
@@ -101,10 +110,12 @@ export {
   CLINT_HOST_BYTE_LENGTH,
   CLINT_HOST_EPOCH_NS_UINT64_INDEX,
   CLINT_HOST_MTIMECMP_UINT64_INDEX,
+  CLINT_HOST_STIMECMP_UINT64_INDEX,
+  CLINT_HOST_SUPERVISOR_TIMER_WIRE_OFFSET,
   CLINT_HOST_TIMEBASE_HZ_UINT64_INDEX,
   CLINT_HOST_MTIME_UINT64_INDEX,
-  CLINT_HOST_SOFTWARE_WIRE_OFFSET,
-  CLINT_HOST_TIMER_WIRE_OFFSET,
+  CLINT_HOST_MACHINE_SOFTWARE_WIRE_OFFSET,
+  CLINT_HOST_MACHINE_TIMER_WIRE_OFFSET,
   CLINT_REGION_ID,
   CLINT_REGISTER_SIZE,
   clintByteIndex,
