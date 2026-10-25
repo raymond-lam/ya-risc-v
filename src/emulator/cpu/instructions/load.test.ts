@@ -17,15 +17,23 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
-import { lb, lbu, lw } from '#emulator/cpu/instructions/load';
+import { lb, lbu, ld, lw } from '#emulator/cpu/instructions/load';
 import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
+  setProgramCounter,
+  snapshotControlAndStatusRegister,
+  writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
   FOUR_BYTES,
+  MEPC,
+  MCAUSE,
+  MTVAL,
+  MTVEC,
 } from '#emulator/cpu/registers';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+import { CAUSE_LOAD_ACCESS_FAULT } from '#emulator/cpu/trap';
+import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 describe('load', () => {
   it('lb sign-extends and lbu zero-extends', () => {
@@ -93,10 +101,91 @@ describe('load', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
+  it('lb from an unmapped address below RAM-sized low memory traps with cause 5', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    // 256-byte RAM covers [0, 0x100); 0x800 is an unmapped hole below the
+    // syscon window at 0x10_0000.
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x800, 32));
+
+    lb(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_ACCESS_FAULT, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x800n)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+    // The trap aborted the load: rd keeps its reset value.
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), new Uint8Array(8));
+  });
+
+  it('ld past the end of DRAM traps with cause 5 and does not advance pc', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    // Aligned, but the last byte falls past the 256-byte RAM window.
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
+
+    ld(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_ACCESS_FAULT, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x100n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), new Uint8Array(8));
+  });
+
   it('lb does not wrap a 2^32+offset address into low memory', () => {
     const guest = testMemory(256n);
     guest.bytes[16] = 0x42;
     const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
     writeGeneralPurposeRegister(registers, 2, new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0]));
 
     lb(
@@ -109,9 +198,44 @@ describe('load', () => {
       },
       FOUR_BYTES
     );
+    // The unmapped high address faults instead of wrapping into low memory.
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_ACCESS_FAULT, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x1_0000_0010n)
+    );
+    // The trap aborts the load, so rd keeps its reset value too.
+    assert.deepEqual(readGeneralPurposeRegister(registers, 1), new Uint8Array(8));
+    assert.equal(guest.bytes[16], 0x42);
+  });
+
+  it('ld from mapped CLINT mtimecmp MMIO loads the reset value and advances pc', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    // mtimecmp sits at CLINT base + 0x4000; initializeClint resets it to all-ones.
+    writeGeneralPurposeRegister(
+      registers,
+      2,
+      signedNumberToBytes(new Uint8Array(8), 0x0200_4000, 32)
+    );
+
+    ld(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
+
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
-      signedNumberToBytes(new Uint8Array(8), 0, 32)
+      unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });

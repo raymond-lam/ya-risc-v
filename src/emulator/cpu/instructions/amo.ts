@@ -119,7 +119,11 @@ const trapIfPmpDeniesAtomic = ({
   return true;
 };
 
-/** Unmapped or non-RAM after the address was aligned. LR is a load fault. */
+/**
+ * Fault when the atomic helpers refused the access — unmapped, straddling a region end, or
+ * mapped-but-non-RAM/MMIO (misalignment is trapped earlier). LR faults as a load; SC and AMO
+ * fault as a store.
+ */
 const trapAtomicAccessFault = ({
   registers,
   address,
@@ -136,7 +140,7 @@ const trapAtomicAccessFault = ({
   );
 };
 
-/** lr.w: rd = sext(mem[rs1]); reserve 32 bits. Misaligned / non-RAM → trap (no reservation). */
+/** lr.w: rd = sext(mem[rs1]); reserve 32 bits. Misaligned / non-RAM / unmapped → trap (no reservation). */
 const lrW = (
   registers: Registers,
   memory: Memory,
@@ -168,7 +172,7 @@ const lrW = (
   advanceProgramCounter(registers, instructionByteLength);
 };
 
-/** lr.d: rd = mem[rs1]; reserve 64 bits. Misaligned / non-RAM → trap (no reservation). */
+/** lr.d: rd = mem[rs1]; reserve 64 bits. Misaligned / non-RAM / unmapped → trap (no reservation). */
 const lrD = (
   registers: Registers,
   memory: Memory,
@@ -201,7 +205,7 @@ const lrD = (
 
 /**
  * sc.w: if reservation matches, mem[rs1] = rs2[31:0], rd = 0; else rd ≠ 0.
- * Misaligned / non-RAM → trap before taking the reservation.
+ * Misaligned / non-RAM / unmapped → trap before taking the reservation.
  */
 const scW = (
   registers: Registers,
@@ -244,7 +248,7 @@ const scW = (
 
 /**
  * sc.d: if reservation matches, mem[rs1] = rs2, rd = 0; else rd ≠ 0.
- * Misaligned / non-RAM → trap before taking the reservation.
+ * Misaligned / non-RAM / unmapped → trap before taking the reservation.
  */
 const scD = (
   registers: Registers,

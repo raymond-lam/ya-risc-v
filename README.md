@@ -112,8 +112,10 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 
 - **Extensions.** No F/D (floating point).
 - **Virtual memory.** `satp` is stored; Sv39 page walks are not implemented yet.
-- **Alignment and bounds checks.** Misaligned accesses are not faulted, and out-of-range loads read
-  as zero instead of trapping.
+- **Alignment and bounds checks.** Misaligned scalar accesses are emulated rather than faulted, but
+  accesses outside a mapped guest window — including ones straddling a region end — trap: loads
+  cause 5, stores/AMOs cause 7, instruction fetches cause 1, with `mtval` holding the faulting
+  address.
 - **Program loading.** Images are flat binaries copied to the RAM base (CLI default `0x80000000`);
   there is no ELF loader or multi-payload boot (OpenSBI + kernel). The device tree is generated
   from the guest map and placed in DRAM for the `a1` handoff.
@@ -153,9 +155,9 @@ npm run dev -- --ram-size 134217728 path/to/image.bin
 
 Because traps vector to `mtvec`, a program that executes `ecall`, `ebreak`, or an unrecognized
 encoding continues at the handler if one is installed; with `mtvec` left at 0 the hart re-fetches
-from address 0 (unmapped — typically a repeated illegal-instruction trap unless a handler
-advances). Images must be linked for the RAM base (default `0x80000000`); zeros past the image in DRAM
-still decode as illegal instructions if execution falls through.
+from address 0 (unmapped — typically a repeated instruction access fault, cause 1, unless a
+handler advances). Images must be linked for the RAM base (default `0x80000000`); zeros past the
+image in DRAM still decode as illegal instructions if execution falls through.
 
 To build and run the compiled output instead (no `tsx` required):
 

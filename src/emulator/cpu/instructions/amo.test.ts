@@ -43,6 +43,9 @@ import {
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
   FOUR_BYTES,
+  MTVEC,
+  MCAUSE,
+  MTVAL,
 } from '#emulator/cpu/registers';
 import {
   CAUSE_LOAD_ACCESS_FAULT,
@@ -607,5 +610,72 @@ describe('amo', () => {
       signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ACCESS_FAULT, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
+  });
+
+  it('aligned lr.d to an unmapped address below the RAM base traps with cause 5', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x6000, 32)
+    );
+    // Aligned hole below the syscon window (RAM covers [0, 0x100)).
+    writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 0x800n));
+
+    lrD(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 0,
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_ACCESS_FAULT, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x800n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x6000);
+    assert.deepEqual(readGeneralPurposeRegister(registers, 3), new Uint8Array(8));
+  });
+
+  it('aligned sc.d past the end of DRAM traps with cause 7', () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x6000, 32)
+    );
+    // Aligned, but the last byte falls past the 256-byte RAM window.
+    writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 0x100n));
+
+    scD(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 2,
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ACCESS_FAULT, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x100n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x6000);
   });
 });
