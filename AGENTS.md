@@ -127,7 +127,9 @@ masks, read-only checks, access privilege). The actionable rules for an agent:
   checked at the instruction/fetch layer (`denyLoad`/`denyStore`/`denyAmo`, and the fetch
   loop in `run.ts`) — the lowest overlapping entry must cover the whole access; M ignores
   unlocked entries, S/U fault when nothing matches; `mstatus.MPRV` redirects loads/stores.
-  `memory.ts` performs **no** privilege or protection checks.
+  Unmapped and straddling guest accesses fault at the same layer (loads 5, stores/AMOs 7,
+  fetches 1) via the `guestAccessIsMapped` mapping query; `memory.ts` itself still performs
+  **no** privilege or protection checks.
 
 **Instruction retire is a protocol, not a side effect.** The run loop calls
 `beginInstructionRetire` before execute and `commitInstructionRetire` after (unless

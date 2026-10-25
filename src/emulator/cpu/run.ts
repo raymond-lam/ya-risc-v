@@ -35,12 +35,27 @@ import {
   trapIfInstructionAddressMisaligned,
 } from '#emulator/cpu/trap';
 import type { CpuWorkerData, Registers } from '#emulator/cpu/types';
-import { loadBytes, type Memory } from '#emulator/memory';
+import type { ReadonlyUint8Array } from '#types';
+import { guestAccessIsMapped, loadBytes, type Memory } from '#emulator/memory';
 
 const isThenable = (value: unknown): value is PromiseLike<void> =>
   typeof value === 'object' &&
   value !== null &&
   typeof (value as PromiseLike<void>).then === 'function';
+
+/** Fault (instruction access fault at the fetch address) when the range is unmapped. */
+const trapIfFetchUnmapped = (
+  registers: Registers,
+  memory: Memory,
+  address: ReadonlyUint8Array,
+  byteLength: number
+): boolean => {
+  if (guestAccessIsMapped({ memory, address, byteLength })) {
+    return false;
+  }
+  enterTrap(registers, CAUSE_INSTRUCTION_ACCESS_FAULT, copyBytes(new Uint8Array(8), address));
+  return true;
+};
 
 /** Fetch the instruction at the PC. */
 const fetchInstruction = (
@@ -54,6 +69,9 @@ const fetchInstruction = (
   // A 16-bit instruction stops after this and must not fault on bytes it does not fetch.
   if (physicalMemoryAccessDenied({ registers, address: pc, byteLength: 2, access: 'fetch' })) {
     enterTrap(registers, CAUSE_INSTRUCTION_ACCESS_FAULT, copyBytes(new Uint8Array(8), pc));
+    return false;
+  }
+  if (trapIfFetchUnmapped(registers, memory, pc, 2)) {
     return false;
   }
   loadBytes({
@@ -70,6 +88,9 @@ const fetchInstruction = (
   // allow an instruction that straddles an execute boundary.
   if (physicalMemoryAccessDenied({ registers, address: pc, byteLength: 4, access: 'fetch' })) {
     enterTrap(registers, CAUSE_INSTRUCTION_ACCESS_FAULT, copyBytes(new Uint8Array(8), pc));
+    return false;
+  }
+  if (trapIfFetchUnmapped(registers, memory, pc, 4)) {
     return false;
   }
   loadBytes({

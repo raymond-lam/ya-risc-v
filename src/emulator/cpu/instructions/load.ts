@@ -25,7 +25,7 @@ import { CAUSE_LOAD_ACCESS_FAULT, enterTrap } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
-import { loadBytes } from '#emulator/memory';
+import { guestAccessIsMapped, loadBytes } from '#emulator/memory';
 
 type LoadArgs = {
   destinationRegister: number;
@@ -40,12 +40,20 @@ const loadEffectiveAddress = (registers: Registers, args: LoadArgs): ReadonlyUin
     args.immediate
   );
 
-/** Load access fault (cause 5) when PMP denies the access. Does not write rd or advance the PC. */
+/**
+ * Load access fault (cause 5) when the address is unmapped or PMP denies the
+ * access. Does not write rd or advance the PC.
+ */
 const denyLoad = (
   registers: Registers,
+  memory: Memory,
   address: ReadonlyUint8Array,
   byteLength: number
 ): boolean => {
+  if (!guestAccessIsMapped({ memory, address, byteLength })) {
+    enterTrap(registers, CAUSE_LOAD_ACCESS_FAULT, address);
+    return true;
+  }
   if (!physicalMemoryAccessDenied({ registers, address, byteLength, access: 'load' })) {
     return false;
   }
@@ -61,7 +69,7 @@ const lb = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = loadEffectiveAddress(registers, args);
-  if (denyLoad(registers, address, 1)) {
+  if (denyLoad(registers, memory, address, 1)) {
     return;
   }
   const loaded = new Uint8Array(8);
@@ -83,7 +91,7 @@ const lh = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = loadEffectiveAddress(registers, args);
-  if (denyLoad(registers, address, 2)) {
+  if (denyLoad(registers, memory, address, 2)) {
     return;
   }
   const loaded = new Uint8Array(8);
@@ -105,7 +113,7 @@ const lw = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = loadEffectiveAddress(registers, args);
-  if (denyLoad(registers, address, 4)) {
+  if (denyLoad(registers, memory, address, 4)) {
     return;
   }
   const loaded = new Uint8Array(8);
@@ -127,7 +135,7 @@ const ld = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = loadEffectiveAddress(registers, args);
-  if (denyLoad(registers, address, 8)) {
+  if (denyLoad(registers, memory, address, 8)) {
     return;
   }
   const loaded = new Uint8Array(8);
@@ -149,7 +157,7 @@ const lbu = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = loadEffectiveAddress(registers, args);
-  if (denyLoad(registers, address, 1)) {
+  if (denyLoad(registers, memory, address, 1)) {
     return;
   }
   const loaded = new Uint8Array(8);
@@ -171,7 +179,7 @@ const lhu = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = loadEffectiveAddress(registers, args);
-  if (denyLoad(registers, address, 2)) {
+  if (denyLoad(registers, memory, address, 2)) {
     return;
   }
   const loaded = new Uint8Array(8);
@@ -193,7 +201,7 @@ const lwu = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = loadEffectiveAddress(registers, args);
-  if (denyLoad(registers, address, 4)) {
+  if (denyLoad(registers, memory, address, 4)) {
     return;
   }
   const loaded = new Uint8Array(8);

@@ -234,7 +234,29 @@ const resolveGuestAddressToRegionAndOffset = (
   if (address < base || address >= base + region.guestByteLength) {
     return null;
   }
-  return { regionId, offset: address - base };
+  const offset = address - base;
+  return { regionId, offset };
+};
+
+/**
+ * True when every byte of `[address, address + byteLength)` resolves inside a
+ * guest-mapped region, so an access that straddles a region end counts as unmapped.
+ */
+const guestAccessIsMapped = ({
+  memory,
+  address,
+  byteLength,
+}: {
+  memory: Memory;
+  address: ReadonlyUint8Array;
+  byteLength: number;
+}): boolean => {
+  const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+  if (resolved === null) {
+    return false;
+  }
+  const region = memory.regions.get(resolved.regionId);
+  return region !== undefined && resolved.offset + BigInt(byteLength) <= region.guestByteLength;
 };
 
 type RegionLoadBytes = (args: {
@@ -469,6 +491,7 @@ export {
   atomicLoadBytes,
   atomicStoreBytes,
   createMemory,
+  guestAccessIsMapped,
   loadBytes,
   storeBytes,
 };

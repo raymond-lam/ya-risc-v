@@ -27,6 +27,7 @@ import {
   atomicLoadBytes,
   atomicStoreBytes,
   createMemory,
+  guestAccessIsMapped,
   loadBytes,
   storeBytes,
   type Memory,
@@ -132,6 +133,64 @@ const setUartPlicPending = (memory: Memory, pending: boolean): void => {
 };
 
 describe('memory', () => {
+  it('guestAccessIsMapped accepts mapped ranges and rejects holes, past-end, and straddling ones', () => {
+    const memory = createTestMemory(256n);
+    const ramBase = new Uint8Array(8) as ReadonlyUint8Array;
+    assert.ok(guestAccessIsMapped({ memory, address: ramBase, byteLength: 8 }));
+    // Whole range inside RAM near the end.
+    assert.ok(
+      guestAccessIsMapped({
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0xf8n),
+        byteLength: 8,
+      })
+    );
+    // Hole between RAM end (0x100) and syscon (0x10_0000).
+    assert.equal(
+      guestAccessIsMapped({
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x800n),
+        byteLength: 1,
+      }),
+      false
+    );
+    // Halfword at the last byte of RAM: first byte mapped, second past the end.
+    assert.equal(
+      guestAccessIsMapped({
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0xffn),
+        byteLength: 2,
+      }),
+      false
+    );
+    // First byte mapped, last byte past the RAM window end.
+    assert.equal(
+      guestAccessIsMapped({
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0xfen),
+        byteLength: 4,
+      }),
+      false
+    );
+    // Past the end of DRAM entirely.
+    assert.equal(
+      guestAccessIsMapped({
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x100n),
+        byteLength: 8,
+      }),
+      false
+    );
+    // Sparse MMIO window base resolves.
+    assert.ok(
+      guestAccessIsMapped({
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x0200_0000n),
+        byteLength: 8,
+      })
+    );
+  });
+
   it('createMemory packs 8-byte-aligned regions into one SharedArrayBuffer', () => {
     const memory = createTestMemory(64n);
     const ram = memory.regions.get(RAM_REGION_ID);

@@ -21,7 +21,7 @@ import { CAUSE_STORE_AMO_ACCESS_FAULT, enterTrap } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
-import { storeBytes } from '#emulator/memory';
+import { guestAccessIsMapped, storeBytes } from '#emulator/memory';
 
 type StoreArgs = {
   sourceRegister1: number;
@@ -37,14 +37,19 @@ const storeEffectiveAddress = (registers: Registers, args: StoreArgs): ReadonlyU
   );
 
 /**
- * Store/AMO access fault (cause 7) when PMP denies the store.
- * Does not write memory or advance the PC.
+ * Store/AMO access fault (cause 7) when the address is unmapped or PMP denies
+ * the store. Does not write memory or advance the PC.
  */
 const denyStore = (
   registers: Registers,
+  memory: Memory,
   address: ReadonlyUint8Array,
   byteLength: number
 ): boolean => {
+  if (!guestAccessIsMapped({ memory, address, byteLength })) {
+    enterTrap(registers, CAUSE_STORE_AMO_ACCESS_FAULT, address);
+    return true;
+  }
   if (!physicalMemoryAccessDenied({ registers, address, byteLength, access: 'store' })) {
     return false;
   }
@@ -60,7 +65,7 @@ const sb = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = storeEffectiveAddress(registers, args);
-  if (denyStore(registers, address, 1)) {
+  if (denyStore(registers, memory, address, 1)) {
     return;
   }
   storeBytes({
@@ -80,7 +85,7 @@ const sh = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = storeEffectiveAddress(registers, args);
-  if (denyStore(registers, address, 2)) {
+  if (denyStore(registers, memory, address, 2)) {
     return;
   }
   storeBytes({
@@ -100,7 +105,7 @@ const sw = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = storeEffectiveAddress(registers, args);
-  if (denyStore(registers, address, 4)) {
+  if (denyStore(registers, memory, address, 4)) {
     return;
   }
   storeBytes({
@@ -120,7 +125,7 @@ const sd = (
   instructionByteLength: ReadonlyUint8Array
 ): void => {
   const address = storeEffectiveAddress(registers, args);
-  if (denyStore(registers, address, 8)) {
+  if (denyStore(registers, memory, address, 8)) {
     return;
   }
   storeBytes({
