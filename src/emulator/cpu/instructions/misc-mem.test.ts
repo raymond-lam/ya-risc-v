@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
 import decode from '#emulator/cpu/decode';
-import { fence, fenceI } from '#emulator/cpu/instructions/misc-mem';
+import { fenceI } from '#emulator/cpu/instructions/misc-mem';
 import { createRegisters, readProgramCounter, FOUR_BYTES } from '#emulator/cpu/registers';
 import { bytesToNumber } from '#utils/bytes';
 
@@ -33,23 +33,24 @@ const instructionBytes = (encoding: number): Uint8Array => {
 };
 
 describe('misc-mem', () => {
-  it('fence advances pc', () => {
-    const registers = createRegisters();
-    fence(registers, testMemory(256n), FOUR_BYTES);
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
-  });
-
-  it('fence.i advances pc', () => {
-    const registers = createRegisters();
-    fenceI(registers, testMemory(256n), FOUR_BYTES);
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
-  });
-
-  it('decodes fence.i and advances pc', () => {
-    const registers = createRegisters();
+  it('fence and fence.i decode and advance pc', () => {
     const memory = testMemory(256n);
-    const [execute, instructionByteLength] = decode(instructionBytes(0x0000100f));
-    execute(registers, memory, instructionByteLength);
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+
+    // fence: funct3=0, opcode 0x0f.
+    const [fenceExecute, fenceLength] = decode(instructionBytes(0x0000000f));
+    const fenceRegisters = createRegisters();
+    fenceExecute(fenceRegisters, memory, fenceLength);
+    assert.equal(bytesToNumber(readProgramCounter(fenceRegisters)), 4);
+
+    // fence.i.
+    const [fenceIExecute, fenceILength] = decode(instructionBytes(0x0000100f));
+    const fenceIRegisters = createRegisters();
+    fenceIExecute(fenceIRegisters, memory, fenceILength);
+    assert.equal(bytesToNumber(readProgramCounter(fenceIRegisters)), 4);
+
+    // Direct fence.i call also advances pc.
+    const directRegisters = createRegisters();
+    fenceI(directRegisters, testMemory(256n), FOUR_BYTES);
+    assert.equal(bytesToNumber(readProgramCounter(directRegisters)), 4);
   });
 });

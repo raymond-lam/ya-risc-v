@@ -98,7 +98,7 @@ describe('reservation monitor', () => {
     assert.equal(slotValid(memory, 0), false);
   });
 
-  it('overlapping store from another hart waits for an in-flight SC then invalidates', () => {
+  it('an overlapping store from another hart invalidates the reservation once the SC window releases', () => {
     const memory = createTestMemory(256n);
     const address = addressAt(32);
     setReservation(memory, 0, address, 4);

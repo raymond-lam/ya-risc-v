@@ -15,10 +15,12 @@
  */
 
 import assert from 'node:assert/strict';
+import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { isClintMachineTimerPending } from '#emulator/clint';
 import { loadBytes, storeBytes } from '#emulator/memory';
+import { create as createTerminal } from '#emulator/terminal';
 import { create } from '#emulator/timer';
 import createTestMemory from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
@@ -67,5 +69,18 @@ describe('timer worker', () => {
       timer.stop();
       await timer;
     }
+  });
+
+  it('timer and terminal stop before start is idempotent', async () => {
+    const memory = createTestMemory(256n);
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const timer = create({ memory });
+    const terminal = createTerminal({ memory, stdin, stdout });
+    timer.stop();
+    terminal.stop();
+    timer.stop();
+    terminal.stop();
+    await Promise.all([timer, terminal]);
   });
 });

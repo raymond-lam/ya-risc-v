@@ -517,7 +517,7 @@ describe('system', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
   });
 
-  it('csrrs and csrrc with rs1 = x0 do not write the CSR', () => {
+  it('csrrs/csrrc with rs1 = x0 and csrrsi/csrrci with a zero immediate do not write the CSR', () => {
     const registers = createRegisters();
     writeControlAndStatusRegister(
       registers,
@@ -551,6 +551,34 @@ describe('system', () => {
       FOUR_BYTES
     );
     assert.deepEqual(readGeneralPurposeRegister(registers, 2), mstatusBytes(0x5));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
+
+    csrrsi(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 3,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+        controlAndStatusRegister: MSTATUS,
+        instructionWord: 0,
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 3), mstatusBytes(0x5));
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
+
+    csrrci(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 4,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+        controlAndStatusRegister: MSTATUS,
+        instructionWord: 0,
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 4), mstatusBytes(0x5));
     assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
   });
 
@@ -605,43 +633,6 @@ describe('system', () => {
     assert.deepEqual(readGeneralPurposeRegister(registers, 3), mstatusBytes(0b1111));
     assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0b1100));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 12);
-  });
-
-  it('csrrsi and csrrci with a zero immediate do not write the CSR', () => {
-    const registers = createRegisters();
-    writeControlAndStatusRegister(
-      registers,
-      MSTATUS,
-      signedNumberToBytes(new Uint8Array(8), 0x5, 32)
-    );
-
-    csrrsi(
-      registers,
-      testMemory(256n),
-      {
-        destinationRegister: 1,
-        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-        controlAndStatusRegister: MSTATUS,
-        instructionWord: 0,
-      },
-      FOUR_BYTES
-    );
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), mstatusBytes(0x5));
-    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
-
-    csrrci(
-      registers,
-      testMemory(256n),
-      {
-        destinationRegister: 2,
-        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
-        controlAndStatusRegister: MSTATUS,
-        instructionWord: 0,
-      },
-      FOUR_BYTES
-    );
-    assert.deepEqual(readGeneralPurposeRegister(registers, 2), mstatusBytes(0x5));
-    assert.deepEqual(snapshotControlAndStatusRegister(registers, MSTATUS), mstatusBytes(0x5));
   });
 
   it('csrrw to an identity CSR raises illegal-instruction', () => {
@@ -756,32 +747,6 @@ describe('system', () => {
     );
     assert.deepEqual(readGeneralPurposeRegister(registers, 2), hardwired);
     assert.deepEqual(snapshotControlAndStatusRegister(registers, MISA), hardwired);
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
-  });
-
-  it('csrrw can clear satp from M-mode (OpenSBI path)', () => {
-    const registers = createRegisters();
-    writeControlAndStatusRegister(
-      registers,
-      SATP,
-      unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_0001n)
-    );
-    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0, 32));
-    csrrw(
-      registers,
-      testMemory(256n),
-      {
-        destinationRegister: 2,
-        sourceRegister1: 1,
-        controlAndStatusRegister: SATP,
-        instructionWord: 0,
-      },
-      FOUR_BYTES
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, SATP),
-      signedNumberToBytes(new Uint8Array(8), 0, 32)
-    );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
@@ -913,9 +878,33 @@ describe('system', () => {
       signedNumberToBytes(new Uint8Array(8), 0, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+
+    // OpenSBI path: a 64-bit paging-enabled satp clears to 0 the same way.
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_0001n)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    csrrw(
+      registers,
+      testMemory(256n),
+      {
+        destinationRegister: 2,
+        sourceRegister1: 1,
+        controlAndStatusRegister: SATP,
+        instructionWord: 0,
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, SATP),
+      signedNumberToBytes(new Uint8Array(8), 0, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('csrrw can read and write mscratch and sscratch at sufficient privilege', () => {
+  it('csrrw reaches mscratch/sscratch at sufficient privilege and traps in S/U as required', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0x55aa, 32));
     csrrw(
@@ -959,12 +948,10 @@ describe('system', () => {
       snapshotControlAndStatusRegister(registers, SSCRATCH),
       signedNumberToBytes(new Uint8Array(8), 0x1234, 32)
     );
-  });
 
-  it('mscratch from S-mode and sscratch from U-mode raise illegal-instruction', () => {
-    const registers = createRegisters();
-    const mscratchInstructionWord = 0x340010f3;
+    // S-mode → mscratch traps.
     setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    const mscratchInstructionWord = 0x340010f3;
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     writeControlAndStatusRegister(
       registers,
@@ -1006,6 +993,7 @@ describe('system', () => {
       [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
     );
 
+    // U-mode → sscratch traps.
     const sscratchInstructionWord = 0x140010f3;
     setPrivilegeMode(registers, PRIVILEGE_USER);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
@@ -1477,12 +1465,18 @@ describe('system', () => {
   it('decodes sfence.vma and advances pc', () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
-    // sfence.vma x0, x0
+    // sfence.vma x0, x0 (M-mode)
     runEncoded(0x12000073, registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
-    // sfence.vma x1, x2
+    // sfence.vma x1, x2 (M-mode)
     runEncoded(0x12208073, registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
+
+    // The same decoded thunk runs in S-mode and still advances pc.
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
+    runEncoded(0x12000073, registers, memory);
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 
   it('sfence.vma with rd set raises illegal-instruction', () => {
@@ -1526,14 +1520,6 @@ describe('system', () => {
       instructionWord
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x1000);
-  });
-
-  it('sfence.vma in S-mode advances pc', () => {
-    const registers = createRegisters();
-    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
-    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
-    sfenceVma(registers, testMemory(256n), { instructionWord: 0x12000073 }, FOUR_BYTES);
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 
   it('sfence.vma in S-mode with mstatus.TVM set raises illegal-instruction', () => {

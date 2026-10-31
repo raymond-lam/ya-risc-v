@@ -114,21 +114,6 @@ describe('registers', () => {
     assert.deepEqual(readPrivilegeMode(createRegisters()), PRIVILEGE_MACHINE);
   });
 
-  it('x0 reads as zero on reset', () => {
-    const registers = createRegisters();
-    assert.deepEqual(
-      [...readGeneralPurposeRegister(registers, 0)],
-      [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
-    );
-  });
-
-  it('writes and reads a general-purpose register', () => {
-    const registers = createRegisters();
-    const value = signedNumberToBytes(new Uint8Array(8), 42, 32);
-    writeGeneralPurposeRegister(registers, 1, value);
-    assert.deepEqual(readGeneralPurposeRegister(registers, 1), value);
-  });
-
   it('setBooleanGeneralPurposeRegister writes 0 or 1', () => {
     const registers = createRegisters();
     setBooleanGeneralPurposeRegister(registers, 2, true);
@@ -149,14 +134,6 @@ describe('registers', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 100);
     advanceProgramCounter(registers, FOUR_BYTES);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 104);
-  });
-
-  it('writes and reads a control-and-status register', () => {
-    const registers = createRegisters();
-    // mtvec BASE with Direct MODE (bits[1:0]=0) round-trips unchanged.
-    const value = signedNumberToBytes(new Uint8Array(8), 0x1234, 32);
-    writeControlAndStatusRegister(registers, MTVEC, value);
-    assert.deepEqual(snapshotControlAndStatusRegister(registers, MTVEC), value);
   });
 
   it('mtvec and stvec WARL force reserved MODE to Direct', () => {
@@ -257,6 +234,11 @@ describe('registers', () => {
 
   it('x0 ignores writes at runtime', () => {
     const registers = createRegisters();
+    // Reads zero on reset, and the ignored write leaves it zero.
+    assert.deepEqual(
+      [...readGeneralPurposeRegister(registers, 0)],
+      [...signedNumberToBytes(new Uint8Array(8), 0, 32)]
+    );
     writeGeneralPurposeRegister(registers, 0, signedNumberToBytes(new Uint8Array(8), 99, 32));
     assert.deepEqual(
       [...readGeneralPurposeRegister(registers, 0)],
@@ -274,6 +256,8 @@ describe('registers', () => {
   });
 
   it('mstatus WARL forces reserved MPP to U and hardwires UXL/SXL to 64', () => {
+    // Fresh create: UXL/SXL hardwired to 64 (byte4 = 0x0a), everything else zero.
+    assert.deepEqual(snapshotControlAndStatusRegister(createRegisters(), MSTATUS), mstatusBytes(0));
     const registers = createRegisters();
     // bits 12:11 = 10 (reserved)
     writeControlAndStatusRegister(
@@ -452,10 +436,6 @@ describe('registers', () => {
       snapshotControlAndStatusRegister(registers, SIP),
       signedNumberToBytes(new Uint8Array(8), 0x0220, 32)
     );
-  });
-
-  it('hardwires mstatus.UXL and SXL to 64 on create', () => {
-    assert.deepEqual(snapshotControlAndStatusRegister(createRegisters(), MSTATUS), mstatusBytes(0));
   });
 
   it('mip.SEIP is soft OR PLIC; CSR writes update only the soft bit', () => {

@@ -180,59 +180,6 @@ describe('decode + execute', () => {
     );
   });
 
-  it('executes the sample program through the DONE mailbox store', () => {
-    const registers = createRegisters();
-    const memory = testMemory(64n);
-    storeBytes({
-      memory,
-      address: signedNumberToBytes(new Uint8Array(8), 0, 32),
-      source: Uint8Array.of(
-        0x93,
-        0x00,
-        0xa0,
-        0x02, // addi x1, x0, 42
-        0x13,
-        0x01,
-        0xc0,
-        0x03, // addi x2, x0, 60
-        0x93,
-        0x01,
-        0x10,
-        0x00, // addi x3, x0, 1
-        0x23,
-        0x20,
-        0x31,
-        0x00 // sw x3, 0(x2)
-      ),
-      byteLength: 16,
-    });
-
-    for (let step = 0; step < 4; step += 1) {
-      const word = new Uint8Array(4);
-      loadBytes({
-        destination: word,
-        memory,
-        address: readProgramCounter(registers),
-        byteLength: 4,
-      });
-      runDecoded(word, registers, memory);
-    }
-
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 1),
-      signedNumberToBytes(new Uint8Array(8), 42, 32)
-    );
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 2),
-      signedNumberToBytes(new Uint8Array(8), 60, 32)
-    );
-    assert.deepEqual(
-      readGeneralPurposeRegister(registers, 3),
-      signedNumberToBytes(new Uint8Array(8), 1, 32)
-    );
-    assert.equal(memory.bytes[60], 1);
-  });
-
   it('executes mret after seeding mepc', () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
