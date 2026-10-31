@@ -24,7 +24,13 @@
 
 import { CLINT_REGION_ID } from '#emulator/clint';
 import type { Memory } from '#emulator/memory';
-import { PLIC_MAX_SOURCE, PLIC_REGION_ID, PLIC_SOURCE_UART } from '#emulator/plic';
+import {
+  PLIC_MAX_SOURCE,
+  PLIC_REGION_ID,
+  PLIC_SOURCE_UART,
+  PLIC_SOURCE_VIRTIO,
+} from '#emulator/plic';
+import { VIRTIO_REGION_ID } from '#emulator/virtio';
 import { copyIntoRam, RAM_REGION_ID } from '#emulator/ram';
 import {
   SYSCON_POWEROFF_OFFSET,
@@ -300,6 +306,29 @@ const uartNode = (window: GuestWindow, plic: GuestWindow | undefined): FdtNode =
 };
 
 /**
+ * VirtIO-MMIO block device node at `window`.
+ * `interrupt-parent` is included when `plic` is present.
+ */
+const virtioNode = (window: GuestWindow, plic: GuestWindow | undefined): FdtNode => {
+  const address = bytesToBigInt(window.guestAddress);
+  const properties = [
+    property(PROP_COMPATIBLE, cstring('virtio,mmio')),
+    property(PROP_REG, reg64(address, window.guestByteLength)),
+  ];
+  if (plic !== undefined) {
+    properties.push(
+      property('interrupt-parent', u32(PHANDLE_PLIC)),
+      property('interrupts', u32(PLIC_SOURCE_VIRTIO))
+    );
+  }
+  return {
+    name: `virtio@${unitAddress(address)}`,
+    properties,
+    children: [],
+  };
+};
+
+/**
  * Root node. `/cpus` is always present (`timebase-frequency` is one big-endian cell).
  * `/memory`, each `/soc` device, and `/chosen` are included for regions present in the map.
  */
@@ -312,6 +341,7 @@ const machineNode = (
   const clint = guestRegions.get(CLINT_REGION_ID);
   const plic = guestRegions.get(PLIC_REGION_ID);
   const syscon = guestRegions.get(SYSCON_REGION_ID);
+  const virtio = guestRegions.get(VIRTIO_REGION_ID);
   const socChildren: FdtNode[] = [];
   if (clint !== undefined) {
     socChildren.push(clintNode(clint));
@@ -324,6 +354,9 @@ const machineNode = (
   }
   if (syscon !== undefined) {
     socChildren.push(sysconNode(syscon));
+  }
+  if (virtio !== undefined) {
+    socChildren.push(virtioNode(virtio, plic));
   }
   const children: FdtNode[] = [
     {

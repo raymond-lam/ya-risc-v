@@ -36,8 +36,17 @@ import {
   SYSCON_REGION_ID,
 } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import {
+  VIRTIO_GUEST_BYTE_LENGTH,
+  VIRTIO_HOST_BYTE_LENGTH,
+  VIRTIO_REGION_ID,
+} from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
+
+/** Convert a guest address BigInt to a Uint8Array. */
+const guestAddress = (value: bigint): ReadonlyUint8Array =>
+  unsignedBigIntToBytes(new Uint8Array(8), value) as ReadonlyUint8Array;
 
 /** Test map: RAM at guest physical address 0; UART/CLINT/PLIC/syscon at fixed MMIO bases. */
 const RAM_BASE_ADDRESS = new Uint8Array(8) as ReadonlyUint8Array;
@@ -58,7 +67,7 @@ const SYSCON_BASE_ADDRESS = unsignedBigIntToBytes(
   0x0010_0000n
 ) as ReadonlyUint8Array;
 
-/** Standard machine region list (pack order: ram → uart → clint → plic → syscon → reservation → irqLevel). */
+/** Standard machine region list (pack order: ram → uart → clint → plic → syscon → virtio → reservation → irqLevel). */
 const machineRegionSpecs = ({
   ramBaseAddress,
   ramSize,
@@ -66,6 +75,7 @@ const machineRegionSpecs = ({
   clintBaseAddress,
   plicBaseAddress,
   sysconBaseAddress = SYSCON_BASE_ADDRESS,
+  virtioBaseAddress,
 }: {
   ramBaseAddress: ReadonlyUint8Array;
   ramSize: bigint;
@@ -73,6 +83,7 @@ const machineRegionSpecs = ({
   clintBaseAddress: ReadonlyUint8Array;
   plicBaseAddress: ReadonlyUint8Array;
   sysconBaseAddress?: ReadonlyUint8Array;
+  virtioBaseAddress?: ReadonlyUint8Array;
 }): Parameters<typeof createMemory>[0] => {
   if (ramSize < 0n) {
     throw new RangeError('ramSize must be non-negative.');
@@ -108,6 +119,16 @@ const machineRegionSpecs = ({
       guestAddress: sysconBaseAddress,
       guestByteLength: SYSCON_GUEST_BYTE_LENGTH,
     },
+    ...(virtioBaseAddress === undefined
+      ? []
+      : [
+          {
+            id: VIRTIO_REGION_ID,
+            hostByteLength: VIRTIO_HOST_BYTE_LENGTH,
+            guestAddress: virtioBaseAddress,
+            guestByteLength: VIRTIO_GUEST_BYTE_LENGTH,
+          },
+        ]),
     {
       id: RESERVATION_REGION_ID,
       hostByteLength: RESERVATION_HOST_BYTE_LENGTH,
@@ -123,7 +144,8 @@ const machineRegionSpecs = ({
   ];
 };
 
-const createTestMemory = (ramSize: bigint): Memory => {
+const createTestMemory = (ramSize: bigint, virtioImageSize?: number): Memory => {
+  const virtioBaseAddress = virtioImageSize !== undefined ? guestAddress(0x1000_1000n) : undefined;
   const memory = createMemory(
     machineRegionSpecs({
       ramBaseAddress: RAM_BASE_ADDRESS,
@@ -132,6 +154,7 @@ const createTestMemory = (ramSize: bigint): Memory => {
       clintBaseAddress: CLINT_BASE_ADDRESS,
       plicBaseAddress: PLIC_BASE_ADDRESS,
       sysconBaseAddress: SYSCON_BASE_ADDRESS,
+      virtioBaseAddress,
     })
   );
   initializeClint(memory, 10_000_000n);

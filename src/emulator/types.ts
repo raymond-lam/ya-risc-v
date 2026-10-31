@@ -37,6 +37,8 @@ type GuestRegionWindow = {
 type EmulatorCreateOptions = {
   /** Flat program image copied into guest RAM at the RAM base. */
   image: Uint8Array;
+  /** Optional disk image for the VirtIO block device. */
+  diskImage?: Uint8Array;
   /** Keystrokes into the guest (UART RX). */
   stdin: Readable;
   /** Bytes out of the guest (UART TX) for the host display. */

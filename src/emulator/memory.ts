@@ -67,6 +67,7 @@ import {
 } from '#emulator/reservation';
 import { loadBytesFromSyscon, storeBytesToSyscon, SYSCON_REGION_ID } from '#emulator/syscon';
 import { loadBytesFromUart, storeBytesToUart, UART_REGION_ID } from '#emulator/uart';
+import { loadBytesFromVirtio, storeBytesToVirtio, VIRTIO_REGION_ID } from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { alignUp } from '#utils/alignment';
 import findLastIndex from '#utils/binary-search';
@@ -208,7 +209,7 @@ const createMemory = (
  * Resolve a guestAddress to `{ regionId, offset }` within its guest window, or
  * `null` when unmapped. Binary-searches `regionsByBaseGuestAddress`.
  */
-const resolveGuestAddressToRegionAndOffset = (
+const resolveGuestAddress = (
   memory: Memory,
   guestAddress: ReadonlyUint8Array
 ): { regionId: string; offset: bigint } | null => {
@@ -251,7 +252,7 @@ const guestAccessIsMapped = ({
   address: ReadonlyUint8Array;
   byteLength: number;
 }): boolean => {
-  const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+  const resolved = resolveGuestAddress(memory, address);
   if (resolved === null) {
     return false;
   }
@@ -317,6 +318,7 @@ const REGION_LOAD_STORE: ReadonlyMap<string, readonly [RegionLoadBytes, RegionSt
     [CLINT_REGION_ID, [loadBytesFromClint, storeBytesToClint]],
     [PLIC_REGION_ID, [loadBytesFromPlic, storeBytesToPlic]],
     [SYSCON_REGION_ID, [loadBytesFromSyscon, storeBytesToSyscon]],
+    [VIRTIO_REGION_ID, [loadBytesFromVirtio, storeBytesToVirtio]],
   ]);
 
 /** Atomic ops on non-RAM (or unmapped) regions fail — callers trap. */
@@ -343,6 +345,7 @@ const REGION_ATOMIC_LOAD_STORE: ReadonlyMap<
   [CLINT_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
   [PLIC_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
   [SYSCON_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
+  [VIRTIO_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
 ]);
 
 /** Copy `byteLength` bytes from `memory` at guest `address` into `destination` (high bytes cleared). */
@@ -358,7 +361,7 @@ const loadBytes = ({
   byteLength: number;
 }): Uint8Array => {
   destination.fill(0);
-  const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+  const resolved = resolveGuestAddress(memory, address);
   if (resolved === null) {
     return destination;
   }
@@ -385,7 +388,7 @@ const storeBytes = ({
     // cannot arm a reservation in the gap (same critical section SC uses).
     withMonitorLock(memory, () => {
       invalidateOverlappingReservationsLocked(memory, address, byteLength);
-      const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+      const resolved = resolveGuestAddress(memory, address);
       if (resolved === null) {
         return;
       }
@@ -413,7 +416,7 @@ const atomicLoadBytes = ({
   address: ReadonlyUint8Array;
   byteLength: 4 | 8;
 }): boolean => {
-  const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+  const resolved = resolveGuestAddress(memory, address);
   if (resolved === null) {
     return false;
   }
@@ -439,7 +442,7 @@ const atomicStoreBytes = ({
   byteLength: 4 | 8;
 }): boolean => {
   try {
-    const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+    const resolved = resolveGuestAddress(memory, address);
     if (resolved === null) {
       return false;
     }
@@ -470,7 +473,7 @@ const atomicCompareExchangeBytes = ({
   expected: ReadonlyUint8Array;
   desired: ReadonlyUint8Array;
 }): boolean => {
-  const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+  const resolved = resolveGuestAddress(memory, address);
   if (resolved === null) {
     return false;
   }
@@ -493,6 +496,7 @@ export {
   createMemory,
   guestAccessIsMapped,
   loadBytes,
+  resolveGuestAddress,
   storeBytes,
 };
 export type { Memory };

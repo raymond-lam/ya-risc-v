@@ -29,8 +29,16 @@ import {
 } from '#emulator/syscon';
 import { create as createTerminal, type TerminalHandle } from '#emulator/terminal';
 import { create as createTimer, type TimerHandle } from '#emulator/timer';
+import { create as createVirtio, type VirtioHandle } from '#emulator/virtio';
+import { bigIntAsNumber } from '#utils/int';
 import type { EmulatorCreateOptions, EmulatorHandle, GuestRegionWindow } from '#emulator/types';
 import { UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import {
+  VIRTIO_GUEST_BYTE_LENGTH,
+  VIRTIO_HOST_BYTE_LENGTH,
+  VIRTIO_REGION_ID,
+  initializeVirtio,
+} from '#emulator/virtio';
 import { storeDeviceTreeToRam } from '#fdt';
 import { bytesToBigInt } from '#utils/bytes';
 
@@ -59,6 +67,9 @@ const hostByteLength = (id: string, guestByteLength: bigint): bigint => {
   if (id === SYSCON_REGION_ID) {
     return SYSCON_HOST_BYTE_LENGTH;
   }
+  if (id === VIRTIO_REGION_ID) {
+    return VIRTIO_HOST_BYTE_LENGTH;
+  }
   throw new RangeError(`Unknown guest region '${id}'.`);
 };
 
@@ -83,6 +94,8 @@ class Emulator implements EmulatorHandle {
 
   readonly #terminal: TerminalHandle;
 
+  readonly #virtio: VirtioHandle | null;
+
   readonly #done: Promise<void>;
 
   readonly #memory: ReturnType<typeof createMemory>;
@@ -91,6 +104,7 @@ class Emulator implements EmulatorHandle {
 
   #stopped = false;
 
+  /* eslint-disable sonarjs/cognitive-complexity -- constructor needs to handle virtio region when diskImage is present */
   constructor({
     image,
     stdin,
@@ -99,9 +113,10 @@ class Emulator implements EmulatorHandle {
     timebaseHz,
     deviceTreeAddress,
     resetPc,
+    diskImage,
   }: EmulatorCreateOptions) {
     for (const id of guestRegions.keys()) {
-      if (!GUEST_REGION_IDS.includes(id)) {
+      if (!GUEST_REGION_IDS.includes(id) && id !== VIRTIO_REGION_ID) {
         throw new RangeError(`Unknown guest region '${id}'.`);
       }
     }
@@ -112,8 +127,8 @@ class Emulator implements EmulatorHandle {
       );
     }
 
-    // Pack order: ram → uart → clint → plic → syscon → reservation → irqLevel
-    const memory = createMemory([
+    // Pack order: ram → uart → clint → plic → syscon → (virtio) → reservation → irqLevel
+    const regions = [
       ...GUEST_REGION_IDS.map((id) => {
         const region = guestRegion(guestRegions, id);
         return {
@@ -123,6 +138,18 @@ class Emulator implements EmulatorHandle {
           guestByteLength: region.guestByteLength,
         };
       }),
+    ];
+    // Add virtio region if a disk image is provided
+    if (diskImage !== undefined) {
+      regions.push({
+        id: VIRTIO_REGION_ID,
+        hostByteLength: VIRTIO_HOST_BYTE_LENGTH,
+        guestAddress: guestRegion(guestRegions, VIRTIO_REGION_ID).guestAddress,
+        guestByteLength: VIRTIO_GUEST_BYTE_LENGTH,
+      });
+    }
+    const memory = createMemory([
+      ...regions,
       {
         id: RESERVATION_REGION_ID,
         hostByteLength: RESERVATION_HOST_BYTE_LENGTH,
@@ -165,12 +192,31 @@ class Emulator implements EmulatorHandle {
       stdin,
       stdout,
     });
+
+    let virtio: VirtioHandle | null = null;
+    if (diskImage !== undefined) {
+      const virtioRegion = memory.regions.get(VIRTIO_REGION_ID);
+      if (virtioRegion === undefined || virtioRegion.guestAddress === null) {
+        throw new Error('VirtIO region not found after packing.');
+      }
+      virtio = createVirtio({
+        memory,
+        image: diskImage,
+      });
+      initializeVirtio(memory, diskImage.byteLength);
+    }
+
     this.#cpu = cpu;
     this.#timer = timer;
     this.#terminal = terminal;
+    this.#virtio = virtio;
+    const children = [cpu, timer, terminal];
+    if (this.#virtio !== null) {
+      children.push(this.#virtio);
+    }
     this.#done = (async () => {
       try {
-        await Promise.all([cpu, timer, terminal]);
+        await Promise.all(children);
       } finally {
         this.stop();
       }
@@ -190,10 +236,16 @@ class Emulator implements EmulatorHandle {
       this.#timer.start();
       this.#cpu.start();
       this.#terminal.start();
+      if (this.#virtio !== null) {
+        this.#virtio.start();
+      }
     } catch (error) {
       this.#cpu.stop();
       this.#timer.stop();
       this.#terminal.stop();
+      if (this.#virtio !== null) {
+        this.#virtio.stop();
+      }
       this.#stopped = true;
       throw error;
     }
@@ -211,6 +263,9 @@ class Emulator implements EmulatorHandle {
     this.#cpu.stop();
     this.#timer.stop();
     this.#terminal.stop();
+    if (this.#virtio !== null) {
+      this.#virtio.stop();
+    }
   };
 
   #watchSyscon = async (): Promise<void> => {

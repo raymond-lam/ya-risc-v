@@ -66,6 +66,9 @@ const PLIC_HOST_GATEWAY_LOCK = PLIC_HOST_MEIP_WIRE_OFFSET + 4;
 /** Packed host slab size. */
 const PLIC_HOST_BYTE_LENGTH = BigInt(PLIC_HOST_GATEWAY_LOCK + 4);
 
+/** VirtIO block device external interrupt identity (source 1). */
+const PLIC_SOURCE_VIRTIO = 1;
+
 /** UART external interrupt identity (source 10). */
 const PLIC_SOURCE_UART = 10;
 
@@ -178,6 +181,7 @@ export {
   PLIC_MAX_SOURCE,
   PLIC_REGION_ID,
   PLIC_SOURCE_UART,
+  PLIC_SOURCE_VIRTIO,
   claimedByHostOffset,
   contextWireOffset,
   enableHostOffset,

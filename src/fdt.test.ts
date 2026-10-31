@@ -23,6 +23,7 @@ import {
   PLIC_MAX_SOURCE,
   PLIC_REGION_ID,
   PLIC_SOURCE_UART,
+  PLIC_SOURCE_VIRTIO,
 } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import {
@@ -34,6 +35,7 @@ import {
   SYSCON_REGION_ID,
 } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import { storeDeviceTreeToRam, type DeviceTreeAddress } from '#fdt';
 import { machineRegionSpecs } from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
@@ -60,6 +62,7 @@ const regionsFor = ({
   clintBase,
   plicBase,
   sysconBase,
+  virtioBase,
 }: {
   ramBase: bigint;
   ramSize: bigint;
@@ -67,6 +70,7 @@ const regionsFor = ({
   clintBase: bigint;
   plicBase: bigint;
   sysconBase?: bigint;
+  virtioBase?: bigint;
 }): Map<string, { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }> => {
   const regions = new Map<string, { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }>([
     [RAM_REGION_ID, { guestAddress: guest(ramBase), guestByteLength: ramSize }],
@@ -78,6 +82,12 @@ const regionsFor = ({
     regions.set(SYSCON_REGION_ID, {
       guestAddress: guest(sysconBase),
       guestByteLength: SYSCON_GUEST_BYTE_LENGTH,
+    });
+  }
+  if (virtioBase !== undefined) {
+    regions.set(VIRTIO_REGION_ID, {
+      guestAddress: guest(virtioBase),
+      guestByteLength: VIRTIO_GUEST_BYTE_LENGTH,
     });
   }
   return regions;
@@ -296,6 +306,40 @@ describe('storeDeviceTreeToRam', () => {
     assert.equal(cells(reboot, 'value')[0], SYSCON_REBOOT_VALUE);
 
     assert.equal(text(child(root, 'chosen'), 'stdout-path'), '/soc/uart@10000000');
+  });
+
+  it('describes the virtio-mmio block device when the region is present', () => {
+    const root = decode(
+      storedBlob(
+        regionsFor({
+          ramBase: 0x8000_0000n,
+          ramSize: 0x1000_0000n,
+          uartBase: 0x1000_0000n,
+          clintBase: 0x0200_0000n,
+          plicBase: 0x0c00_0000n,
+          sysconBase: 0x0010_0000n,
+          virtioBase: 0x1000_1000n,
+        }),
+        10_000_000n
+      ).blob
+    );
+    const soc = child(root, 'soc');
+    const virtio = child(soc, 'virtio@10001000');
+    assert.ok(stringList(virtio, 'compatible').includes('virtio,mmio'));
+    assert.deepEqual(reg(virtio), { address: 0x1000_1000n, size: VIRTIO_GUEST_BYTE_LENGTH });
+    const plic = child(soc, 'plic@c000000');
+    assert.equal(cells(virtio, 'interrupt-parent')[0], cells(plic, 'phandle')[0]);
+    assert.equal(cells(virtio, 'interrupts')[0], PLIC_SOURCE_VIRTIO);
+    assert.equal(PLIC_SOURCE_VIRTIO, 1);
+  });
+
+  it('omits the virtio node when the region is absent', () => {
+    const root = decode(storedBlob(virt, 10_000_000n).blob);
+    const soc = child(root, 'soc');
+    assert.equal(
+      soc.children.some((node) => node.name.startsWith('virtio@')),
+      false
+    );
   });
 
   it('follows a shifted guest map', () => {

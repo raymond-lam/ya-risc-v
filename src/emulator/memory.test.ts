@@ -38,6 +38,7 @@ import {
   PLIC_SOURCE_UART,
   setPlicSourcePending,
 } from '#emulator/plic';
+import { VIRTIO_REGION_ID } from '#emulator/virtio';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { RESERVATION_REGION_ID } from '#emulator/reservation';
 import { SYSCON_REGION_ID } from '#emulator/syscon';
@@ -192,7 +193,16 @@ describe('memory', () => {
   });
 
   it('createMemory packs 8-byte-aligned regions into one SharedArrayBuffer', () => {
-    const memory = createTestMemory(64n);
+    const memory = createMemory(
+      machineRegionSpecs({
+        ramBaseAddress: RAM_BASE,
+        ramSize: 64n,
+        uartBaseAddress: UART_BASE,
+        clintBaseAddress: CLINT_BASE,
+        plicBaseAddress: PLIC_BASE,
+        virtioBaseAddress: guest(0x1000_1000n),
+      })
+    );
     const ram = memory.regions.get(RAM_REGION_ID);
     const uart = memory.regions.get(UART_REGION_ID);
     const clint = memory.regions.get(CLINT_REGION_ID);
@@ -229,7 +239,14 @@ describe('memory', () => {
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
     assert.deepEqual(
       memory.regionsByBaseGuestAddress.map(([, id]) => id),
-      [RAM_REGION_ID, SYSCON_REGION_ID, CLINT_REGION_ID, PLIC_REGION_ID, UART_REGION_ID]
+      [
+        RAM_REGION_ID,
+        SYSCON_REGION_ID,
+        CLINT_REGION_ID,
+        PLIC_REGION_ID,
+        UART_REGION_ID,
+        VIRTIO_REGION_ID,
+      ]
     );
     for (let index = 1; index < memory.regionsByBaseGuestAddress.length; index += 1) {
       const previous = memory.regionsByBaseGuestAddress[index - 1];

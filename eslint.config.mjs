@@ -33,6 +33,7 @@ const allPackagePrivatePatterns = [
       '#emulator/plic/*',
       '#emulator/syscon/*',
       '#emulator/types',
+      '#emulator/virtio/*',
       '#tui/*',
     ],
     message:
@@ -60,6 +61,7 @@ const testPackagePrivatePatterns = [
       '#emulator/plic/*',
       '#emulator/syscon/*',
       '#emulator/types',
+      '#emulator/virtio/*',
       '#tui/*',
     ],
     message: 'Tests may deep-import #emulator/cpu/*; other packages only via their roots.',
@@ -393,6 +395,37 @@ const eslintConfig = [
         'error',
         {
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/terminal/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/virtio/**/*.ts'],
+    ignores: ['src/emulator/virtio/**/*.test.ts', 'src/emulator/virtio/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Only the virtio host (virtio/index.ts) may spawn workers; virtio worker code must not import Worker.',
+            },
+          ],
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/virtio/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/virtio/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/virtio/*')],
         },
       ],
     },
