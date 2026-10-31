@@ -168,6 +168,27 @@ describe('emulator create', () => {
     );
   });
 
+  it('rejects a guest region map whose windows overlap', () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const regions = virtRegions(16n);
+    // Move the UART window on top of the RAM window: `createMemory` must reject it.
+    regions.set(UART_REGION_ID, window(0x8000_0000n, UART_GUEST_BYTE_LENGTH));
+    assert.throws(
+      () =>
+        create({
+          image: new Uint8Array(0),
+          stdin,
+          stdout,
+          guestRegions: regions,
+          timebaseHz: 10_000_000n,
+          deviceTreeAddress: 'end',
+          resetPc: guest(0x8000_0000n),
+        }),
+      { name: 'RangeError', message: 'ram window overlaps uart.' }
+    );
+  });
+
   it('rejects an unknown guest region id', () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();

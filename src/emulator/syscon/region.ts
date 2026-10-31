@@ -23,13 +23,16 @@
  *   +4  reboot register (4 bytes, little-endian)
  *
  * Host-only tail:
- *   +8  request Int32 (`0` idle, `1` poweroff, `2` reboot, `3` watch cancelled)
+ *   +8  request Int32 (`0` idle, `1` poweroff, `2` reboot, `3` watch cancelled).
+ *       Cancellation is a compare-exchange from idle only, so it can never
+ *       overwrite a live poweroff/reboot request (see `cancelSysconWatch`).
  */
 
 import type { Memory } from '#emulator/memory';
 import { WAKE_HOST_SIZE, publishWakeLevel, waitWake } from '#emulator/wake';
 import type { ReadonlyUint8Array } from '#types';
 import { atomicLoad32, atomicUpdate32 } from '#utils/atomics';
+import { bytesToInt32Array } from '#utils/bytes';
 import { bigIntAsNumber } from '#utils/int';
 
 /** Packed-region id for the syscon (`createMemory` / `regions.get`). */
@@ -126,7 +129,24 @@ const publishSysconRequest = (memory: Memory): void => {
 
 /**
  * Wait until a guest store requests poweroff or reboot, or until the watch is cancelled.
- * `idle` means `cancelSysconWatch` ran before a request.
+ * `idle` means `cancelSysconWatch` ran while the word was still idle.
+ *
+ * Termination interleavings (the loop exits whenever the word reads 1, 2, or 3):
+ * - Cancel while parked (word 0): the compare-exchange 0→3 succeeds and notifies, the
+ *   waiter wakes, reads 3, and returns `idle` — the normal host-shutdown path.
+ * - Cancel between the waiter's load of 0 and its wait: the subsequent wait compares
+ *   against `fromLevel` 0, sees 3, and returns immediately (no lost wake); the loop
+ *   reads 3 and returns `idle`.
+ * - Live request then cancel: the compare-exchange fails (word is 1/2) and the word
+ *   survives; the waiter reads 1/2 and returns `poweroff`/`reboot`. It cannot spin:
+ *   every nonzero level exits the loop, and the consumer (`Emulator.#watchSyscon`)
+ *   returns on its `stopped` flag when cancellation won the race.
+ * - Request races a successful cancel: `publishSysconRequest` exchanges the word
+ *   3→1/2 and notifies; the waiter reads 1/2 and returns. The guest's own request
+ *   wins, which is correct — the guest asked to halt.
+ *
+ * The only state that parks forever is a word that stays 0 with no future change,
+ * i.e. neither a cancel nor a request ever happens.
  */
 const watchSyscon = async (memory: Memory): Promise<'poweroff' | 'reboot' | 'idle'> => {
   const index = sysconHostIndex(memory) + SYSCON_WAKE_OFFSET;
@@ -146,13 +166,25 @@ const watchSyscon = async (memory: Memory): Promise<'poweroff' | 'reboot' | 'idl
   }
 };
 
-/** Wake `watchSyscon` so a host shutdown does not leave the wait running. */
+/**
+ * Wake `watchSyscon` so a host shutdown does not leave the wait running.
+ *
+ * Compare-exchange, not an unconditional store: an unconditional store could overwrite
+ * a live poweroff/reboot request (1/2) with cancelled (3) between the guest's store and
+ * the host watch reading it, so the guest's own request would be swallowed. Only idle
+ * (0) transitions to cancelled; a live request survives cancellation and the watch
+ * always observes it.
+ */
 const cancelSysconWatch = (memory: Memory): void => {
-  publishWakeLevel({
-    bytes: memory.bytes,
-    index: sysconHostIndex(memory) + SYSCON_WAKE_OFFSET,
-    level: SYSCON_REQUEST_STOPPED,
-  });
+  const index = sysconHostIndex(memory) + SYSCON_WAKE_OFFSET;
+  const wake = bytesToInt32Array(memory.bytes, index);
+  if (
+    Atomics.compareExchange(wake, 0, SYSCON_REQUEST_IDLE, SYSCON_REQUEST_STOPPED) ===
+    SYSCON_REQUEST_IDLE
+  ) {
+    // The transition happened; notify the parked waiter so the watch settles on `idle`.
+    Atomics.notify(wake, 0);
+  }
 };
 
 /** Guest load of `byteLength` syscon bytes starting at `offset`. */
