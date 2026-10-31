@@ -17,7 +17,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
-import { addi, slti, sltiu, xori } from '#emulator/cpu/instructions/op-imm';
+import { addi, slli, slti, sltiu, srai, srli, xori } from '#emulator/cpu/instructions/op-imm';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -25,7 +25,7 @@ import {
   writeGeneralPurposeRegister,
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 describe('op-imm', () => {
   it('addi writes rs1 + imm and advances pc', () => {
@@ -99,5 +99,54 @@ describe('op-imm', () => {
       readGeneralPurposeRegister(registers, 2),
       signedNumberToBytes(new Uint8Array(8), 0xf0, 32)
     );
+  });
+
+  it('slli/srli/srai honor shamt 32-63 (6-bit shifts)', () => {
+    const registers = createRegisters();
+
+    // slli x1 = 1 << 63
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 1, 32));
+    slli(
+      registers,
+      testMemory(256n),
+      { destinationRegister: 2, sourceRegister1: 1, shiftAmount: 63 },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 2),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_0000n)
+    );
+
+    // srli x3 = 0x8000...0000 >> 63 = 1
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_0000n)
+    );
+    srli(
+      registers,
+      testMemory(256n),
+      { destinationRegister: 3, sourceRegister1: 1, shiftAmount: 63 },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 1, 32)
+    );
+
+    // srai x4 = 0x0000_0001_0000_0000 >> 63 = 0 (and 5-bit masking would give 1 << ... != 0 path)
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x0000_0001_0000_0000n)
+    );
+    srai(
+      registers,
+      testMemory(256n),
+      { destinationRegister: 4, sourceRegister1: 1, shiftAmount: 63 },
+      FOUR_BYTES
+    );
+    assert.deepEqual(readGeneralPurposeRegister(registers, 4), new Uint8Array(8));
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 12);
   });
 });

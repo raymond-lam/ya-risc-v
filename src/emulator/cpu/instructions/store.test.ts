@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
 import { sb, sd, sw } from '#emulator/cpu/instructions/store';
+import { loadBytes } from '#emulator/memory';
 import {
   createRegisters,
   readProgramCounter,
@@ -180,5 +181,15 @@ describe('store', () => {
     // No trap: mcause stays at its reset value and the PC advances past the store.
     assert.deepEqual(snapshotControlAndStatusRegister(registers, MCAUSE), new Uint8Array(8));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+
+    // The stored value actually landed in mtimecmp (x5 = 0x1234, little-endian).
+    const mtimecmp = new Uint8Array(8);
+    loadBytes({
+      destination: mtimecmp,
+      memory: guest,
+      address: signedNumberToBytes(new Uint8Array(8), 0x0200_4000, 32),
+      byteLength: 8,
+    });
+    assert.deepEqual(mtimecmp, Uint8Array.of(0x34, 0x12, 0, 0, 0, 0, 0, 0));
   });
 });

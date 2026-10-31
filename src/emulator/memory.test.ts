@@ -255,26 +255,6 @@ describe('memory', () => {
     assert.ok(clint.hostIndex > uart.hostIndex);
   });
 
-  it('storeBytes and loadBytes round-trip in RAM', () => {
-    const memory = createTestMemory(64n);
-    const eight = new Uint8Array([0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
-    storeBytes({
-      memory,
-      address: signedNumberToBytes(new Uint8Array(8), 8, 32),
-      source: eight,
-      byteLength: 8,
-    });
-
-    const destination = new Uint8Array(8);
-    loadBytes({
-      destination,
-      memory,
-      address: signedNumberToBytes(new Uint8Array(8), 8, 32),
-      byteLength: 8,
-    });
-    assert.deepEqual(destination, eight);
-  });
-
   it('loadBytes zero-extends into the destination high bytes', () => {
     const memory = createTestMemory(64n);
     memory.bytes[4] = 0xab;
@@ -341,7 +321,7 @@ describe('memory', () => {
     assert.deepEqual(low, new Uint8Array(8));
   });
 
-  it('rejects a UART window that overlaps RAM', () => {
+  it('rejects a device window that overlaps RAM', () => {
     assert.throws(
       () =>
         createMemory(
@@ -354,6 +334,32 @@ describe('memory', () => {
           })
         ),
       { message: `${RAM_REGION_ID} window overlaps ${UART_REGION_ID}.` }
+    );
+    assert.throws(
+      () =>
+        createMemory(
+          machineRegionSpecs({
+            ramBaseAddress: CLINT_BASE,
+            ramSize: 0xc000n,
+            uartBaseAddress: UART_BASE,
+            clintBaseAddress: CLINT_BASE,
+            plicBaseAddress: PLIC_BASE,
+          })
+        ),
+      { message: `${RAM_REGION_ID} window overlaps ${CLINT_REGION_ID}.` }
+    );
+    assert.throws(
+      () =>
+        createMemory(
+          machineRegionSpecs({
+            ramBaseAddress: PLIC_BASE,
+            ramSize: 0x201008n,
+            uartBaseAddress: UART_BASE,
+            clintBaseAddress: CLINT_BASE,
+            plicBaseAddress: PLIC_BASE,
+          })
+        ),
+      { message: `${RAM_REGION_ID} window overlaps ${PLIC_REGION_ID}.` }
     );
   });
 
@@ -368,38 +374,6 @@ describe('memory', () => {
       })
     );
     assert.ok(memory.bytes.byteLength > Number(0x1000_0000n + 1n));
-  });
-
-  it('rejects a CLINT window that overlaps RAM', () => {
-    assert.throws(
-      () =>
-        createMemory(
-          machineRegionSpecs({
-            ramBaseAddress: CLINT_BASE,
-            ramSize: 0xc000n,
-            uartBaseAddress: UART_BASE,
-            clintBaseAddress: CLINT_BASE,
-            plicBaseAddress: PLIC_BASE,
-          })
-        ),
-      { message: `${RAM_REGION_ID} window overlaps ${CLINT_REGION_ID}.` }
-    );
-  });
-
-  it('rejects a PLIC window that overlaps RAM', () => {
-    assert.throws(
-      () =>
-        createMemory(
-          machineRegionSpecs({
-            ramBaseAddress: PLIC_BASE,
-            ramSize: 0x201008n,
-            uartBaseAddress: UART_BASE,
-            clintBaseAddress: CLINT_BASE,
-            plicBaseAddress: PLIC_BASE,
-          })
-        ),
-      { message: `${RAM_REGION_ID} window overlaps ${PLIC_REGION_ID}.` }
-    );
   });
 
   it('rejects duplicate region ids', () => {
@@ -802,25 +776,6 @@ describe('clint', () => {
     assert.equal(isClintMachineTimerPending(memory), false);
   });
 
-  it('round-trips mtimecmp through loadBytes/storeBytes', () => {
-    const memory = createTestMemory(64n);
-    const value = unsignedBigIntToBytes(new Uint8Array(8), 0x0123_4567_89ab_cdefn);
-    storeBytes({
-      memory,
-      address: clintAddress(CLINT_MTIMECMP_OFFSET),
-      source: value,
-      byteLength: 8,
-    });
-    const destination = new Uint8Array(8);
-    loadBytes({
-      destination,
-      memory,
-      address: clintAddress(CLINT_MTIMECMP_OFFSET),
-      byteLength: 8,
-    });
-    assert.deepEqual(destination, value);
-  });
-
   it('aligned mtime/mtimecmp ld/sd use a single atomic u64', () => {
     const memory = createTestMemory(64n);
     const value = unsignedBigIntToBytes(new Uint8Array(8), 0x1111_2222_3333_4444n);
@@ -1063,19 +1018,5 @@ describe('atomic load/store/cas', () => {
       false
     );
     assert.equal(atomicStoreBytes({ memory, address: UART_BASE, source, byteLength: 4 }), false);
-  });
-
-  it('dispatches MMIO stores to the UART region (scratch)', () => {
-    const memory = createTestMemory(64n);
-    const scratch = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0007n) as ReadonlyUint8Array;
-    storeBytes({
-      memory,
-      address: scratch,
-      source: new Uint8Array([0x5a]),
-      byteLength: 1,
-    });
-    const destination = new Uint8Array(8);
-    loadBytes({ destination, memory, address: scratch, byteLength: 1 });
-    assert.equal(destination[0], 0x5a);
   });
 });

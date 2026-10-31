@@ -37,7 +37,7 @@ const instructionBytes = (encoding: number): Uint8Array => {
 };
 
 describe('decode cache', () => {
-  it('stays bounded when decoding many unique encodings', () => {
+  it('still decodes correctly after LRU eviction pressure', () => {
     // Walk far more unique 32-bit encodings than the LRU cap; must not throw.
     for (let encoding = 0; encoding < 20_000; encoding += 1) {
       // Force 32-bit encodings (low two bits = 0b11) with varying upper bits.

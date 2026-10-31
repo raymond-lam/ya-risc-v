@@ -347,7 +347,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('amoxor/amoand/amoor/amomax/amomaxu.w smoke the remaining AMO ops', () => {
+  it('amoxor/amoand/amoor/amomax/amomaxu.w pin the remaining AMO ops', () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     const args = {
@@ -456,7 +456,7 @@ describe('amo', () => {
     assert.deepEqual(guest.bytes.slice(16, 20), new Uint8Array(4));
   });
 
-  it('misaligned amoadd.w traps with cause 6 and leaves memory unchanged', () => {
+  it('misaligned amoadd.w and sc.d trap with cause 6 and leave memory unchanged', () => {
     const guest = testMemory(256n);
     guest.bytes[2] = 0xaa;
     const registers = createRegisters();
@@ -489,11 +489,8 @@ describe('amo', () => {
     );
     assert.equal(guest.bytes[2], 0xaa);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
-  });
 
-  it('misaligned sc.d traps with cause 6', () => {
-    const guest = testMemory(256n);
-    const registers = createRegisters();
+    // Misaligned sc.d traps with cause 6 as well.
     writeControlAndStatusRegister(
       registers,
       0x305,
@@ -519,7 +516,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x3000);
   });
 
-  it('aligned lr.w to unmapped address traps with cause 5 and does not arm a reservation', () => {
+  it('aligned lr.w and lr.d to unmapped holes trap with cause 5 without arming a reservation', () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -577,6 +574,43 @@ describe('amo', () => {
       readGeneralPurposeRegister(registers, 4),
       signedNumberToBytes(new Uint8Array(8), 1, 32)
     );
+
+    // lr.d to an aligned hole below the syscon window also traps with cause 5
+    // and leaves rd untouched (sentinel preserved).
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x6000, 32)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
+    // Aligned hole below the syscon window (RAM covers [0, 0x100)).
+    writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 0x800n));
+    writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 0xdead, 32));
+
+    lrD(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 0,
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_ACCESS_FAULT, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x800n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x6000);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      signedNumberToBytes(new Uint8Array(8), 0xdead, 32)
+    );
   });
 
   it('aligned amoadd.w to UART MMIO traps with cause 7', () => {
@@ -610,40 +644,6 @@ describe('amo', () => {
       signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_ACCESS_FAULT, 32)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
-  });
-
-  it('aligned lr.d to an unmapped address below the RAM base traps with cause 5', () => {
-    const guest = testMemory(256n);
-    const registers = createRegisters();
-    writeControlAndStatusRegister(
-      registers,
-      MTVEC,
-      signedNumberToBytes(new Uint8Array(8), 0x6000, 32)
-    );
-    // Aligned hole below the syscon window (RAM covers [0, 0x100)).
-    writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 0x800n));
-
-    lrD(
-      registers,
-      guest,
-      {
-        destinationRegister: 3,
-        sourceRegister1: 1,
-        sourceRegister2: 0,
-      },
-      FOUR_BYTES
-    );
-
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MCAUSE),
-      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_ACCESS_FAULT, 32)
-    );
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MTVAL),
-      unsignedBigIntToBytes(new Uint8Array(8), 0x800n)
-    );
-    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x6000);
-    assert.deepEqual(readGeneralPurposeRegister(registers, 3), new Uint8Array(8));
   });
 
   it('aligned sc.d past the end of DRAM traps with cause 7', () => {

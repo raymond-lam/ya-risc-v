@@ -38,6 +38,7 @@ import {
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
 import testMemory from '#test/guest-memory';
+import { physicalMemoryAccessDenied } from '#emulator/cpu/pmp';
 import {
   bytesToBigInt,
   bytesToNumber,
@@ -64,6 +65,10 @@ const CFG_NAPOT_W = 0x1a;
 const CFG_NA4_R = 0x11;
 /** NA4, no permissions. */
 const CFG_NA4 = 0x10;
+/** NA4 + X. */
+const CFG_NA4_X = 0x14;
+/** NAPOT, no permissions. */
+const CFG_NAPOT = 0x18;
 /** TOR + R. pmpaddr is the top of the range; entry 0 starts at 0. */
 const CFG_TOR_R = 0x09;
 
@@ -368,5 +373,80 @@ describe('pmp', () => {
       FOUR_BYTES
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x80);
+  });
+
+  it('fetch checks the X bit and ignores mstatus.MPRV', () => {
+    const denied = (
+      registers: ReturnType<typeof createRegisters>,
+      access: 'load' | 'store' | 'fetch' | 'amo'
+    ): boolean =>
+      physicalMemoryAccessDenied({
+        registers,
+        address: guestBytes(0x10n),
+        byteLength: 4,
+        access,
+      });
+
+    // X-only NA4 at 0x10: fetch is allowed, loads are not (S-mode).
+    const supervisor = createRegisters();
+    writePmp(supervisor, PMPADDR0, 0x10n >> 2n);
+    writePmp(supervisor, PMPCFG0, BigInt(CFG_NA4_X));
+    setPrivilegeMode(supervisor, PRIVILEGE_SUPERVISOR);
+    assert.equal(denied(supervisor, 'fetch'), false);
+    assert.equal(denied(supervisor, 'load'), true);
+
+    // R-only region: fetch is denied while loads are allowed.
+    const reader = createRegisters();
+    writePmp(reader, PMPADDR0, 0x10n >> 2n);
+    writePmp(reader, PMPCFG0, BigInt(CFG_NA4_R));
+    setPrivilegeMode(reader, PRIVILEGE_SUPERVISOR);
+    assert.equal(denied(reader, 'fetch'), true);
+    assert.equal(denied(reader, 'load'), false);
+
+    // M-mode with MPRV redirecting loads to S-mode: no entry matches, so an
+    // S-mode load faults — but a fetch must still be checked as M-mode and pass.
+    const machine = createRegisters();
+    const mstatus = new Uint8Array(8);
+    mstatus[1] = 0x08;
+    mstatus[2] = 0x02;
+    writeControlAndStatusRegister(machine, MSTATUS, mstatus);
+    assert.equal(denied(machine, 'fetch'), false);
+    assert.equal(denied(machine, 'load'), true);
+  });
+
+  it('lowest matching entry wins even when a higher entry would grant', () => {
+    // Entry 0 = NA4 at 0x10 with no permissions; entry 1 = NAPOT [0, 32) with R.
+    // A 4-byte load at 0x10 is fully covered by entry 0, so its lack of R denies
+    // the access even though entry 1 would grant it.
+    const denied = createRegisters();
+    writePmp(denied, PMPADDR0, 0x10n >> 2n);
+    writePmp(denied, PMPADDR1, 0b11n);
+    writePmp(denied, PMPCFG0, BigInt(CFG_NA4 | (CFG_NAPOT_R << 8)));
+    setPrivilegeMode(denied, PRIVILEGE_SUPERVISOR);
+    assert.equal(
+      physicalMemoryAccessDenied({
+        registers: denied,
+        address: guestBytes(0x10n),
+        byteLength: 4,
+        access: 'load',
+      }),
+      true
+    );
+
+    // Mirror: entry 0 grants R, entry 1 denies — the access stays allowed.
+    const allowed = createRegisters();
+    writePmp(allowed, PMPADDR0, 0x10n >> 2n);
+    writePmp(allowed, PMPADDR1, 0b11n);
+    writePmp(allowed, PMPCFG0, BigInt(CFG_NA4_R | (CFG_NAPOT << 8)));
+    setPrivilegeMode(allowed, PRIVILEGE_SUPERVISOR);
+    assert.equal(
+      physicalMemoryAccessDenied({
+        registers: allowed,
+        address: guestBytes(0x10n),
+        byteLength: 4,
+        access: 'load',
+      }),
+      false
+    );
   });
 });

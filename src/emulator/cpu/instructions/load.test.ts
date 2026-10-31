@@ -17,7 +17,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
-import { lb, lbu, ld, lw } from '#emulator/cpu/instructions/load';
+import { lb, lh, lbu, ld, lw, lhu, lwu } from '#emulator/cpu/instructions/load';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -238,5 +238,78 @@ describe('load', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('lwu zero-extends while lw sign-extends the same word; lh/lhu pin halfword width', () => {
+    const guest = testMemory(256n);
+    // 0xffff_ffff at offset 8; 0x8000 at offset 16.
+    guest.bytes[8] = 0xff;
+    guest.bytes[9] = 0xff;
+    guest.bytes[10] = 0xff;
+    guest.bytes[11] = 0xff;
+    guest.bytes[16] = 0x00;
+    guest.bytes[17] = 0x80;
+    const registers = createRegisters();
+
+    lw(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 0,
+        immediate: signedNumberToBytes(new Uint8Array(8), 8, 32),
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
+    );
+
+    lwu(
+      registers,
+      guest,
+      {
+        destinationRegister: 2,
+        sourceRegister1: 0,
+        immediate: signedNumberToBytes(new Uint8Array(8), 8, 32),
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 2),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x0000_0000_ffff_ffffn)
+    );
+
+    lh(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 0,
+        immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 3),
+      unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_8000n)
+    );
+
+    lhu(
+      registers,
+      guest,
+      {
+        destinationRegister: 4,
+        sourceRegister1: 0,
+        immediate: signedNumberToBytes(new Uint8Array(8), 16, 32),
+      },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 4),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x0000_0000_0000_8000n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 16);
   });
 });
