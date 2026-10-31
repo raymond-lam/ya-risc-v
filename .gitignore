@@ -27,3 +27,6 @@ coverage/
 # Env
 .env
 .env.*
+
+# Agent scratch (subagent probes, temporary review artifacts)
+.pi/

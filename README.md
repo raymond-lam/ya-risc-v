@@ -96,7 +96,10 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   (`--clint-base`; `msip` / `mtimecmp` / `mtime`), a **PLIC** at `0x0c000000` (`--plic-base`),
   and an 8-byte **syscon** at `0x00100000` (`--syscon-base`). A 4-byte store of `1` at the
   syscon base requests poweroff; the same store at base+4 requests reboot. Either request
-  stops the emulator, the same way the TUI Shutdown control does.
+  stops the emulator, the same way the TUI Shutdown control does: the host tears down the
+  CPU worker, so the power-cut window is nondeterministic like real silicon and firmware
+  must be yank-safe — after the request store, spin or `wfi` and do no observable work.
+  Warm reset is not implemented.
   Flat images are copied to the RAM base. The first fetch is `--reset-pc` (default: the RAM base).
   On startup a device tree for this
   map is written into DRAM (top of RAM, or `--dtb-address`; `--no-device-tree` skips it). `a0` is

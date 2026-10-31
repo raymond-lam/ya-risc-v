@@ -15,13 +15,13 @@ will ever be.
 
 ## Commands
 
-| Command               | Purpose                                                     |
-| --------------------- | ----------------------------------------------------------- |
+| Command                  | Purpose                                                                     |
+| ------------------------ | --------------------------------------------------------------------------- |
 | `npm run dev -- <image>` | Run from source via `tsx` (`--ram-size` is required; extra flags need `--`) |
-| `npm test`            | `node:test` runner over `src/**/*.test.ts` and `*.test.tsx` |
-| `npm run check`       | format check + lint + type-check + tests (**run before done**) |
-| `npm run fix`         | Prettier write + `eslint --fix`                             |
-| `npm run build`       | Bundle to `dist/` (generated, gitignored — never edit by hand) |
+| `npm test`               | `node:test` runner over `src/**/*.test.ts` and `*.test.tsx`                 |
+| `npm run check`          | format check + lint + type-check + tests (**run before done**)              |
+| `npm run fix`            | Prettier write + `eslint --fix`                                             |
+| `npm run build`          | Bundle to `dist/` (generated, gitignored — never edit by hand)              |
 
 Optional pre-commit hooks (opt-in via `pre-commit`) run Prettier, `eslint --fix`, and `tsc`.
 
@@ -40,7 +40,7 @@ assuming this summary is enough.
    architectural bytes; `signedNumberToBytes`, `unsignedNumberToBytes`,
    `unsignedBigIntToBytes`, and `low32Bytes` pack values into a caller-allocated buffer.
 2. **Decode returns a curried thunk: `(registers, memory, instructionByteLength) => void |
-   Promise<void>`.** Decode closes over instruction args — the thunk itself takes no args
+Promise<void>`.** Decode closes over instruction args — the thunk itself takes no args
    type. The thunk **owns the PC**: call `advanceProgramCounter(registers, instructionByteLength)`
    on the fall-through path, or `setProgramCounter` when jumping/branching (`jal`/`jalr` use
    the length for the link). The run loop never adjusts the PC itself and `await`s each
@@ -183,3 +183,45 @@ wiring). Pass `FOUR_BYTES` when calling instructions directly. Compare register 
 rather than hand-written byte arrays. Unit tests stay colocated as `*.test.ts`; helpers
 live in `test/`, not `src/`. Tests may deep-import `#emulator/cpu/*` helpers but must use
 other packages' roots (`#emulator/uart/*` etc. are lint-banned deep imports).
+
+### Writing valuable tests
+
+A test earns its place by pinning an outcome a plausible bug would break — an exact
+register/CSR value, PC, trap cause/`mtval`, WARL mask, memory canary, or device wire
+level — not by executing lines. Before adding a test, name the bug class it is the only
+guard against; if that class is already pinned elsewhere (or belongs to an integration
+boundary), don't add it. Avoid: store→load round-trips through the same helpers as their
+own oracle, near-duplicate variants that add no new behavior dimension, and single-block
+files whose only assertion would pass under a broken implementation. Merging variants is
+preferred over deleting when every assertion can survive the merge.
+
+### Integration tests (`*.integration.test.ts`)
+
+Unit tests exercise one unit; when behavior only exists across components — fetch loop,
+worker pumps, interrupt wake, poweroff — write an integration test that instantiates the
+real `Emulator` (`create` from `#emulator`) and runs it. No mocks: pass real `PassThrough`
+streams, real `guestRegions`, and a real `image`. Rules:
+
+- **Images are TypeScript `Uint8Array` literals in the test file**, never fixture files.
+  Formatting: one instruction per line (2 bytes for RVC, 4 otherwise), trailing
+  `// mnemonic operands — intent` comment; **never pad instructions to 64-bit lanes** —
+  the PC advances by instruction length and the next fetch must land on an instruction,
+  not on `0x00000000` (illegal-instruction trap; with `mtvec` = 0 the hart loops forever).
+  Data sections are 64-bit-aligned rows of exactly 8 bytes with comments; alignment
+  padding only at instruction→data boundaries, commented as alignment.
+- **Protect the layout from formatters**: put `// prettier-ignore` immediately above each
+  image literal, and re-read the file after `npm run fix` to confirm it survived.
+- **Verify encodings before trusting them**: probe each emitted word through `decode`
+  (`#emulator/cpu/decode`) against `createTestMemory` before running the suite. A probe
+  that calls `decode` directly does NOT prove the image runs — it skips fetch sequencing;
+  the integration run is the arbiter.
+- **Termination must be deterministic, never wall-clock**: guest-side, gate poweroff on
+  UART `LSR.TEMT`/`THRE` (TX drained) before storing the syscon poweroff value. The
+  host stops the CPU worker in response to the syscon request; the power-cut window is
+  nondeterministic like real silicon, so guests must be yank-safe — after the finisher
+  store, spin (`jal x0, 0`) or `wfi` and do no observable work. The terminal drains on
+  stop, so a TEMT-gated poweroff loses no output — but a print issued at the exact
+  poweroff store still depends on that gate. Host-side, every wait is bounded:
+  `it(..., { timeout })`, a `Promise.race` deadline around `await emulator`, bounded
+  stdout polling; teardown (`emulator.stop()` + awaited settle) in `finally`. Prove
+  non-flakiness with repeated runs.
