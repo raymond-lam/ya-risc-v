@@ -27,7 +27,7 @@ import {
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 const runDecoded = (
   word: Uint8Array,
@@ -480,6 +480,39 @@ describe('RV64C decode + execute', () => {
       snapshotControlAndStatusRegister(registers2, 0x342),
       signedNumberToBytes(new Uint8Array(8), 2, 32)
     );
+  });
+
+  it('c.li and c.addi sign-extend negative 6-bit immediates', () => {
+    const registers = createRegisters();
+    const memory = testMemory(64n);
+
+    // c.li x1, -1: bit 12 set with imm[5]=0x1f → 0x50fd.
+    runDecoded(compressedBytes(0x50fd), registers, memory);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), -1, 32)
+    );
+
+    // c.addi x1, -1 on top of -1 must reach -2 (0x10fd).
+    runDecoded(compressedBytes(0x10fd), registers, memory);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), -2, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('c.lui sign-extends the negative nzimm from bit 17', () => {
+    const registers = createRegisters();
+    const memory = testMemory(64n);
+
+    // c.lui x1, -1: nzimm[17]=1 with imm[16:12]=0x1f → 0x70fd → 0xffff_ffff_ffff_f000.
+    runDecoded(compressedBytes(0x70fd), registers, memory);
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_f000n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 2);
   });
 
   it('c.addi4spn with zero immediate is illegal', () => {

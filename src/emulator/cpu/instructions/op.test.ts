@@ -17,7 +17,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import testMemory from '#test/guest-memory';
-import { add, sub, slt, xor } from '#emulator/cpu/instructions/op';
+import { add, sub, slt, sra, srl, xor } from '#emulator/cpu/instructions/op';
 import {
   createRegisters,
   readGeneralPurposeRegister,
@@ -25,7 +25,7 @@ import {
   writeGeneralPurposeRegister,
   FOUR_BYTES,
 } from '#emulator/cpu/registers';
-import { bytesToNumber, signedNumberToBytes } from '#utils/bytes';
+import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 describe('op', () => {
   it('add and sub combine two registers', () => {
@@ -104,5 +104,40 @@ describe('op', () => {
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 0xff, 32)
     );
+  });
+
+  it('srl and sra differ on a negative value with shamt 32', () => {
+    const registers = createRegisters();
+    // 0xffff_ffff_8000_0000: negative as a 64-bit value, but sext32 of its low word is also negative.
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_8000_0000n)
+    );
+
+    // x0 = 0 is not shamt 32; seed the shift amount in a register instead.
+    writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 32, 32));
+    srl(
+      registers,
+      testMemory(256n),
+      { destinationRegister: 2, sourceRegister1: 1, sourceRegister2: 3 },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 2),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x0000_0000_ffff_ffffn)
+    );
+
+    sra(
+      registers,
+      testMemory(256n),
+      { destinationRegister: 4, sourceRegister1: 1, sourceRegister2: 3 },
+      FOUR_BYTES
+    );
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 4),
+      unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
   });
 });

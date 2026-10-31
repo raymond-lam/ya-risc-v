@@ -20,11 +20,37 @@ import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadBytes, storeBytes } from '#emulator/memory';
 import { create } from '#emulator/terminal';
+import { create as createTimer } from '#emulator/timer';
 import createTestMemory from '#test/guest-memory';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 
 const UART_BASE = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0000n) as ReadonlyUint8Array;
+
+/** Minimal thenable handle that can reject like a worker lifetime. */
+const createFailingHandle = (
+  message: string
+): PromiseLike<void> & {
+  start: () => void;
+  stop: () => void;
+} => {
+  const lifetime = Promise.withResolvers<void>();
+  let stopped = false;
+  return {
+    start: (): void => {
+      queueMicrotask(() => {
+        if (!stopped) {
+          lifetime.reject(new Error(message));
+        }
+      });
+    },
+    stop: (): void => {
+      stopped = true;
+      lifetime.resolve();
+    },
+    then: lifetime.promise.then.bind(lifetime.promise),
+  };
+};
 
 describe('terminal worker', () => {
   it('pushes stdin bytes into UART RX and drains UART TX to stdout', async () => {
@@ -74,5 +100,34 @@ describe('terminal worker', () => {
       terminal.stop();
       await terminal;
     }
+  });
+
+  it('stop on an already-started worker resolves its lifetime instead of hanging', async () => {
+    const memory = createTestMemory(256n);
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const timer = createTimer({ memory });
+    const terminal = create({ memory, stdin, stdout });
+    const failing = createFailingHandle('forced worker failure');
+
+    timer.start();
+    terminal.start();
+    failing.start();
+
+    await assert.rejects(
+      async () => {
+        try {
+          await Promise.all([failing, timer, terminal]);
+        } finally {
+          failing.stop();
+          timer.stop();
+          terminal.stop();
+        }
+      },
+      { message: 'forced worker failure' }
+    );
+
+    // Siblings must have been stopped; otherwise these awaits hang.
+    await Promise.all([timer, terminal]);
   });
 });

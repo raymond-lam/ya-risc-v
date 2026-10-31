@@ -69,8 +69,10 @@ describe('syscon', () => {
     assert.equal(await pending, 'reboot');
   });
 
-  it('a partial store updates one register without tearing the other bytes', () => {
+  it('partial and straddling stores update each register word without tearing', () => {
     const memory = createTestMemory(64n);
+
+    // A partial store updates one register without tearing the other bytes.
     storeBytes({
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
@@ -83,18 +85,16 @@ describe('syscon', () => {
       source: Uint8Array.of(0xaa),
       byteLength: 1,
     });
-    const destination = new Uint8Array(4);
+    const partial = new Uint8Array(4);
     loadBytes({
-      destination,
+      destination: partial,
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
       byteLength: 4,
     });
-    assert.deepEqual(destination, Uint8Array.of(0x01, 0xaa, 0x03, 0x04));
-  });
+    assert.deepEqual(partial, Uint8Array.of(0x01, 0xaa, 0x03, 0x04));
 
-  it('a store across both registers updates each word', () => {
-    const memory = createTestMemory(64n);
+    // A store straddling both registers updates each word.
     const word = Uint8Array.of(0x01, 0x02, 0x03, 0x04);
     storeBytes({
       memory,

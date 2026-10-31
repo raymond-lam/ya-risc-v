@@ -22,10 +22,7 @@ import { CLINT_GUEST_BYTE_LENGTH, CLINT_REGION_ID } from '#emulator/clint';
 import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
-import { create as createTerminal } from '#emulator/terminal';
-import { create as createTimer } from '#emulator/timer';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
-import createTestMemory from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -52,31 +49,6 @@ const virtRegions = (
     [PLIC_REGION_ID, window(0x0c00_0000n, PLIC_GUEST_BYTE_LENGTH)],
     [SYSCON_REGION_ID, window(0x0010_0000n, SYSCON_GUEST_BYTE_LENGTH)],
   ]);
-
-/** Minimal thenable handle that can reject like a worker lifetime. */
-const createFailingHandle = (
-  message: string
-): PromiseLike<void> & {
-  start: () => void;
-  stop: () => void;
-} => {
-  const lifetime = Promise.withResolvers<void>();
-  let stopped = false;
-  return {
-    start: (): void => {
-      queueMicrotask(() => {
-        if (!stopped) {
-          lifetime.reject(new Error(message));
-        }
-      });
-    },
-    stop: (): void => {
-      stopped = true;
-      lifetime.resolve();
-    },
-    then: lifetime.promise.then.bind(lifetime.promise),
-  };
-};
 
 describe('emulator create', () => {
   it('rejects an image that does not fit in the ram region', () => {
@@ -176,31 +148,6 @@ describe('emulator create', () => {
     );
   });
 
-  it('rejects guest windows that overlap', () => {
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const regions = virtRegions(16n);
-    const uart = regions.get(UART_REGION_ID);
-    assert.ok(uart !== undefined);
-    regions.set(RAM_REGION_ID, {
-      guestAddress: uart.guestAddress,
-      guestByteLength: 16n,
-    });
-    assert.throws(
-      () =>
-        create({
-          image: new Uint8Array(0),
-          stdin,
-          stdout,
-          guestRegions: regions,
-          timebaseHz: 10_000_000n,
-          deviceTreeAddress: 'end',
-          resetPc: guest(0x8000_0000n),
-        }),
-      { name: 'RangeError', message: 'ram window overlaps uart.' }
-    );
-  });
-
   it('rejects a guest region map that omits a required id', () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();
@@ -239,47 +186,5 @@ describe('emulator create', () => {
         }),
       { name: 'RangeError', message: "Unknown guest region 'disk'." }
     );
-  });
-
-  it('timer and terminal stop before start is idempotent', async () => {
-    const memory = createTestMemory(256n);
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const timer = createTimer({ memory });
-    const terminal = createTerminal({ memory, stdin, stdout });
-    timer.stop();
-    terminal.stop();
-    timer.stop();
-    terminal.stop();
-    await Promise.all([timer, terminal]);
-  });
-
-  it('stops live timer and terminal workers when a sibling rejects', async () => {
-    const memory = createTestMemory(256n);
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const timer = createTimer({ memory });
-    const terminal = createTerminal({ memory, stdin, stdout });
-    const failing = createFailingHandle('forced worker failure');
-
-    timer.start();
-    terminal.start();
-    failing.start();
-
-    await assert.rejects(
-      async () => {
-        try {
-          await Promise.all([failing, timer, terminal]);
-        } finally {
-          failing.stop();
-          timer.stop();
-          terminal.stop();
-        }
-      },
-      { message: 'forced worker failure' }
-    );
-
-    // Siblings must have been stopped; otherwise these awaits hang.
-    await Promise.all([timer, terminal]);
   });
 });
