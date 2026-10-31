@@ -262,6 +262,14 @@ const eslintConfig = [
       'no-restricted-imports': [
         'error',
         {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Workers are spawned only by device hosts (cpu/index.ts, timer/index.ts, terminal/index.ts); uart code is bundled into worker entries and must not import Worker.',
+            },
+          ],
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/uart/*')],
         },
       ],
@@ -274,6 +282,14 @@ const eslintConfig = [
       'no-restricted-imports': [
         'error',
         {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Workers are spawned only by device hosts (cpu/index.ts, timer/index.ts, terminal/index.ts); clint code is bundled into worker entries and must not import Worker.',
+            },
+          ],
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/clint/*')],
         },
       ],
@@ -286,6 +302,14 @@ const eslintConfig = [
       'no-restricted-imports': [
         'error',
         {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Workers are spawned only by device hosts (cpu/index.ts, timer/index.ts, terminal/index.ts); plic code is bundled into worker entries and must not import Worker.',
+            },
+          ],
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/plic/*')],
         },
       ],
@@ -298,6 +322,14 @@ const eslintConfig = [
       'no-restricted-imports': [
         'error',
         {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Workers are spawned only by device hosts (cpu/index.ts, timer/index.ts, terminal/index.ts); syscon code is bundled into worker entries and must not import Worker.',
+            },
+          ],
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/syscon/*')],
         },
       ],
@@ -305,7 +337,26 @@ const eslintConfig = [
   },
   {
     files: ['src/emulator/timer/**/*.ts'],
-    ignores: ['src/emulator/timer/**/*.test.ts'],
+    ignores: ['src/emulator/timer/**/*.test.ts', 'src/emulator/timer/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Only the timer host (timer/index.ts) may spawn workers; timer worker code must not import Worker.',
+            },
+          ],
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/timer/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/timer/index.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -317,7 +368,26 @@ const eslintConfig = [
   },
   {
     files: ['src/emulator/terminal/**/*.ts'],
-    ignores: ['src/emulator/terminal/**/*.test.ts'],
+    ignores: ['src/emulator/terminal/**/*.test.ts', 'src/emulator/terminal/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Only the terminal host (terminal/index.ts) may spawn workers; terminal worker code must not import Worker.',
+            },
+          ],
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/terminal/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/terminal/index.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
