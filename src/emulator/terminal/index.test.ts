@@ -130,4 +130,53 @@ describe('terminal worker', () => {
     // Siblings must have been stopped; otherwise these awaits hang.
     await Promise.all([timer, terminal]);
   });
+
+  it(
+    'stop flushes TX bytes already queued in the UART ring to stdout',
+    { timeout: 20_000 },
+    async () => {
+      const memory = createTestMemory(256n);
+      // Queue 'd','r','a','i','n' into the TX ring before the worker even starts:
+      // the drain handshake must hand every pre-stop byte to stdout instead of
+      // letting the isolate exit and destroy the buffered writes.
+      const queued = Uint8Array.of(0x64, 0x72, 0x61, 0x69, 0x6e);
+      for (const byte of queued) {
+        storeBytes({
+          memory,
+          address: UART_BASE,
+          source: new Uint8Array([byte]),
+          byteLength: 1,
+        });
+      }
+      const stdin = new PassThrough();
+      const stdout = new PassThrough();
+      const terminal = create({ memory, stdin, stdout });
+      terminal.start();
+      // Stop arrives while those bytes are still queued; the worker's stop path
+      // drains the ring before its final `end` + `finish` flush.
+      terminal.stop();
+
+      const received: Buffer[] = [];
+      stdout.on('data', (chunk: Buffer | string) => {
+        received.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+      });
+      const flushed = (): Buffer => Buffer.concat(received);
+      const deadline = Date.now() + 2000;
+      while (flushed().length < queued.length) {
+        if (Date.now() > deadline) {
+          assert.fail(`stdout got ${JSON.stringify(flushed())} within 2000ms`);
+        }
+        await delay(10);
+      }
+      assert.deepEqual(flushed(), Buffer.from(queued));
+
+      // The lifetime settles once the drained worker exits; no hang.
+      await Promise.race([
+        terminal.then(() => undefined),
+        delay(2000).then(() => {
+          throw new Error('terminal lifetime did not settle within 2000ms');
+        }),
+      ]);
+    }
+  );
 });

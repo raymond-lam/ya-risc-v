@@ -152,4 +152,27 @@ describe('syscon', () => {
     cancelSysconWatch(memory);
     assert.equal(await pending, 'idle');
   });
+
+  it('cancelling an idle watch resolves a later watch as idle', async () => {
+    const memory = createTestMemory(64n);
+    // Cancel with no watcher parked: the idle word still transitions to cancelled,
+    // so a watch started afterwards must not hang waiting for a guest request.
+    cancelSysconWatch(memory);
+    assert.equal(await watchSyscon(memory), 'idle');
+  });
+
+  it('cancelling does not overwrite a live poweroff request: the watch still resolves it', async () => {
+    const memory = createTestMemory(64n);
+    storeBytes({
+      memory,
+      address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
+      source: registerBytes(SYSCON_POWEROFF_VALUE),
+      byteLength: 4,
+    });
+    cancelSysconWatch(memory);
+    // The cancel only transitions idle→cancelled; overwriting a live request with
+    // the cancelled level would race the host watch and could swallow the guest's
+    // request, so the live request must survive cancellation.
+    assert.equal(await watchSyscon(memory), 'poweroff');
+  });
 });
