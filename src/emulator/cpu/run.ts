@@ -15,7 +15,7 @@
  */
 
 import { parentPort, workerData } from 'node:worker_threads';
-import { addBytes, copyBytes } from '#utils/bytes';
+import { copyBytes } from '#utils/bytes';
 import applyBootHandoff from '#emulator/cpu/boot';
 import decode, { ENCODING_LENGTH_32_BIT, ENCODING_LENGTH_MASK } from '#emulator/cpu/decode';
 import { physicalMemoryAccessDenied } from '#emulator/cpu/pmp';
@@ -25,7 +25,6 @@ import {
   createRegisters,
   readProgramCounter,
   setProgramCounter,
-  TWO_BYTES,
 } from '#emulator/cpu/registers';
 import sampleDevicePending from '#emulator/cpu/sample-device-pending';
 import {
@@ -63,42 +62,31 @@ const fetchInstruction = (
   memory: Memory,
   instructionBytes: Uint8Array
 ): boolean => {
-  instructionBytes.fill(0);
   const pc = readProgramCounter(registers);
-  // The length is in the low two bits, so the first check can only cover those two bytes.
-  // A 16-bit instruction stops after this and must not fault on bytes it does not fetch.
-  if (physicalMemoryAccessDenied({ registers, address: pc, byteLength: 2, access: 'fetch' })) {
-    enterTrap(registers, CAUSE_INSTRUCTION_ACCESS_FAULT, copyBytes(new Uint8Array(8), pc));
-    return false;
-  }
-  if (trapIfFetchUnmapped(registers, memory, pc, 2)) {
-    return false;
-  }
+  // Load all four bytes speculatively before any checks. This is safe because loadBytes is
+  // a raw host-side read that cannot fault or mutate state: unmapped/past-end bytes arrive
+  // as 0, and a PMP-denied byte read into this scratch buffer is unobservable — the
+  // width-checked trap below discards the buffer before decode consumes it.
   loadBytes({
-    destination: instructionBytes.subarray(0, 2),
+    destination: instructionBytes,
     memory,
     address: pc,
-    byteLength: 2,
+    byteLength: 4,
   });
-  if ((instructionBytes[0]! & ENCODING_LENGTH_MASK) !== ENCODING_LENGTH_32_BIT) {
-    return true;
-  }
-  // The encoding is 32 bits, so re-check all four bytes as one access. The lowest matching
-  // entry has to cover the whole instruction; checking the upper parcel on its own would
-  // allow an instruction that straddles an execute boundary.
-  if (physicalMemoryAccessDenied({ registers, address: pc, byteLength: 4, access: 'fetch' })) {
+  // Derive the instruction length from byte 0 before any width checks. A 16-bit instruction
+  // at the end of the RAM window must not fault on bytes it does not fetch, so the
+  // mapping/permission check uses this length (2) and the speculative trailing zeros never
+  // matter. A 32-bit instruction is one architectural access: the lowest matching PMP
+  // entry must cover the whole 4 bytes, and an instruction straddling the end of the
+  // window/mapping faults — even when its first 2 bytes are mapped and its last 2 are not.
+  const length = (instructionBytes[0]! & ENCODING_LENGTH_MASK) === ENCODING_LENGTH_32_BIT ? 4 : 2;
+  if (physicalMemoryAccessDenied({ registers, address: pc, byteLength: length, access: 'fetch' })) {
     enterTrap(registers, CAUSE_INSTRUCTION_ACCESS_FAULT, copyBytes(new Uint8Array(8), pc));
     return false;
   }
-  if (trapIfFetchUnmapped(registers, memory, pc, 4)) {
+  if (trapIfFetchUnmapped(registers, memory, pc, length)) {
     return false;
   }
-  loadBytes({
-    destination: instructionBytes.subarray(2, 4),
-    memory,
-    address: addBytes(new Uint8Array(8), pc, TWO_BYTES),
-    byteLength: 2,
-  });
   return true;
 };
 
@@ -109,7 +97,13 @@ const main = async (): Promise<void> => {
   applyBootHandoff(registers, deviceTreeAddress);
   const instructionBytes = new Uint8Array(4);
 
-  // No exit condition: the hart runs until the host terminates us.
+  // The hart runs until the host tears the worker down. A syscon poweroff/reboot
+  // request is modeled as a yank: the host watch sees the request and stops the
+  // worker, cutting power at a deliberately nondeterministic point — like real
+  // silicon, where the window between the power register write and the loss of
+  // power is physical. There is no in-worker halt check on purpose; correct guests
+  // are yank-safe (after the finisher store they spin or `wfi` and do nothing
+  // observable).
   for (;;) {
     // NOTE: IRQ wire sampling runs every instruction for interrupt latency correctness.
     // Coalescing samples across iterations would be a micro-opt with observable timing
