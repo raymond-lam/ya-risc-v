@@ -95,9 +95,11 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    via `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
    `#emulator/timer` / `#emulator/terminal`). `eslint.config.mjs` is the authoritative
    statement of all of this — including the worker-bundle ban on `#emulator/timer`,
-   `#emulator/terminal`, and `Worker` from `node:worker_threads` under `src/emulator/cpu/**`
-   (except host `cpu/index.ts`), which preserves tree-shaking (`sideEffects: false` — so
-   also avoid top-level side effects in shared modules).
+   `#emulator/terminal`, and `Worker` from `node:worker_threads` under every device package
+   (`src/emulator/cpu/**`, `uart/**`, `clint/**`, `plic/**`, `syscon/**`, `timer/**`,
+   `terminal/**` — worker files never spawn; only the three device hosts `cpu/index.ts`,
+   `timer/index.ts`, and `terminal/index.ts` import `Worker`), which preserves tree-shaking
+   (`sideEffects: false` — so also avoid top-level side effects in shared modules).
 
 ## Privileged architecture summary
 
