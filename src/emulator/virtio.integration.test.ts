@@ -366,7 +366,7 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
           { diskImagePath: diskPath }
         );
         // The IN request must not have written the disk back.
-        assert.deepEqual(readFileSync(diskPath), buildDiskBytes());
+        assert.deepEqual(new Uint8Array(readFileSync(diskPath)), buildDiskBytes());
       } finally {
         remove();
       }
@@ -384,7 +384,7 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
           ({ output, emulator }) => expectPrintThenPoweroff(output, emulator, 'VD'),
           { diskImagePath: diskPath }
         );
-        assert.deepEqual(readFileSync(diskPath), buildDiskBytes());
+        assert.deepEqual(new Uint8Array(readFileSync(diskPath)), buildDiskBytes());
       } finally {
         remove();
       }
