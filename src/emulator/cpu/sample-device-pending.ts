@@ -30,9 +30,16 @@ import {
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
 import { isPlicMachineExternalPending, isPlicSupervisorExternalPending } from '#emulator/plic';
+import { pollVirtioDiskCompletions } from '#emulator/virtio';
 
 /** Sample CLINT/PLIC wires into `mip` (device-driven pending bits). */
 const sampleDevicePending = (registers: Registers, memory: Memory): void => {
+  // Drain the virtio completion channel before sampling PLIC wires. A disk-worker
+  // completion was published to the staging window; the CPU worker now writes it
+  // into guest RAM (status byte, used-ring entry, used->idx bump) and asserts
+  // PLIC source 1. Sampling wires after this lets the run loop's
+  // takeInterruptIfAny see MEIP on this same iteration.
+  pollVirtioDiskCompletions(memory);
   // CLINT: machine timer / machine software wires, then the Sstc mirror's supervisor timer wire.
   setMachineTimerInterruptPending(registers, isClintMachineTimerPending(memory));
   setMachineSoftwareInterruptPending(registers, isClintMachineSoftwarePending(memory));

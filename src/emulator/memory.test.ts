@@ -42,7 +42,7 @@ import { RAM_REGION_ID } from '#emulator/ram';
 import { RESERVATION_REGION_ID } from '#emulator/reservation';
 import { SYSCON_REGION_ID } from '#emulator/syscon';
 import { popUartTransmit, pushUartReceive, UART_REGION_ID } from '#emulator/uart';
-import { VIRTIO_REGION_ID } from '#emulator/virtio';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_QUEUE_NUM_MAX, VIRTIO_REGION_ID } from '#emulator/virtio';
 import { bigIntAsNumber } from '#utils/int';
 import createTestMemory, { machineRegionSpecs } from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
@@ -969,6 +969,59 @@ describe('plic', () => {
     assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 0);
     storePlicUint32(memory, 0x200004n, PLIC_SOURCE_UART);
     assert.equal(loadPlicUint32(memory, 0x1000n) & (1 << PLIC_SOURCE_UART), 1 << PLIC_SOURCE_UART);
+  });
+});
+
+describe('virtio window dispatch', () => {
+  const virtioAddress = (offset: bigint): ReadonlyUint8Array =>
+    unsignedBigIntToBytes(new Uint8Array(8), 0x1000_1000n + offset);
+
+  const loadVirtioUint32 = (memory: Memory, offset: bigint): number => {
+    const destination = new Uint8Array(8);
+    loadBytes({ destination, memory, address: virtioAddress(offset), byteLength: 4 });
+    return (
+      destination[0]! | (destination[1]! << 8) | (destination[2]! << 16) | (destination[3]! << 24)
+    );
+  };
+
+  it('routes 0x10001000 loads/stores/atomics to the virtio handlers', () => {
+    const memory = createTestMemory(64n);
+    // The four registers xv6's virtio_disk_init probes before userinit, plus
+    // QueueNumMax. They arrive only if guest-address resolution AND the
+    // REGION_LOAD_STORE entry both reach loadBytesFromVirtio.
+    assert.equal(loadVirtioUint32(memory, 0x000n), 0x7472_6976); // MagicValue "virt"
+    assert.equal(loadVirtioUint32(memory, 0x004n), 2); // Version (virtio-mmio v2)
+    assert.equal(loadVirtioUint32(memory, 0x008n), 2); // DeviceID: block device
+    assert.equal(loadVirtioUint32(memory, 0x00cn), 0x554d_4551); // VendorID "QEMU"
+    assert.equal(loadVirtioUint32(memory, 0x034n), VIRTIO_QUEUE_NUM_MAX); // QueueNumMax
+    // W-only register: a store through the dispatch must not become readable.
+    storeBytes({
+      memory,
+      address: virtioAddress(0x030n),
+      source: unsignedBigIntToBytes(new Uint8Array(8), 1n),
+      byteLength: 4,
+    });
+    assert.equal(loadVirtioUint32(memory, 0x030n), 0); // QueueSel is write-only
+    // Window bounds: first byte mapped, one past the end unmapped.
+    assert.ok(guestAccessIsMapped({ memory, address: virtioAddress(0n), byteLength: 4 }));
+    assert.equal(
+      guestAccessIsMapped({
+        memory,
+        address: virtioAddress(VIRTIO_GUEST_BYTE_LENGTH),
+        byteLength: 1,
+      }),
+      false
+    );
+    // RV64A atomics on virtio MMIO fail — callers trap, like every other device.
+    assert.equal(
+      atomicStoreBytes({
+        memory,
+        address: virtioAddress(0n),
+        source: new Uint8Array(8),
+        byteLength: 4,
+      }),
+      false
+    );
   });
 });
 

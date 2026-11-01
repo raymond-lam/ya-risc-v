@@ -41,6 +41,11 @@ import {
 } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
 import { loadIrqLevel, waitIrqLevel } from '#emulator/irq-level';
+import {
+  loadVirtioDiskCompletionSeq,
+  pollVirtioDiskCompletions,
+  waitVirtioDiskCompletion,
+} from '#emulator/virtio';
 import type { Memory } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
 
@@ -203,18 +208,34 @@ const wfi = async (
   // Retire before waiting so minstret/mcycle advance when wfi executes, not when it wakes.
   retireInstructionNow(registers);
   for (;;) {
+    // A disk-worker completion is published through guest RAM by the CPU worker
+    // and only then raises PLIC source 1. Poll it before wire sampling so an
+    // interrupt due to a completed virtio request is visible in `mip` on this
+    // iteration.
+    pollVirtioDiskCompletions(memory);
     sampleDevicePending(registers, memory);
     if (isPendingEnabledInterrupt(registers)) {
       return;
     }
-    // Snapshot the level word, then re-sample wires so a publish between the first
-    // check and this load cannot leave us waiting on an already-current level.
+    // Snapshot both wake words, then re-poll/re-sample so a publish between the
+    // first check and these loads cannot leave us waiting on already-current levels.
     const fromLevel = loadIrqLevel(memory);
+    const completionLevel = loadVirtioDiskCompletionSeq(memory);
+    pollVirtioDiskCompletions(memory);
     sampleDevicePending(registers, memory);
     if (isPendingEnabledInterrupt(registers)) {
       return;
     }
-    await waitIrqLevel(memory, fromLevel);
+    // Race the IRQ-level and disk-completion wake words; whichever loses is aborted
+    // so its `waitWake` keepalive handle is released (an abandoned pending wait
+    // would otherwise pin the event loop).
+    const wakeRace = new AbortController();
+    await Promise.race([
+      waitIrqLevel(memory, fromLevel, wakeRace.signal),
+      waitVirtioDiskCompletion(memory, completionLevel, wakeRace.signal),
+    ]).finally(() => {
+      wakeRace.abort();
+    });
   }
 };
 

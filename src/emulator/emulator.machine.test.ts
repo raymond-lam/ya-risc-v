@@ -29,8 +29,21 @@
  *     has only a 5-bit zimm, so mie.MTIE (bit 7) is written through a register instead.
  */
 
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, it } from 'node:test';
-import { expectPrintThenPoweroff, runGuest } from '#test/integration-harness';
+import { PassThrough } from 'node:stream';
+import { create } from '#emulator';
+import {
+  expectPrintThenPoweroff,
+  guestAddress,
+  guestRegions,
+  RAM_BASE,
+  runGuest,
+  settleEmulator,
+  TIMEBASE_HZ,
+} from '#test/integration-harness';
 
 describe('emulator machine behavior (real machine, no mocks)', () => {
   it(
@@ -185,6 +198,59 @@ describe('emulator machine behavior (real machine, no mocks)', () => {
       await runGuest(image, ({ output, emulator }) =>
         expectPrintThenPoweroff(output, emulator, 'ABC')
       );
+    }
+  );
+
+  it(
+    'boots and powers off with no disk image bound (diskImagePath: null)',
+    { timeout: 20_000 },
+    async () => {
+      // The explicit null pins the diskless worker path end to end. No disk
+      // worker is spawned; the virtio window is still packed and the absent
+      // device reads 0 for every register. Instruction words are the proven
+      // syscon finisher tail from the TX-ring suite.
+      // prettier-ignore
+      const image = new Uint8Array([
+        0x37, 0x06, 0x10, 0x00, // lui  x12, 0x100 — syscon base 0x0010_0000
+        0x93, 0x06, 0x10, 0x00, // addi x13, x0, 1 — syscon poweroff value
+        0x23, 0x20, 0xd6, 0x00, // sw   x13, 0(x12) — syscon poweroff (the finisher store)
+        0x6f, 0x00, 0x00, 0x00, // jal  x0, 0 — yank-safe spin: the power cut is nondeterministic
+      ]);
+
+      await runGuest(image, ({ emulator }) => settleEmulator(emulator), {
+        diskImagePath: null,
+      });
+    }
+  );
+
+  it(
+    'rejects a missing disk image path through the disk worker error path',
+    { timeout: 20_000 },
+    async () => {
+      // The virtio disk worker opens the image before servicing any request;
+      // the open failure crashes the worker, the VirtioDisk host lifetime
+      // rejects on the worker 'error' event, and the emulator lifetime rejects
+      // with the same cause. Bounded by the test timeout — never a wall-clock
+      // sleep. The emulator's own lifetime finally stops the other workers, so
+      // the trailing stop() is a no-op backstop.
+      const stdin = new PassThrough();
+      const stdout = new PassThrough();
+      const emulator = create({
+        image: new Uint8Array([0x73, 0x00, 0x50, 0x10]), // wfi — never reached
+        stdin,
+        stdout,
+        guestRegions: guestRegions(),
+        resetPc: guestAddress(RAM_BASE),
+        timebaseHz: TIMEBASE_HZ,
+        deviceTreeAddress: 'end',
+        diskImagePath: join(tmpdir(), 'ya-risc-v-missing-disk', 'no-such-image.img'),
+      });
+      try {
+        emulator.start();
+        await assert.rejects(emulator, /ENOENT|no such file or directory/);
+      } finally {
+        emulator.stop();
+      }
     }
   );
 });

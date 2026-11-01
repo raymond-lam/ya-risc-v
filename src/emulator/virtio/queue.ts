@@ -615,11 +615,16 @@ const pollVirtioDiskCompletions = (memory: Memory): void => {
 };
 
 /** Park (waitAsync) until the disk worker publishes a new completion level. */
-const waitVirtioDiskCompletion = async (memory: Memory, fromLevel: number): Promise<void> =>
+const waitVirtioDiskCompletion = async (
+  memory: Memory,
+  fromLevel: number,
+  signal?: AbortSignal
+): Promise<void> =>
   waitWake({
     bytes: memory.bytes,
     index: virtioHostIndex(memory, VIRTIO_HOST_COMPLETION_SEQ),
     fromLevel,
+    signal,
   });
 
 export { loadVirtioDiskCompletionSeq, pollVirtioDiskCompletions, waitVirtioDiskCompletion };

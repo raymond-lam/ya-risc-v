@@ -32,6 +32,7 @@ const allPackagePrivatePatterns = [
       '#emulator/clint/*',
       '#emulator/plic/*',
       '#emulator/syscon/*',
+      '#emulator/virtio/*',
       '#emulator/types',
       '#tui/*',
     ],
@@ -43,6 +44,13 @@ const allPackagePrivatePatterns = [
 /** Package-private patterns excluding one package's own `#pkg/*` siblings. */
 const packagePrivateExcept = (ownGroup) =>
   allPackagePrivatePatterns.map((pattern) => ({
+    ...pattern,
+    group: pattern.group.filter((group) => group !== ownGroup),
+  }));
+
+/** Test package-private patterns excluding one package's own `#pkg/*` siblings. */
+const testPackagePrivateExcept = (ownGroup) =>
+  testPackagePrivatePatterns.map((pattern) => ({
     ...pattern,
     group: pattern.group.filter((group) => group !== ownGroup),
   }));
@@ -59,6 +67,7 @@ const testPackagePrivatePatterns = [
       '#emulator/clint/*',
       '#emulator/plic/*',
       '#emulator/syscon/*',
+      '#emulator/virtio/*',
       '#emulator/types',
       '#tui/*',
     ],
@@ -156,6 +165,7 @@ const eslintConfig = [
       'src/emulator/clint/**',
       'src/emulator/plic/**',
       'src/emulator/syscon/**',
+      'src/emulator/virtio/**',
       'src/emulator/terminal/**',
       'src/emulator/timer/**',
       'src/emulator/cpu/**',
@@ -177,7 +187,7 @@ const eslintConfig = [
     },
   },
   {
-    /** Emulator host entry may import `#emulator/types`. */
+    /** Emulator host entry may import `#emulator/types` and the virtio host subpath. */
     files: ['src/emulator/index.ts'],
     rules: {
       'no-restricted-imports': [
@@ -187,7 +197,9 @@ const eslintConfig = [
             ...importShapePatterns,
             ...allPackagePrivatePatterns.map((pattern) => ({
               ...pattern,
-              group: pattern.group.filter((group) => group !== '#emulator/types'),
+              group: pattern.group.filter(
+                (group) => group !== '#emulator/types' && group !== '#emulator/virtio/*'
+              ),
             })),
           ],
         },
@@ -207,6 +219,17 @@ const eslintConfig = [
         'error',
         {
           patterns: [...importShapePatterns, ...testPackagePrivatePatterns],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/virtio/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...testPackagePrivateExcept('#emulator/virtio/*')],
         },
       ],
     },
@@ -331,6 +354,37 @@ const eslintConfig = [
             },
           ],
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/syscon/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/virtio/**/*.ts'],
+    ignores: ['src/emulator/virtio/**/*.test.ts', 'src/emulator/virtio/host.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Only the virtio host (virtio/host.ts) may spawn workers; device code is bundled into worker entries and must not import Worker.',
+            },
+          ],
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/virtio/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/virtio/host.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/virtio/*')],
         },
       ],
     },

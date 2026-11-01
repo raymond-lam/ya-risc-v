@@ -56,6 +56,7 @@ import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -71,7 +72,7 @@ const OUTPUT_POLL_INTERVAL_MS = 2;
 const guestAddress = (address: bigint): ReadonlyUint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), address);
 
-/** Standard virtual map: ram → uart → clint → plic → syscon (the emulator packs the rest). */
+/** Standard virtual map: ram → uart → clint → plic → syscon → virtio (the emulator packs the rest). */
 const guestRegions = (): Map<
   string,
   { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }
@@ -93,6 +94,10 @@ const guestRegions = (): Map<
     [
       SYSCON_REGION_ID,
       { guestAddress: guestAddress(0x0010_0000n), guestByteLength: SYSCON_GUEST_BYTE_LENGTH },
+    ],
+    [
+      VIRTIO_REGION_ID,
+      { guestAddress: guestAddress(0x1000_1000n), guestByteLength: VIRTIO_GUEST_BYTE_LENGTH },
     ],
   ]);
 
@@ -161,7 +166,8 @@ const runGuest = async (
     stdin: PassThrough;
     output: GuestOutput;
     emulator: EmulatorHandle;
-  }) => Promise<void>
+  }) => Promise<void>,
+  { diskImagePath = null }: { diskImagePath?: string | null } = {}
 ): Promise<void> => {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
@@ -174,6 +180,7 @@ const runGuest = async (
     resetPc: guestAddress(RAM_BASE),
     timebaseHz: TIMEBASE_HZ,
     deviceTreeAddress: 'end',
+    diskImagePath,
   });
   try {
     emulator.start();

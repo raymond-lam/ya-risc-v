@@ -134,9 +134,11 @@ describe('virtio guest window', () => {
     assert.equal(readVirtioRegister(memory, 0x034n), 0);
     assert.equal(readVirtioRegister(memory, 0x038n), 0);
     assert.equal(readVirtioRegister(memory, 0x044n), 0);
-    writeVirtioRegister(memory, 0x038n, 8);
+    writeVirtioRegister(memory, 0x038n, 8); // gated: queue 0's shadow is untouched
     writeVirtioRegister(memory, 0x030n, 0);
-    assert.equal(readVirtioRegister(memory, 0x038n), 0);
+    // Queue 0's QueueNum persists across QueueSel changes (per-queue register);
+    // the write above was gated, so the value stored under QueueSel 0 (8) stands.
+    assert.equal(readVirtioRegister(memory, 0x038n), 8);
     assert.equal(readVirtioRegister(memory, 0x034n), 8);
   });
 
