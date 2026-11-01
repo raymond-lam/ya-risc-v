@@ -40,8 +40,9 @@ const VIRTIO_REGION_ID = 'virtio';
 /** Guest-visible MMIO window (sparse; holes read 0 / ignore stores). Always packed — even
  *  diskless, so a probe reads 0x00000000 instead of taking a load access fault. */
 const VIRTIO_GUEST_BYTE_LENGTH = 0x1000n;
-/** Packed host slab: register shadows + engine state + disk channel + staging window. */
-const VIRTIO_HOST_BYTE_LENGTH = 4240n;
+/** Packed host slab: register shadows + engine state + disk channel + staging window,
+ *  plus the appended config-generation / queue-notify / disk-ready / test-pause words after it. */
+const VIRTIO_HOST_BYTE_LENGTH = 4256n;
 /** Maximum split-virtqueue depth this device supports (xv6's NUM). */
 const VIRTIO_QUEUE_NUM_MAX = 8;
 /** Staging window size — the device's maximum single-request data length. */
@@ -147,6 +148,19 @@ const VIRTIO_HOST_DISK_CAPACITY_LOW = 132;
 const VIRTIO_HOST_DISK_CAPACITY_HIGH = 136;
 const VIRTIO_HOST_DISK_CAPACITY_READY = 140;
 const VIRTIO_HOST_STAGING = 144;
+// Words appended after the 4096-byte staging window (144..4240). All u32, hence only
+// 4-byte alignment is required for the Int32Array views below.
+/** virtio-blk capacity config-generation counter (disk worker → guest; guest reads 0x0fc). */
+const VIRTIO_HOST_CONFIG_GENERATION = 4240;
+/** QueueNotify W-only shadow (CPU-owned): assembled byte-at-a-time across partial stores. */
+const VIRTIO_HOST_QUEUE_NOTIFY = 4244;
+/** Disk-readiness wake word (disk worker → host): 0 not ready, 1 ready, -1 open failed.
+ *  The worker host consumes it and only then flips device-present (§FIX 1). */
+const VIRTIO_HOST_DISK_READY = 4248;
+/** Test-only freeze word: non-zero parks the disk worker between capacity publish and
+ *  readiness so tests can observe the not-ready window deterministically (§FIX 1).
+ *  Production never writes it; the worker treats non-zero as a pause. */
+const VIRTIO_HOST_TEST_PAUSE = 4252;
 
 type VirtioRegisterKind =
   | 'magic'
@@ -196,6 +210,16 @@ const virtioHostInt32 = (memory: Memory, hostOffset: number): Int32Array =>
 
 const virtioHostBigUint64 = (memory: Memory, hostOffset: number): BigUint64Array =>
   bytesToBigUint64Array(memory.bytes, virtioHostIndex(memory, hostOffset));
+
+/** Device-present flag (host-owned, read by the CPU worker) via Atomics, giving the
+ *  release/acquire ordering a guest needs: seeing present == 1 must also reveal the disk
+ *  worker's capacity / config-generation writes that preceded the flip (§FIX 1). */
+const loadVirtioDevicePresent = (memory: Memory): number =>
+  Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_DEVICE_PRESENT), 0) >>> 0;
+
+const storeVirtioDevicePresent = (memory: Memory, present: boolean): void => {
+  Atomics.store(virtioHostInt32(memory, VIRTIO_HOST_DEVICE_PRESENT), 0, present ? 1 : 0);
+};
 
 /** Decode a guest offset within the virtio window (holes → `null`). */
 const virtioOffsetToLocation = (offset: bigint): VirtioRegisterLocation | null => {
@@ -324,11 +348,13 @@ export {
   VIRTIO_GUEST_BYTE_LENGTH,
   VIRTIO_HOST_BYTE_LENGTH,
   VIRTIO_HOST_COMPLETION_SEQ,
+  VIRTIO_HOST_CONFIG_GENERATION,
   VIRTIO_HOST_DEVICE_FEATURES_SEL,
   VIRTIO_HOST_DEVICE_PRESENT,
   VIRTIO_HOST_DISK_CAPACITY_HIGH,
   VIRTIO_HOST_DISK_CAPACITY_LOW,
   VIRTIO_HOST_DISK_CAPACITY_READY,
+  VIRTIO_HOST_DISK_READY,
   VIRTIO_HOST_DRAINED_SEQ,
   VIRTIO_HOST_DRIVER_FEATURES_HI,
   VIRTIO_HOST_DRIVER_FEATURES_LO,
@@ -349,6 +375,7 @@ export {
   VIRTIO_HOST_QUEUE_NUM,
   VIRTIO_HOST_QUEUE_READY,
   VIRTIO_HOST_QUEUE_SEL,
+  VIRTIO_HOST_QUEUE_NOTIFY,
   VIRTIO_HOST_REQUEST_DIRECTION,
   VIRTIO_HOST_REQUEST_IO_ERROR,
   VIRTIO_HOST_REQUEST_LENGTH,
@@ -357,6 +384,7 @@ export {
   VIRTIO_HOST_REQUEST_SEQ,
   VIRTIO_HOST_STAGING,
   VIRTIO_HOST_STATUS,
+  VIRTIO_HOST_TEST_PAUSE,
   VIRTIO_MAGIC_VALUE,
   VIRTIO_MAX_CHAIN_DESCRIPTORS,
   VIRTIO_MMIO_CONFIG_CAPACITY,
@@ -392,11 +420,13 @@ export {
   VRING_DESC_F_NEXT,
   VRING_DESC_F_WRITE,
   isValidVirtioQueueNum,
+  loadVirtioDevicePresent,
   loadVirtioDiskCapacity,
   loadVirtioShadowByte,
   loadVirtioShadowU32,
   storeVirtioShadowByte,
   storeVirtioShadowU32,
+  storeVirtioDevicePresent,
   virtioHostBigUint64,
   virtioHostIndex,
   virtioHostInt32,

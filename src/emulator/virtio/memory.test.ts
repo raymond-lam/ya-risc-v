@@ -21,7 +21,11 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { loadBytes, storeBytes, type Memory } from '#emulator/memory';
 import { initializeVirtio } from '#emulator/virtio';
-import { closeVirtioImage, openVirtioImage } from '#emulator/virtio/disk';
+import {
+  closeVirtioImage,
+  openVirtioImage,
+  publishVirtioDiskCapacity,
+} from '#emulator/virtio/disk';
 import type { ReadonlyUint8Array } from '#types';
 import {
   bytesToBigInt,
@@ -172,7 +176,8 @@ describe('virtio guest window', () => {
     const path = join(dir, 'disk.img');
     writeFileSync(path, new Uint8Array(1280));
     try {
-      openVirtioImage(memory, path);
+      openVirtioImage(path);
+      publishVirtioDiskCapacity(memory);
       assert.equal(readCapacity(memory), 2n);
       closeVirtioImage(memory);
       assert.equal(readCapacity(memory), 0n);
@@ -183,6 +188,56 @@ describe('virtio guest window', () => {
 
     initializeVirtio(memory, false);
     assert.equal(readCapacity(memory), 0n);
+  });
+
+  it('config generation reads 0 while absent and ≥1 once capacity publishes (§FIX 3)', () => {
+    const memory = createTestMemory(64n);
+    assert.equal(readVirtioRegister(memory, 0x0fcn), 0);
+
+    const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+    const path = join(dir, 'disk.img');
+    writeFileSync(path, new Uint8Array(1280));
+    try {
+      openVirtioImage(path);
+      // Capacity is published by the worker, not by open (so the counter is still 0).
+      assert.equal(readVirtioRegister(memory, 0x0fcn), 0);
+      publishVirtioDiskCapacity(memory);
+      const generation = readVirtioRegister(memory, 0x0fcn);
+      assert.ok(generation >= 1);
+      // Stable across reads while the config is unchanged.
+      assert.equal(readVirtioRegister(memory, 0x0fcn), generation);
+      assert.equal(readVirtioRegister(memory, 0x0fcn), generation);
+    } finally {
+      closeVirtioImage(memory);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('FEATURES_OK is validated against unadvertised feature bits (§FIX 4)', () => {
+    const negotiate = (
+      memory: Memory,
+      driverFeaturesHi: number,
+      driverFeaturesLo: number
+    ): number => {
+      writeVirtioRegister(memory, 0x024n, 1); // DriverFeaturesSel = 1 (high word)
+      writeVirtioRegister(memory, 0x020n, driverFeaturesHi);
+      writeVirtioRegister(memory, 0x024n, 0); // DriverFeaturesSel = 0 (low word)
+      writeVirtioRegister(memory, 0x020n, driverFeaturesLo);
+      writeVirtioRegister(memory, 0x070n, 0xb); // ACK | DRIVER | FEATURES_OK
+      return readVirtioRegister(memory, 0x070n);
+    };
+
+    // Accepting VERSION_1 (bit 32 = high word bit 0) is valid → FEATURES_OK preserved.
+    const withVersion1 = createTestMemory(64n);
+    assert.equal(negotiate(withVersion1, 0x1, 0x0) & 0x8, 0x8);
+
+    // xv6 negotiates driver features 0 and must still reach DRIVER_OK (QEMU leniency).
+    const xv6 = createTestMemory(64n);
+    assert.equal(negotiate(xv6, 0x0, 0x0) & 0x8, 0x8);
+
+    // A bogus unadvertised bit (bit 33) is rejected: FEATURES_OK silently cleared.
+    const bogus = createTestMemory(64n);
+    assert.equal(negotiate(bogus, 0x2, 0x0) & 0x8, 0x0);
   });
 
   it('absent device: every register reads 0 and stores are ignored', () => {

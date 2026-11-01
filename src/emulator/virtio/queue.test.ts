@@ -28,12 +28,14 @@ import {
   withMonitorLock,
 } from '#emulator/reservation';
 import { create as createVirtioDisk, type VirtioDiskHandle } from '#emulator/virtio/host';
+import { initializeVirtio } from '#emulator/virtio';
 import {
   VIRTIO_HOST_REQUEST_SEQ,
   VRING_DESC_F_NEXT,
   VRING_DESC_F_WRITE,
   loadVirtioDiskCapacity,
   loadVirtioShadowU32,
+  storeVirtioDevicePresent,
 } from '#emulator/virtio/layout';
 import {
   loadVirtioDiskCompletionSeq,
@@ -57,6 +59,7 @@ const USED_BASE = 0x0a0n;
 const HEADER1 = 0x100n;
 const DATA1 = 0x110n;
 const DATA2 = 0x120n;
+const DATA3 = 0x130n;
 const STATUS1 = 0x150n;
 const HEADER2 = 0x160n;
 const STATUS2 = 0x170n;
@@ -178,6 +181,14 @@ const queueChain = (memory: Memory, spec: ChainSpec): void => {
   storeGuest(memory, spec.headerAddress, header);
 };
 
+/** Write a virtio-blk request header at HEADER1 (independent of the descriptor chain). */
+const writeBlockHeader = (memory: Memory, type: number, sector: bigint): void => {
+  const header = new Uint8Array(16);
+  header.set(unsignedNumberToBytes(new Uint8Array(4), type), 0);
+  header.set(unsignedBigIntToBytes(new Uint8Array(8), sector), 8);
+  storeGuest(memory, HEADER1, header);
+};
+
 const configureQueue = (memory: Memory): void => {
   writeVirtioRegister(memory, 0x070n, 0); // reset
   writeVirtioRegister(memory, 0x070n, 1); // ACKNOWLEDGE
@@ -238,8 +249,9 @@ const writeTempDiskImage = (bytes: Uint8Array): { dir: string; path: string } =>
   return { dir, path };
 };
 
-/** Bounded poll until the worker publishes its capacity. */
-const awaitDiskCapacity = async (memory: Memory): Promise<void> => {
+/** Bounded poll until the worker publishes its capacity (which also implies the service loop
+ *  is armed — the worker arm → capacity → ready order §FIX 1). */
+const awaitDiskReady = async (memory: Memory): Promise<void> => {
   for (let attempt = 0; attempt < 1000 && loadVirtioDiskCapacity(memory) === 0n; attempt += 1) {
     await delay(1);
   }
@@ -263,7 +275,7 @@ const withDiskWorker = async (
   const disk: VirtioDiskHandle = createVirtioDisk({ memory, diskImagePath: path });
   disk.start();
   try {
-    await awaitDiskCapacity(memory);
+    await awaitDiskReady(memory);
     await body(path);
   } finally {
     disk.stop();
@@ -534,7 +546,7 @@ describe('virtio queue engine', () => {
     assert.equal(loadGuest(memory, STATUS2, 1)[0], 2);
   });
 
-  it('QueueNotify triggers on the 0x50 byte of value 0, not on other bytes', () => {
+  it('QueueNotify kicks only when the full 32-bit word is 0', () => {
     const memory = createTestMemory(512n);
     configureQueue(memory);
     queueChain(memory, {
@@ -551,22 +563,18 @@ describe('virtio queue engine', () => {
     writeU16(memory, AVAIL_BASE + 2n, 1);
     writeU16(memory, AVAIL_BASE + 4n, 0);
 
-    // Byte 1 of QueueNotify: no kick — a broken wrapper would complete immediately.
-    storeBytes({
-      memory,
-      address: virtioAddress(0x051n),
-      source: new Uint8Array([0]),
-      byteLength: 1,
-    });
-    assert.equal(usedIdx(memory), 0);
-
-    // Byte 0 of QueueNotify: the queue-0 kick.
+    // A store of 0x00000100 names queue 256 (nonexistent): the full word is non-zero,
+    // so the device must NOT kick queue 0 — this was the spurious-kick bug (§FIX 2).
     storeBytes({
       memory,
       address: virtioAddress(0x050n),
-      source: new Uint8Array([0]),
-      byteLength: 1,
+      source: new Uint8Array([0x00, 0x01, 0x00, 0x00]),
+      byteLength: 4,
     });
+    assert.equal(usedIdx(memory), 0);
+
+    // A store of the full word 0 kicks queue 0; the capacity-less request IOERRs sync.
+    writeVirtioRegister(memory, 0x050n, 0);
     pollVirtioDiskCompletions(memory);
     assert.equal(usedIdx(memory), 1);
   });
@@ -727,5 +735,197 @@ describe('virtio queue engine', () => {
       pollVirtioDiskCompletions(memory);
       assert.equal(usedIdx(memory), 1);
     });
+  });
+
+  it('multi-segment IN chain (header + 3 data + status) scatters staged bytes (§FIX 5)', async () => {
+    const memory = createTestMemory(512n);
+    configureQueue(memory);
+    await withDiskWorker(memory, async () => {
+      storeGuest(memory, DATA1, new Uint8Array(4).fill(0xee));
+      storeGuest(memory, DATA2, new Uint8Array(8).fill(0xdd));
+      storeGuest(memory, DATA3, new Uint8Array(4).fill(0xcc));
+      storeGuest(memory, STATUS1, new Uint8Array([0xff]));
+
+      writeDescriptor(memory, 0, {
+        address: HEADER1,
+        length: 16,
+        flags: VRING_DESC_F_NEXT,
+        next: 1,
+      });
+      writeDescriptor(memory, 1, {
+        address: DATA1,
+        length: 4,
+        flags: VRING_DESC_F_WRITE | VRING_DESC_F_NEXT,
+        next: 2,
+      });
+      writeDescriptor(memory, 2, {
+        address: DATA2,
+        length: 8,
+        flags: VRING_DESC_F_WRITE | VRING_DESC_F_NEXT,
+        next: 3,
+      });
+      writeDescriptor(memory, 3, {
+        address: DATA3,
+        length: 4,
+        flags: VRING_DESC_F_WRITE | VRING_DESC_F_NEXT,
+        next: 4,
+      });
+      writeDescriptor(memory, 4, {
+        address: STATUS1,
+        length: 1,
+        flags: VRING_DESC_F_WRITE,
+        next: 0,
+      });
+      writeBlockHeader(memory, 0, 1n); // IN, sector 1
+
+      writeU16(memory, AVAIL_BASE + 2n, 1);
+      writeU16(memory, AVAIL_BASE + 4n, 0);
+      writeVirtioRegister(memory, 0x050n, 0);
+
+      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
+      assert.deepEqual(loadGuest(memory, DATA1, 4), SECTOR_HEAD.subarray(0, 4));
+      assert.deepEqual(loadGuest(memory, DATA2, 8), SECTOR_HEAD.subarray(4, 12));
+      assert.deepEqual(loadGuest(memory, DATA3, 4), SECTOR_HEAD.subarray(12, 16));
+      assert.equal(readU32(memory, USED_BASE + 8n), 17); // used->len = data total + 1
+    });
+  });
+
+  it('multi-segment OUT chain (header + 3 data + status) gathers staged bytes (§FIX 5)', async () => {
+    const memory = createTestMemory(512n);
+    configureQueue(memory);
+    const seg1 = new Uint8Array([0x10, 0x11, 0x12, 0x13]);
+    const seg2 = new Uint8Array([0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27]);
+    const seg3 = new Uint8Array([0x30, 0x31, 0x32, 0x33]);
+    await withDiskWorker(memory, async (path) => {
+      storeGuest(memory, DATA1, seg1);
+      storeGuest(memory, DATA2, seg2);
+      storeGuest(memory, DATA3, seg3);
+      storeGuest(memory, STATUS1, new Uint8Array([0xff]));
+
+      writeDescriptor(memory, 0, {
+        address: HEADER1,
+        length: 16,
+        flags: VRING_DESC_F_NEXT,
+        next: 1,
+      });
+      writeDescriptor(memory, 1, { address: DATA1, length: 4, flags: VRING_DESC_F_NEXT, next: 2 });
+      writeDescriptor(memory, 2, { address: DATA2, length: 8, flags: VRING_DESC_F_NEXT, next: 3 });
+      writeDescriptor(memory, 3, { address: DATA3, length: 4, flags: VRING_DESC_F_NEXT, next: 4 });
+      writeDescriptor(memory, 4, {
+        address: STATUS1,
+        length: 1,
+        flags: VRING_DESC_F_WRITE,
+        next: 0,
+      });
+      writeBlockHeader(memory, 1, 0n); // OUT, sector 0
+
+      writeU16(memory, AVAIL_BASE + 2n, 1);
+      writeU16(memory, AVAIL_BASE + 4n, 0);
+      writeVirtioRegister(memory, 0x050n, 0);
+
+      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
+      assert.equal(readU32(memory, USED_BASE + 8n), 1); // used->len = 1 for OUT
+
+      const onDisk = readFileBytes(path);
+      assert.deepEqual(onDisk.subarray(0, 4), seg1);
+      assert.deepEqual(onDisk.subarray(4, 12), seg2);
+      assert.deepEqual(onDisk.subarray(12, 16), seg3);
+    });
+  });
+
+  it('a mixed-direction data section completes IOERR (§FIX 5)', () => {
+    const memory = createTestMemory(512n);
+    configureQueue(memory);
+    storeGuest(memory, STATUS1, new Uint8Array([0xff]));
+    writeDescriptor(memory, 0, { address: HEADER1, length: 16, flags: VRING_DESC_F_NEXT, next: 1 });
+    writeDescriptor(memory, 1, {
+      address: DATA1,
+      length: 4,
+      flags: VRING_DESC_F_WRITE | VRING_DESC_F_NEXT,
+      next: 2,
+    });
+    writeDescriptor(memory, 2, { address: DATA2, length: 4, flags: VRING_DESC_F_NEXT, next: 3 });
+    writeDescriptor(memory, 3, { address: STATUS1, length: 1, flags: VRING_DESC_F_WRITE, next: 0 });
+    writeBlockHeader(memory, 0, 0n); // IN
+    writeU16(memory, AVAIL_BASE + 2n, 1);
+    writeU16(memory, AVAIL_BASE + 4n, 0);
+    writeVirtioRegister(memory, 0x050n, 0);
+    pollVirtioDiskCompletions(memory);
+    assert.equal(usedIdx(memory), 1);
+    assert.equal(loadGuest(memory, STATUS1, 1)[0], 1); // IOERR
+    assert.equal(readU32(memory, USED_BASE + 8n), 1);
+  });
+
+  it('a data section longer than the staging cap completes IOERR with no transfer (§FIX 5)', () => {
+    const memory = createTestMemory(512n);
+    configureQueue(memory);
+    storeGuest(memory, STATUS1, new Uint8Array([0xff]));
+    writeDescriptor(memory, 0, { address: HEADER1, length: 16, flags: VRING_DESC_F_NEXT, next: 1 });
+    writeDescriptor(memory, 1, {
+      address: DATA1,
+      length: 4096,
+      flags: VRING_DESC_F_WRITE | VRING_DESC_F_NEXT,
+      next: 2,
+    });
+    writeDescriptor(memory, 2, {
+      address: DATA2,
+      length: 1,
+      flags: VRING_DESC_F_WRITE | VRING_DESC_F_NEXT,
+      next: 3,
+    });
+    writeDescriptor(memory, 3, { address: STATUS1, length: 1, flags: VRING_DESC_F_WRITE, next: 0 });
+    writeBlockHeader(memory, 0, 0n); // IN; total 4097 bytes > 4096
+    writeU16(memory, AVAIL_BASE + 2n, 1);
+    writeU16(memory, AVAIL_BASE + 4n, 0);
+    writeVirtioRegister(memory, 0x050n, 0);
+    pollVirtioDiskCompletions(memory);
+    assert.equal(usedIdx(memory), 1);
+    assert.equal(loadGuest(memory, STATUS1, 1)[0], 1); // IOERR
+    assert.equal(loadVirtioShadowU32(memory, VIRTIO_HOST_REQUEST_SEQ), 0); // no I/O submitted
+  });
+
+  it('a request submitted only after the device appears is served, not absorbed (§FIX 1)', async () => {
+    const memory = createTestMemory(512n);
+    initializeVirtio(memory, false); // absent until the disk worker reports ready
+
+    const { dir, path } = writeTempDiskImage(buildDiskImage());
+    const disk: VirtioDiskHandle = createVirtioDisk({ memory, diskImagePath: path });
+    disk.start();
+    try {
+      // Wait for the worker to publish capacity (which happens after arm), then present the
+      // device exactly as the emulator host does (§FIX 1).
+      for (let attempt = 0; attempt < 1000 && loadVirtioDiskCapacity(memory) === 0n; attempt += 1) {
+        await delay(1);
+      }
+      storeVirtioDevicePresent(memory, true);
+
+      // Configure the queue after appearance, then submit; the request must be served.
+      configureQueue(memory);
+      queueChain(memory, {
+        head: 0,
+        dataSlot: 1,
+        statusSlot: 2,
+        headerAddress: HEADER1,
+        dataAddress: DATA1,
+        statusAddress: STATUS1,
+        dataLength: 16,
+        type: 0,
+        sector: 1n,
+      });
+      storeGuest(memory, STATUS1, new Uint8Array([0xff]));
+      writeU16(memory, AVAIL_BASE + 2n, 1);
+      writeU16(memory, AVAIL_BASE + 4n, 0);
+      writeVirtioRegister(memory, 0x050n, 0);
+
+      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
+      assert.deepEqual(loadGuest(memory, DATA1, 16), SECTOR_HEAD);
+    } finally {
+      disk.stop();
+      await disk;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

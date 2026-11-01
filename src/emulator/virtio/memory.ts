@@ -28,11 +28,12 @@ import type { VirtioRegisterKind } from '#emulator/virtio/layout';
 import {
   VIRTIO_BLK_SECTOR_BYTES,
   VIRTIO_CONFIG_S_ACKNOWLEDGE,
+  VIRTIO_CONFIG_S_FEATURES_OK,
   VIRTIO_DEVICE_FEATURES_HI,
   VIRTIO_DEVICE_FEATURES_LO,
   VIRTIO_DEVICE_ID_BLOCK,
+  VIRTIO_HOST_CONFIG_GENERATION,
   VIRTIO_HOST_DEVICE_FEATURES_SEL,
-  VIRTIO_HOST_DEVICE_PRESENT,
   VIRTIO_HOST_DRAINED_SEQ,
   VIRTIO_HOST_DRIVER_FEATURES_HI,
   VIRTIO_HOST_DRIVER_FEATURES_LO,
@@ -50,6 +51,7 @@ import {
   VIRTIO_HOST_QUEUE_DEVICE_LOW,
   VIRTIO_HOST_QUEUE_DRIVER_HIGH,
   VIRTIO_HOST_QUEUE_DRIVER_LOW,
+  VIRTIO_HOST_QUEUE_NOTIFY,
   VIRTIO_HOST_QUEUE_NUM,
   VIRTIO_HOST_QUEUE_READY,
   VIRTIO_HOST_QUEUE_SEL,
@@ -64,6 +66,7 @@ import {
   VIRTIO_VENDOR_ID,
   VIRTIO_VERSION,
   isValidVirtioQueueNum,
+  loadVirtioDevicePresent,
   loadVirtioDiskCapacity,
   loadVirtioShadowByte,
   loadVirtioShadowU32,
@@ -82,7 +85,7 @@ const byteOfBig = (value: bigint, byteOffset: number): number =>
 
 /** Read one guest virtio byte; every register the device is absent reads 0. */
 const loadVirtioByte = (memory: Memory, offset: bigint): number => {
-  if (loadVirtioShadowU32(memory, VIRTIO_HOST_DEVICE_PRESENT) === 0) {
+  if (loadVirtioDevicePresent(memory) === 0) {
     return 0;
   }
   const location = virtioOffsetToLocation(offset);
@@ -116,13 +119,15 @@ const loadVirtioByte = (memory: Memory, offset: bigint): number => {
       return loadVirtioShadowByte(memory, VIRTIO_HOST_INTERRUPT_STATUS, byteOffset);
     case 'status':
       return loadVirtioShadowByte(memory, VIRTIO_HOST_STATUS, byteOffset);
+    case 'configGeneration':
+      return byteOf(loadVirtioShadowU32(memory, VIRTIO_HOST_CONFIG_GENERATION), byteOffset);
     case 'configCapacity':
       return byteOfBig(
         loadVirtioDiskCapacity(memory) / BigInt(VIRTIO_BLK_SECTOR_BYTES),
         byteOffset
       );
     default:
-      // W-only registers, configGeneration, and every other read-as-zero register.
+      // W-only registers and every other read-as-zero register.
       return 0;
   }
 };
@@ -149,7 +154,7 @@ const queueAddressHostOffset = (kind: VirtioRegisterKind): number | undefined =>
 
 /** Per-byte write action; read-only registers are ignored. */
 const storeVirtioByte = (memory: Memory, offset: bigint, value: number): void => {
-  if (loadVirtioShadowU32(memory, VIRTIO_HOST_DEVICE_PRESENT) === 0) {
+  if (loadVirtioDevicePresent(memory) === 0) {
     return;
   }
   const location = virtioOffsetToLocation(offset);
@@ -208,6 +213,11 @@ const storeVirtioByte = (memory: Memory, offset: bigint, value: number): void =>
       }
       return;
     }
+    case 'queueNotify':
+      // W-only shadow: bytes accumulate here; the kick side effect fires once the whole
+      // access is written (full-word compare in handleQueueNotify, §FIX 2).
+      storeVirtioShadowByte(memory, VIRTIO_HOST_QUEUE_NOTIFY, byteOffset, byte);
+      return;
     case 'status':
       storeVirtioShadowByte(memory, VIRTIO_HOST_STATUS, byteOffset, byte);
       return;
@@ -250,6 +260,7 @@ const resetVirtioDevice = (memory: Memory): void => {
     VIRTIO_HOST_QUEUE_SEL,
     VIRTIO_HOST_QUEUE_NUM,
     VIRTIO_HOST_QUEUE_READY,
+    VIRTIO_HOST_QUEUE_NOTIFY,
     VIRTIO_HOST_QUEUE_DESC_LOW,
     VIRTIO_HOST_QUEUE_DESC_HIGH,
     VIRTIO_HOST_QUEUE_DRIVER_LOW,
@@ -281,20 +292,22 @@ const resetVirtioDevice = (memory: Memory): void => {
   setPlicSourcePending(memory, PLIC_SOURCE_VIRTIO, false);
 };
 
-/** QueueNotify kick: a store of 0 (queue 0) drains and submits. */
+/** QueueNotify kick: a full assembled word of 0 (queue 0) drains and submits. */
 const handleQueueNotify = (
   memory: Memory,
   offset: bigint,
   byteLength: number,
-  source: ReadonlyUint8Array
+  _source: ReadonlyUint8Array
 ): void => {
   if (!coversRegister(offset, byteLength, VIRTIO_MMIO_QUEUE_NOTIFY)) {
     return;
   }
-  const notifyIndex = Number(VIRTIO_MMIO_QUEUE_NOTIFY - offset);
-  // 0 <= notifyIndex < byteLength: the access covers the register's low byte (a store to
-  // an upper byte of QueueNotify must not kick — it does not write the queue index).
-  if (notifyIndex >= 0 && (source[notifyIndex] ?? 0) === 0) {
+  // §FIX 2: assemble the FULL 32-bit word from the store (the per-byte writes above have
+  // already landed in the queueNotify shadow, so a partial store that is later completed
+  // yields the correct assembled value). Only an assembled value of exactly 0 addresses an
+  // existing queue (queue 0) and kicks it; any non-zero value names no queue and is
+  // ignored entirely — real device behavior, NOT a trap.
+  if (loadVirtioShadowU32(memory, VIRTIO_HOST_QUEUE_NOTIFY) === 0) {
     pollVirtioDiskCompletions(memory);
   }
 };
@@ -323,12 +336,31 @@ const handleInterruptAck = (
   }
 };
 
-/** Status: a stored word with ACKNOWLEDGE clear resets the device. */
+/**
+ * §3.1.1 FEATURES_OK validation: true when the driver accepted no unadvertised feature
+ * bit. The device advertises VIRTIO_F_VERSION_1 only (LO word empty, HI word bit 0), so any
+ * other bit is unadvertised. §FIX 4 follows QEMU's leniency and does NOT require the driver
+ * to accept VERSION_1: xv6 negotiates driver features 0 and must still reach DRIVER_OK;
+ * strict VERSION_1 enforcement would clear FEATURES_OK and panic xv6's probe.
+ */
+const driverFeaturesAreValid = (memory: Memory): boolean => {
+  const lo = loadVirtioShadowU32(memory, VIRTIO_HOST_DRIVER_FEATURES_LO);
+  const hi = loadVirtioShadowU32(memory, VIRTIO_HOST_DRIVER_FEATURES_HI);
+  return (lo & ~VIRTIO_DEVICE_FEATURES_LO) === 0 && (hi & ~VIRTIO_DEVICE_FEATURES_HI) === 0;
+};
+
+/** Status: a stored word with ACKNOWLEDGE clear resets the device; FEATURES_OK is validated. */
 const handleStatusWrite = (memory: Memory, offset: bigint, byteLength: number): void => {
   if (!coversRegister(offset, byteLength, VIRTIO_MMIO_STATUS)) {
     return;
   }
-  if ((loadVirtioShadowU32(memory, VIRTIO_HOST_STATUS) & VIRTIO_CONFIG_S_ACKNOWLEDGE) === 0) {
+  const status = loadVirtioShadowU32(memory, VIRTIO_HOST_STATUS);
+  // §FIX 4: if this write set FEATURES_OK but the driver accepted an unadvertised feature
+  // bit, silently clear the bit (the driver re-reads status and sees failure — no trap).
+  if ((status & VIRTIO_CONFIG_S_FEATURES_OK) !== 0 && !driverFeaturesAreValid(memory)) {
+    storeVirtioShadowU32(memory, VIRTIO_HOST_STATUS, status & ~VIRTIO_CONFIG_S_FEATURES_OK);
+  }
+  if ((status & VIRTIO_CONFIG_S_ACKNOWLEDGE) === 0) {
     resetVirtioDevice(memory);
   }
 };
@@ -346,7 +378,7 @@ const storeBytesToVirtio = ({
   source: ReadonlyUint8Array;
   byteLength: number;
 }): void => {
-  if (loadVirtioShadowU32(memory, VIRTIO_HOST_DEVICE_PRESENT) === 0) {
+  if (loadVirtioDevicePresent(memory) === 0) {
     return;
   }
   for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {

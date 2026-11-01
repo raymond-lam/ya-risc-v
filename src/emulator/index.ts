@@ -33,8 +33,17 @@ import type { EmulatorCreateOptions, EmulatorHandle, GuestRegionWindow } from '#
 import { UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
 import { VIRTIO_HOST_BYTE_LENGTH, VIRTIO_REGION_ID, initializeVirtio } from '#emulator/virtio';
 import { create as createVirtioDisk, type VirtioDiskHandle } from '#emulator/virtio/host';
+import {
+  VIRTIO_HOST_DISK_READY,
+  storeVirtioDevicePresent,
+  virtioHostInt32,
+} from '#emulator/virtio/layout';
 import { storeDeviceTreeToRam } from '#fdt';
 import { bytesToBigInt } from '#utils/bytes';
+
+/** Upper bound on waiting for the disk worker to publish readiness (§FIX 1). The failure
+ *  path publishes a sentinel immediately, so this only bounds a hard worker crash. */
+const VIRTIO_DISK_READY_TIMEOUT_MS = 5000;
 
 /** Guest-mapped region ids, in pack order. */
 const GUEST_REGION_IDS: readonly string[] = [
@@ -152,7 +161,9 @@ class Emulator implements EmulatorHandle {
     }
     initializeClint(memory, timebaseHz);
     initializePlic(memory);
-    initializeVirtio(memory, diskImagePath !== null);
+    // Device present starts 0 for every boot: the virtio disk worker host flips it to 1
+    // only once the disk worker is fully ready (§FIX 1). Diskless stays 0 (probes read 0).
+    initializeVirtio(memory, false);
     this.#memory = memory;
     const disk: VirtioDiskHandle | null =
       diskImagePath === null ? null : createVirtioDisk({ memory, diskImagePath });
@@ -211,11 +222,16 @@ class Emulator implements EmulatorHandle {
     // that already started (child stop is idempotent for never-started siblings).
     try {
       this.#timer.start();
-      this.#cpu.start();
-      this.#terminal.start();
       if (this.#disk !== null) {
         this.#disk.start();
+        // Wait for the disk worker to be fully ready, then present the device BEFORE the
+        // CPU starts fetching — the guest's first probe must already see a coherent device
+        // (atomic appearance, §FIX 1). On open failure the worker publishes a sentinel and
+        // device-present stays 0 (the guest probe reads an absent device).
+        this.#presentDiskDevice();
       }
+      this.#cpu.start();
+      this.#terminal.start();
     } catch (error) {
       this.#cpu.stop();
       this.#timer.stop();
@@ -247,6 +263,15 @@ class Emulator implements EmulatorHandle {
       return;
     }
     this.stop();
+  };
+
+  /** Wait (bounded) for the disk worker's readiness, then flip device-present on success. */
+  #presentDiskDevice = (): void => {
+    const ready = virtioHostInt32(this.#memory, VIRTIO_HOST_DISK_READY);
+    Atomics.wait(ready, 0, 0, VIRTIO_DISK_READY_TIMEOUT_MS);
+    if (Atomics.load(ready, 0) === 1) {
+      storeVirtioDevicePresent(this.#memory, true);
+    }
   };
 
   then<TResult1 = void, TResult2 = never>(

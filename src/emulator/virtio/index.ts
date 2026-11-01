@@ -22,19 +22,22 @@
 import type { Memory } from '#emulator/memory';
 import {
   VIRTIO_HOST_BYTE_LENGTH,
-  VIRTIO_HOST_DEVICE_PRESENT,
-  storeVirtioShadowU32,
+  storeVirtioDevicePresent,
   virtioHostIndex,
 } from '#emulator/virtio/layout';
 
 /**
  * Zero the virtio host slab and set the device-present flag. Runs on the host before any
  * worker starts. `diskPresent` false leaves the window mapped but inert (probes read 0).
+ *
+ * Production always passes `false`: a real device only becomes visible once the disk
+ * worker is fully ready, and the worker host flips the flag (§FIX 1). The test fixture
+ * passes `true` to present a ready device without spawning a worker.
  */
 const initializeVirtio = (memory: Memory, diskPresent: boolean): void => {
   const base = virtioHostIndex(memory, 0);
   memory.bytes.fill(0, base, base + Number(VIRTIO_HOST_BYTE_LENGTH));
-  storeVirtioShadowU32(memory, VIRTIO_HOST_DEVICE_PRESENT, diskPresent ? 1 : 0);
+  storeVirtioDevicePresent(memory, diskPresent);
 };
 
 export {

@@ -19,16 +19,27 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { loadBytes, type Memory } from '#emulator/memory';
+import { initializeVirtio } from '#emulator/virtio';
 import {
   closeVirtioImage,
   openVirtioImage,
+  publishVirtioDiskCapacity,
   readDiskSectors,
   writeDiskSectors,
 } from '#emulator/virtio/disk';
-import { loadVirtioDiskCapacity } from '#emulator/virtio/layout';
+import { create as createVirtioDisk, type VirtioDiskHandle } from '#emulator/virtio/host';
+import {
+  VIRTIO_HOST_DISK_READY,
+  VIRTIO_HOST_TEST_PAUSE,
+  loadVirtioDevicePresent,
+  loadVirtioDiskCapacity,
+  storeVirtioDevicePresent,
+  virtioHostInt32,
+} from '#emulator/virtio/layout';
 import type { ReadonlyUint8Array } from '#types';
-import { bytesToBigInt, unsignedBigIntToBytes } from '#utils/bytes';
+import { bytesToBigInt, bytesToNumber, unsignedBigIntToBytes } from '#utils/bytes';
 import createTestMemory from '#test/guest-memory';
 
 const VIRTIO_BASE = 0x1000_1000n;
@@ -36,6 +47,13 @@ const TEMP_PREFIX = 'ya-risc-v-virtio-';
 
 const virtioAddress = (offset: bigint): ReadonlyUint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), VIRTIO_BASE + offset) as ReadonlyUint8Array;
+
+/** Read a 4-byte register through the guest window. */
+const readVirtioRegister = (memory: Memory, offset: bigint): number => {
+  const destination = new Uint8Array(4);
+  loadBytes({ destination, memory, address: virtioAddress(offset), byteLength: 4 });
+  return bytesToNumber(destination);
+};
 
 /** Read the 8-byte capacity config field through the guest window. */
 const readCapacitySectors = (memory: Memory): bigint => {
@@ -61,11 +79,12 @@ const writeTempImage = (bytes: Uint8Array): { dir: string; path: string } => {
 };
 
 describe('virtio disk', () => {
-  it("openVirtioImage binds a raw file read-write ('r+') and publishes capacity", () => {
+  it("openVirtioImage binds a raw file read-write ('r+') and publishVirtioDiskCapacity publishes capacity", () => {
     const { dir, path } = writeTempImage(buildImage());
     const memory = createTestMemory(64n);
     try {
-      openVirtioImage(memory, path);
+      openVirtioImage(path);
+      publishVirtioDiskCapacity(memory);
       assert.equal(loadVirtioDiskCapacity(memory), 1280n);
       assert.equal(readCapacitySectors(memory), 2n);
 
@@ -87,7 +106,7 @@ describe('virtio disk', () => {
     const { dir, path } = writeTempImage(buildImage());
     const memory = createTestMemory(64n);
     try {
-      openVirtioImage(memory, path);
+      openVirtioImage(path);
       const atSector = new Uint8Array(8);
       assert.equal(readDiskSectors(512, atSector), 8);
       assert.deepEqual(atSector, new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd, 0x11, 0x22, 0x33, 0x44]));
@@ -105,7 +124,7 @@ describe('virtio disk', () => {
     const { dir, path } = writeTempImage(buildImage());
     const memory = createTestMemory(64n);
     try {
-      openVirtioImage(memory, path);
+      openVirtioImage(path);
       const tail = new Uint8Array(8).fill(0xff);
       assert.equal(readDiskSectors(1276, tail), 4);
       assert.deepEqual(tail.subarray(0, 4), new Uint8Array(4).fill(0x5a));
@@ -122,7 +141,7 @@ describe('virtio disk', () => {
     const { dir } = writeTempImage(buildImage());
     const memory = createTestMemory(64n);
     try {
-      assert.throws(() => openVirtioImage(memory, join(dir, 'missing.img')), { code: 'ENOENT' });
+      assert.throws(() => openVirtioImage(join(dir, 'missing.img')), { code: 'ENOENT' });
       assert.equal(loadVirtioDiskCapacity(memory), 0n);
     } finally {
       closeVirtioImage(memory);
@@ -135,9 +154,11 @@ describe('virtio disk', () => {
     const second = writeTempImage(new Uint8Array(512).fill(0x11));
     const memory = createTestMemory(64n);
     try {
-      openVirtioImage(memory, first.path);
+      openVirtioImage(first.path);
+      publishVirtioDiskCapacity(memory);
       assert.equal(loadVirtioDiskCapacity(memory), 1280n);
-      openVirtioImage(memory, second.path);
+      openVirtioImage(second.path);
+      publishVirtioDiskCapacity(memory);
       assert.equal(loadVirtioDiskCapacity(memory), 512n);
 
       assert.equal(writeDiskSectors(0, new Uint8Array([0x0f, 0xf0])), 2);
@@ -147,6 +168,51 @@ describe('virtio disk', () => {
       closeVirtioImage(memory);
       rmSync(first.dir, { recursive: true, force: true });
       rmSync(second.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('appears atomically: capacity publishes but the device stays absent until readiness (§FIX 1)', async () => {
+    const { dir, path } = writeTempImage(buildImage());
+    const memory = createTestMemory(64n);
+    initializeVirtio(memory, false); // absent, like a real emulator before the worker is ready
+
+    // Freeze the disk worker between capacity publish and readiness (test-only word).
+    const pause = virtioHostInt32(memory, VIRTIO_HOST_TEST_PAUSE);
+    Atomics.store(pause, 0, 1);
+
+    const disk: VirtioDiskHandle = createVirtioDisk({ memory, diskImagePath: path });
+    disk.start();
+    try {
+      // The worker publishes capacity first, then parks on the freeze before signalling ready.
+      for (let attempt = 0; attempt < 1000 && loadVirtioDiskCapacity(memory) === 0n; attempt += 1) {
+        await delay(1);
+      }
+      assert.notEqual(loadVirtioDiskCapacity(memory), 0n); // capacity word published
+      // Still not ready and still absent: no readiness published, no device-present flip.
+      assert.equal(Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_DISK_READY), 0), 0);
+      assert.equal(loadVirtioDevicePresent(memory), 0);
+      assert.equal(readVirtioRegister(memory, 0x000n), 0); // probe reads magic 0
+
+      // Release the freeze: the worker publishes readiness.
+      Atomics.store(pause, 0, 0);
+      Atomics.notify(pause, 0);
+      for (
+        let attempt = 0;
+        attempt < 1000 && Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_DISK_READY), 0) === 0;
+        attempt += 1
+      ) {
+        await delay(1);
+      }
+      assert.equal(Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_DISK_READY), 0), 1);
+
+      // The host consumes readiness and flips the device in; magic becomes readable.
+      storeVirtioDevicePresent(memory, true);
+      assert.equal(loadVirtioDevicePresent(memory), 1);
+      assert.equal(readVirtioRegister(memory, 0x000n), 0x7472_6976);
+    } finally {
+      disk.stop();
+      await disk;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

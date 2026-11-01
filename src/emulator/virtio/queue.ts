@@ -42,11 +42,9 @@ import {
   VIRTIO_CONFIG_S_DRIVER_OK,
   VIRTIO_DISK_STAGING_BYTES,
   VIRTIO_HOST_COMPLETION_SEQ,
-  VIRTIO_HOST_DEVICE_PRESENT,
   VIRTIO_HOST_DRAINED_SEQ,
   VIRTIO_HOST_INTERRUPT_STATUS,
   VIRTIO_HOST_LAST_AVAIL_IDX,
-  VIRTIO_HOST_PENDING_DATA_ADDRESS,
   VIRTIO_HOST_PENDING_DATA_LENGTH,
   VIRTIO_HOST_PENDING_HEAD,
   VIRTIO_HOST_PENDING_STATUS_ADDRESS,
@@ -73,6 +71,7 @@ import {
   VRING_DESC_F_INDIRECT,
   VRING_DESC_F_NEXT,
   VRING_DESC_F_WRITE,
+  loadVirtioDevicePresent,
   loadVirtioDiskCapacity,
   loadVirtioShadowU32,
   storeVirtioShadowU32,
@@ -101,17 +100,38 @@ type VirtioQueueConfig = {
   deviceBase: bigint;
 };
 
+/** One data buffer segment of a block request (may be many, e.g. Linux bio_vec pages). */
+type DataSegment = { address: bigint; length: number };
+
 /** What to do with one parsed slot. */
 type VirtioRequestPlan =
   | { kind: 'sync'; statusByte: number; usedLen: number } // complete now (no file I/O)
-  | { kind: 'read'; sectorOffset: bigint; dataLength: number } // submit to disk worker (IN)
-  | { kind: 'write'; sectorOffset: bigint; dataLength: number }; // submit (OUT)
+  | {
+      kind: 'read';
+      sectorOffset: bigint;
+      dataLength: number;
+      dataSegments: readonly DataSegment[];
+    } // submit to disk worker (IN)
+  | {
+      kind: 'write';
+      sectorOffset: bigint;
+      dataLength: number;
+      dataSegments: readonly DataSegment[];
+    }; // submit (OUT)
 
 type VirtioSlotResult = 'published' | 'submitted' | 'skip';
 
 const VIRTIO_SLOT_PUBLISHED: VirtioSlotResult = 'published';
 const VIRTIO_SLOT_SUBMITTED: VirtioSlotResult = 'submitted';
 const VIRTIO_SLOT_SKIP: VirtioSlotResult = 'skip';
+
+/**
+ * Data segments of the in-flight request (CPU-worker-local, not the disk channel): the
+ * staging window holds one contiguous transfer, and this list remembers where to scatter
+ * it (IN) or gather it from (OUT) across the guest's data descriptors. Single-flight means
+ * one request is in flight at a time, so a single module binding is sufficient.
+ */
+let pendingDataSegments: readonly DataSegment[] = [];
 
 const virtioGuestAddress = (address: bigint): ReadonlyUint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), address) as ReadonlyUint8Array;
@@ -250,35 +270,40 @@ const isValidTransferBounds = (sector: bigint, dataLength: number, capacity: big
   );
 };
 
-/** Does a data descriptor have the expected WRITE flag and a staged-transferable size? */
-const canTransferData = (
-  dataWritable: boolean,
-  writableExpected: boolean,
-  dataLength: number,
-  sector: bigint,
-  capacity: bigint
-): boolean => {
-  if (
-    dataWritable !== writableExpected ||
-    dataLength === 0 ||
-    dataLength > VIRTIO_DISK_STAGING_BYTES
-  ) {
-    return false;
+/**
+ * Extract and validate a chain's data section (§FIX 5). The section is the descriptors
+ * between the header (index 0) and the trailing status descriptor: one or more
+ * same-direction segments whose lengths sum to the transfer length. Returns null on an
+ * empty data section, a mixed-direction section, or a transfer longer than the staging
+ * window — all of which complete the request with IOERR (the chain has a status
+ * descriptor, so it has somewhere to record the error).
+ */
+const dataSection = (
+  descriptors: readonly VirtioDescriptor[]
+): { segments: DataSegment[]; dataWritable: boolean; dataLength: number } | null => {
+  const dataDescriptors = descriptors.slice(1, descriptors.length - 1);
+  const first = dataDescriptors[0];
+  if (first === undefined) {
+    return null;
   }
-  return isValidTransferBounds(sector, dataLength, capacity);
+  const dataWritable = (first.flags & VRING_DESC_F_WRITE) !== 0;
+  const segments: DataSegment[] = [];
+  let dataLength = 0;
+  for (const descriptor of dataDescriptors) {
+    if (((descriptor.flags & VRING_DESC_F_WRITE) !== 0) !== dataWritable) {
+      return null; // mixed direction within one request is invalid
+    }
+    dataLength += descriptor.length;
+    if (dataLength > VIRTIO_DISK_STAGING_BYTES) {
+      return null; // exceeds the device's max transfer (staging window)
+    }
+    segments.push({ address: descriptor.address, length: descriptor.length });
+  }
+  if (dataLength < 1) {
+    return null;
+  }
+  return { segments, dataWritable, dataLength };
 };
-
-/** The one chain shape this device processes fully: header → data → status. */
-const isCanonicalBlockChain = (
-  descriptors: readonly VirtioDescriptor[],
-  headerDescriptor: VirtioDescriptor | undefined,
-  statusDescriptor: VirtioDescriptor | undefined
-): boolean =>
-  descriptors.length === 3 &&
-  headerDescriptor !== undefined &&
-  headerDescriptor.flags === VRING_DESC_F_NEXT && // exactly NEXT
-  headerDescriptor.length >= VIRTIO_BLK_HEADER_BYTES &&
-  statusDescriptor === descriptors[2];
 
 /** Classify one chain into a plan; null = skip the slot (nowhere to write a status byte). */
 const planBlockRequest = (
@@ -290,11 +315,18 @@ const planBlockRequest = (
     return null;
   }
   const headerDescriptor = descriptors[0];
-  const dataDescriptor = descriptors[1];
-  if (!isCanonicalBlockChain(descriptors, headerDescriptor, statusDescriptor)) {
+  if (headerDescriptor === undefined) {
+    return null;
+  }
+  if (
+    headerDescriptor.flags !== VRING_DESC_F_NEXT || // exactly NEXT
+    headerDescriptor.length < VIRTIO_BLK_HEADER_BYTES
+  ) {
     return { kind: 'sync', statusByte: VIRTIO_BLK_S_IOERR, usedLen: 1 };
   }
-  if (headerDescriptor === undefined || dataDescriptor === undefined) {
+
+  const section = dataSection(descriptors);
+  if (section === null) {
     return { kind: 'sync', statusByte: VIRTIO_BLK_S_IOERR, usedLen: 1 };
   }
 
@@ -312,27 +344,30 @@ const planBlockRequest = (
 
   const type = bytesToNumber(header.subarray(0, 4));
   const sector = bytesToBigInt(header.subarray(8, 16));
-  const dataWritable = (dataDescriptor.flags & VRING_DESC_F_WRITE) !== 0;
   const capacity = loadVirtioDiskCapacity(memory); // 0 until the worker publishes
 
   switch (type) {
     case VIRTIO_BLK_T_IN:
-      if (!canTransferData(dataWritable, true, dataDescriptor.length, sector, capacity)) {
+      // IN read: the device writes the data, so the data section must be WRITE-flagged.
+      if (!section.dataWritable || !isValidTransferBounds(sector, section.dataLength, capacity)) {
         return { kind: 'sync', statusByte: VIRTIO_BLK_S_IOERR, usedLen: 1 };
       }
       return {
         kind: 'read',
         sectorOffset: sector * BigInt(VIRTIO_BLK_SECTOR_BYTES),
-        dataLength: dataDescriptor.length,
+        dataLength: section.dataLength,
+        dataSegments: section.segments,
       };
     case VIRTIO_BLK_T_OUT:
-      if (!canTransferData(dataWritable, false, dataDescriptor.length, sector, capacity)) {
+      // OUT write: the device reads the data, so the data section must not be WRITE-flagged.
+      if (section.dataWritable || !isValidTransferBounds(sector, section.dataLength, capacity)) {
         return { kind: 'sync', statusByte: VIRTIO_BLK_S_IOERR, usedLen: 1 };
       }
       return {
         kind: 'write',
         sectorOffset: sector * BigInt(VIRTIO_BLK_SECTOR_BYTES),
-        dataLength: dataDescriptor.length,
+        dataLength: section.dataLength,
+        dataSegments: section.segments,
       };
     case VIRTIO_BLK_T_FLUSH: // synchronous writes: no-op
       return { kind: 'sync', statusByte: VIRTIO_BLK_S_OK, usedLen: 1 };
@@ -406,17 +441,62 @@ const publishCompletedVirtioSlot = (
   return appendUsedEntry(memory, config, head, usedLen);
 };
 
+/** Gather the guest data segments into the contiguous staging window (OUT), in order. */
+const stageGuestData = (
+  memory: Memory,
+  segments: readonly DataSegment[],
+  staging: Uint8Array
+): boolean => {
+  let offset = 0;
+  for (const segment of segments) {
+    if (
+      !loadGuestRamBytes({
+        destination: staging.subarray(offset, offset + segment.length),
+        memory,
+        address: virtioGuestAddress(segment.address),
+        byteLength: segment.length,
+      })
+    ) {
+      return false;
+    }
+    offset += segment.length;
+  }
+  return true;
+};
+
+/** Scatter the contiguous staging window across the guest data segments (IN), in order. */
+const storeStagingData = (
+  memory: Memory,
+  segments: readonly DataSegment[],
+  staging: Uint8Array
+): boolean => {
+  let offset = 0;
+  for (const segment of segments) {
+    if (
+      !storeGuestRamBytes({
+        memory,
+        address: virtioGuestAddress(segment.address),
+        source: staging.subarray(offset, offset + segment.length),
+        byteLength: segment.length,
+      })
+    ) {
+      return false;
+    }
+    offset += segment.length;
+  }
+  return true;
+};
+
 /** Fill the channel words and wake the disk worker for one read/write request. */
 const submitVirtioRequest = (
   memory: Memory,
   head: number,
   statusAddress: bigint,
-  dataAddress: bigint,
   plan: Exclude<VirtioRequestPlan, { kind: 'sync' }>
 ): void => {
   storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_HEAD, head);
   virtioHostBigUint64(memory, VIRTIO_HOST_PENDING_STATUS_ADDRESS)[0] = statusAddress;
-  virtioHostBigUint64(memory, VIRTIO_HOST_PENDING_DATA_ADDRESS)[0] = dataAddress;
+  pendingDataSegments = plan.dataSegments;
   storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_DATA_LENGTH, plan.dataLength);
   storeVirtioShadowU32(
     memory,
@@ -476,22 +556,11 @@ const processVirtioSlot = (
     );
     return published ? VIRTIO_SLOT_PUBLISHED : VIRTIO_SLOT_SKIP;
   }
-  const dataDescriptor = descriptors[1];
-  if (dataDescriptor === undefined) {
-    return VIRTIO_SLOT_SKIP;
-  }
   if (plan.kind === 'write') {
     const stagingBase = virtioHostIndex(memory, VIRTIO_HOST_STAGING);
     const staging = memory.bytes.subarray(stagingBase, stagingBase + plan.dataLength);
-    if (
-      !loadGuestRamBytes({
-        destination: staging,
-        memory,
-        address: virtioGuestAddress(dataDescriptor.address),
-        byteLength: plan.dataLength,
-      })
-    ) {
-      // Guest buffer unreadable: complete synchronously, no file I/O.
+    if (!stageGuestData(memory, plan.dataSegments, staging)) {
+      // Guest buffers unreadable: complete synchronously, no file I/O.
       const published = publishCompletedVirtioSlot(
         memory,
         config,
@@ -503,7 +572,7 @@ const processVirtioSlot = (
       return published ? VIRTIO_SLOT_PUBLISHED : VIRTIO_SLOT_SKIP;
     }
   }
-  submitVirtioRequest(memory, head, statusDescriptor.address, dataDescriptor.address, plan);
+  submitVirtioRequest(memory, head, statusDescriptor.address, plan);
   return VIRTIO_SLOT_SUBMITTED;
 };
 
@@ -519,7 +588,6 @@ const drainCompletedVirtioRequest = (memory: Memory): boolean => {
   const ioError = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_IO_ERROR), 0) >>> 0;
   const head = loadVirtioShadowU32(memory, VIRTIO_HOST_PENDING_HEAD);
   const statusAddress = virtioHostBigUint64(memory, VIRTIO_HOST_PENDING_STATUS_ADDRESS)[0] ?? 0n;
-  const dataAddress = virtioHostBigUint64(memory, VIRTIO_HOST_PENDING_DATA_ADDRESS)[0] ?? 0n;
   const dataLength = loadVirtioShadowU32(memory, VIRTIO_HOST_PENDING_DATA_LENGTH);
   let usedLen = loadVirtioShadowU32(memory, VIRTIO_HOST_PENDING_USED_LEN);
   const direction = loadVirtioShadowU32(memory, VIRTIO_HOST_REQUEST_DIRECTION);
@@ -527,14 +595,7 @@ const drainCompletedVirtioRequest = (memory: Memory): boolean => {
   if (ioError === 0 && direction === VIRTIO_BLK_T_IN) {
     const stagingBase = virtioHostIndex(memory, VIRTIO_HOST_STAGING);
     const staging = memory.bytes.subarray(stagingBase, stagingBase + dataLength);
-    if (
-      !storeGuestRamBytes({
-        memory,
-        address: virtioGuestAddress(dataAddress),
-        source: staging,
-        byteLength: dataLength,
-      })
-    ) {
+    if (!storeStagingData(memory, pendingDataSegments, staging)) {
       statusByte = VIRTIO_BLK_S_IOERR;
       usedLen = 1;
     }
@@ -583,7 +644,7 @@ const advanceVirtioQueue = (
 
 /** Drain completed disk requests and advance queue 0. Call per fetch and on QueueNotify. */
 const pollVirtioDiskCompletions = (memory: Memory): void => {
-  if (loadVirtioShadowU32(memory, VIRTIO_HOST_DEVICE_PRESENT) === 0) {
+  if (loadVirtioDevicePresent(memory) === 0) {
     return;
   }
   let publishedAny = false;
