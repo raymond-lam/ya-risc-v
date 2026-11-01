@@ -27,7 +27,7 @@
 
 import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
-import { setPlicSourcePending } from '#emulator/plic';
+import { PLIC_SOURCE_VIRTIO, setPlicSourcePending } from '#emulator/plic';
 import { publishWakeLevel, waitWake } from '#emulator/wake';
 import { loadGuestRamBytes, storeGuestRamBytes } from '#emulator/virtio/dma';
 import {
@@ -86,7 +86,6 @@ import {
   unsignedBigIntToBytes,
   unsignedNumberToBytes,
 } from '#utils/bytes';
-import { PLIC_SOURCE_VIRTIO } from '#emulator/plic';
 
 type VirtioDescriptor = {
   address: bigint; // guest phys addr of the buffer

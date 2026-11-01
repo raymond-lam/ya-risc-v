@@ -15,8 +15,9 @@
  */
 
 /**
- * Virtio-mmio (version 2 transport) block device — guest-window / host-slab layout
- * (no MMIO side effects and no queue processing).
+ * Virtio-mmio (version 2 transport) block device — guest-window / host-slab layout plus
+ * the register-decode and shadow-access helpers shared by `memory.ts` and `queue.ts`
+ * (this module performs no MMIO side effects and no queue processing itself).
  *
  * Guest window (4 KiB, sparse — holes read 0 / ignore stores): the register map in the
  * VIRTIO_MMIO_* offsets. Device configuration space starts at +0x100 with the virtio-blk

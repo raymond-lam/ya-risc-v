@@ -22,7 +22,7 @@
 
 import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
-import { setPlicSourcePending } from '#emulator/plic';
+import { PLIC_SOURCE_VIRTIO, setPlicSourcePending } from '#emulator/plic';
 import { pollVirtioDiskCompletions } from '#emulator/virtio/queue';
 import type { VirtioRegisterKind } from '#emulator/virtio/layout';
 import {
@@ -72,7 +72,6 @@ import {
   virtioHostInt32,
   virtioOffsetToLocation,
 } from '#emulator/virtio/layout';
-import { PLIC_SOURCE_VIRTIO } from '#emulator/plic';
 
 /** Byte `byteOffset` of an unsigned 32-bit host word. */
 const byteOf = (value: number, byteOffset: number): number => (value >>> (byteOffset * 8)) & 0xff;
