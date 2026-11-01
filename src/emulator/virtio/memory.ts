@@ -72,11 +72,7 @@ import {
   virtioHostInt32,
   virtioOffsetToLocation,
 } from '#emulator/virtio/layout';
-
-// PLIC_SOURCE_VIRTIO (= 1) is provided by WP2's plic/layout.ts (spec §17); until that
-// export lands this package uses the contract value directly rather than hard-coding 1
-// at each call site.
-const PLIC_SOURCE_VIRTIO = 1;
+import { PLIC_SOURCE_VIRTIO } from '#emulator/plic';
 
 /** Byte `byteOffset` of an unsigned 32-bit host word. */
 const byteOf = (value: number, byteOffset: number): number => (value >>> (byteOffset * 8)) & 0xff;
@@ -272,6 +268,10 @@ const resetVirtioDevice = (memory: Memory): void => {
   for (const hostOffset of clearedHostOffsets) {
     storeVirtioShadowU32(memory, hostOffset, 0);
   }
+  // The two u64 pending-address fields span 8 bytes each; the u32 loop above only
+  // cleared their low words, so clear the high words explicitly.
+  storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_STATUS_ADDRESS + 4, 0);
+  storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_DATA_ADDRESS + 4, 0);
   // Swallow any in-flight completion exactly once; do NOT touch requestSeq /
   // completionSeq / staging / capacity words — the disk worker owns the channel.
   storeVirtioShadowU32(

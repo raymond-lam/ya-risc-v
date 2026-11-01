@@ -86,11 +86,7 @@ import {
   unsignedBigIntToBytes,
   unsignedNumberToBytes,
 } from '#utils/bytes';
-
-// PLIC_SOURCE_VIRTIO (= 1) is provided by WP2's plic/layout.ts (spec §17); until that
-// export lands this package uses the contract value directly rather than hard-coding 1
-// at each call site.
-const PLIC_SOURCE_VIRTIO = 1;
+import { PLIC_SOURCE_VIRTIO } from '#emulator/plic';
 
 type VirtioDescriptor = {
   address: bigint; // guest phys addr of the buffer
