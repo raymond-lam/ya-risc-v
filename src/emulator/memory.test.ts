@@ -42,6 +42,7 @@ import { RAM_REGION_ID } from '#emulator/ram';
 import { RESERVATION_REGION_ID } from '#emulator/reservation';
 import { SYSCON_REGION_ID } from '#emulator/syscon';
 import { popUartTransmit, pushUartReceive, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_REGION_ID } from '#emulator/virtio';
 import { bigIntAsNumber } from '#utils/int';
 import createTestMemory, { machineRegionSpecs } from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
@@ -229,7 +230,14 @@ describe('memory', () => {
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
     assert.deepEqual(
       memory.regionsByBaseGuestAddress.map(([, id]) => id),
-      [RAM_REGION_ID, SYSCON_REGION_ID, CLINT_REGION_ID, PLIC_REGION_ID, UART_REGION_ID]
+      [
+        RAM_REGION_ID,
+        SYSCON_REGION_ID,
+        CLINT_REGION_ID,
+        PLIC_REGION_ID,
+        UART_REGION_ID,
+        VIRTIO_REGION_ID,
+      ]
     );
     for (let index = 1; index < memory.regionsByBaseGuestAddress.length; index += 1) {
       const previous = memory.regionsByBaseGuestAddress[index - 1];

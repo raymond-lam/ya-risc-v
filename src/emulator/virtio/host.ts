@@ -1,0 +1,112 @@
+/*
+ * Copyright 2026 Raymond Lam
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Virtio disk host — create / start / stop (Worker).
+ * Device API (MMIO, queue engine): #emulator/virtio.
+ */
+
+import { Worker } from 'node:worker_threads';
+import workerExecArgv from '#utils/worker-exec-argv';
+import type {
+  VirtioDiskCreateOptions,
+  VirtioDiskHandle,
+  VirtioDiskWorkerData,
+} from '#emulator/virtio/types';
+
+/* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
+class VirtioDisk implements VirtioDiskHandle {
+  readonly [Symbol.toStringTag] = 'Promise';
+
+  readonly #lifetime = Promise.withResolvers<void>();
+
+  readonly #options: VirtioDiskCreateOptions;
+
+  #worker: Worker | undefined;
+
+  #started = false;
+
+  #stopped = false;
+
+  constructor(options: VirtioDiskCreateOptions) {
+    this.#options = options;
+  }
+
+  start = (): void => {
+    if (this.#stopped) {
+      throw new Error('Already stopped.');
+    }
+    if (this.#started) {
+      throw new Error('Already started.');
+    }
+    const workerData = {
+      memory: this.#options.memory,
+      diskImagePath: this.#options.diskImagePath,
+    } satisfies VirtioDiskWorkerData;
+    // Assign worker before marking started so a constructor throw leaves state untouched.
+    const worker = new Worker(new URL(import.meta.resolve('#emulator/virtio/run')), {
+      execArgv: workerExecArgv(),
+      workerData,
+    });
+    this.#worker = worker;
+    this.#started = true;
+    worker.once('error', (error) => {
+      this.#lifetime.reject(error);
+    });
+    worker.once('exit', (code) => {
+      if (this.#stopped || code === 0) {
+        this.#lifetime.resolve();
+        return;
+      }
+      this.#lifetime.reject(new Error(`Virtio disk worker exited with code ${code}`));
+    });
+  };
+
+  stop = (): void => {
+    if (this.#stopped) {
+      return;
+    }
+    this.#stopped = true;
+    if (this.#worker !== undefined) {
+      void this.#worker.terminate();
+      return;
+    }
+    // Never started (or start failed before worker assignment): unblock awaiters.
+    this.#lifetime.resolve();
+  };
+
+  then<TResult1 = void, TResult2 = never>(
+    onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null | undefined,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined
+  ): Promise<TResult1 | TResult2> {
+    return this.#lifetime.promise.then(onfulfilled, onrejected);
+  }
+
+  catch<TResult = never>(
+    onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null | undefined
+  ): Promise<void | TResult> {
+    return this.#lifetime.promise.catch(onrejected);
+  }
+
+  finally(onfinally?: (() => void) | null | undefined): Promise<void> {
+    return this.#lifetime.promise.finally(onfinally);
+  }
+}
+
+const create = (options: VirtioDiskCreateOptions): VirtioDiskHandle => new VirtioDisk(options);
+
+export { create };
+export type { VirtioDiskHandle } from '#emulator/virtio/types';
