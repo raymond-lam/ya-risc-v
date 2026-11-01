@@ -56,7 +56,7 @@ const readIrqLevel = (memory: Memory): number => {
 };
 
 /** Host offset of the UART TX-wake Int32 (matches `#emulator/uart/region`). */
-const UART_TX_WAKE_HOST_OFFSET = 44;
+const UART_TX_WAKE_HOST_OFFSET = 48;
 
 /** Snapshot the UART TX wake Int32 (test observation only). */
 const readUartTxWake = (memory: Memory): number => {
@@ -559,6 +559,9 @@ describe('uart queues', () => {
       }
       assert.ok(filled < 64);
     }
+
+    // A 16550 FIFO accepts exactly 16 bytes; the 17th store is dropped (THRE clears).
+    assert.equal(filled, 16);
 
     storeBytes({
       memory,

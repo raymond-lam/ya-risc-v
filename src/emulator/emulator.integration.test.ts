@@ -74,6 +74,13 @@ describe('emulator integration (TX-ring drain, real machine, no mocks)', () => {
   ): Promise<void> => {
     await runGuest(burstImage(true), async ({ output, emulator }) => {
       await body({ output, emulator });
+      // The emulator lifetime settles once the terminal worker has flushed its
+      // writable side, but the harness's PassThrough delivers the flushed bytes
+      // to its 'data' listener on a later tick. Wait for every byte to reach the
+      // host stream before asserting the exact burst, so the test never reads a
+      // half-delivered ring. If the terminal drops a byte this wait times out
+      // instead of passing.
+      await output.waitForByteCount(BURST.length);
       assert.equal(output.text(), BURST);
     });
   };
