@@ -23,9 +23,13 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { setTimeout as delay } from 'node:timers/promises';
 import type { EmulatorHandle } from '#emulator';
-import { runGuest, settleEmulator, type GuestOutput } from '#test/integration-harness';
+import {
+  runGuest,
+  settleEmulator,
+  waitForUartTransmitQueueTail,
+  type GuestOutput,
+} from '#test/integration-harness';
 
 describe('emulator integration (TX-ring drain, real machine, no mocks)', () => {
   /**
@@ -70,9 +74,10 @@ describe('emulator integration (TX-ring drain, real machine, no mocks)', () => {
 
   /** Run the burst image, run `body`, then assert the whole ring drained. */
   const expectFullBurst = async (
+    image: Uint8Array,
     body: (context: { output: GuestOutput; emulator: EmulatorHandle }) => Promise<void>
   ): Promise<void> => {
-    await runGuest(burstImage(true), async ({ output, emulator }) => {
+    await runGuest(image, async ({ output, emulator }) => {
       await body({ output, emulator });
       // The emulator lifetime settles once the terminal worker has flushed its
       // writable side, but the harness's PassThrough delivers the flushed bytes
@@ -89,7 +94,7 @@ describe('emulator integration (TX-ring drain, real machine, no mocks)', () => {
     'drains a full TX ring when the guest powers off mid-stream',
     { timeout: 20_000 },
     async () => {
-      await expectFullBurst(({ emulator }) => settleEmulator(emulator));
+      await expectFullBurst(burstImage(true), ({ emulator }) => settleEmulator(emulator));
     }
   );
 
@@ -97,9 +102,13 @@ describe('emulator integration (TX-ring drain, real machine, no mocks)', () => {
     'drains a full TX ring when the host stops the emulator mid-stream',
     { timeout: 20_000 },
     async () => {
-      await expectFullBurst(async ({ emulator }) => {
-        // Give the guest a beat to fill the ring, then stop while it is pending.
-        await delay(250);
+      await expectFullBurst(burstImage(false), async ({ emulator }) => {
+        // Progress-gated, not wall-clock-gated: wait until the guest has actually
+        // enqueued all 16 bytes (the queue tail is monotonic), then stop the host
+        // while the ring is still occupied. A fixed delay is invalid here — worker
+        // startup can take longer than the delay on a slow machine, which would
+        // stop before the guest emits anything and drain an empty ring.
+        await waitForUartTransmitQueueTail(emulator, BURST.length);
         emulator.stop();
         await settleEmulator(emulator);
       });

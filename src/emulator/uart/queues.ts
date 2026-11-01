@@ -65,6 +65,15 @@ const uartTransmitPending = (memory: Memory): boolean => {
 };
 
 /**
+ * Read the TX queue producer index (tail) without mutating it. The tail advances
+ * one step per accepted THR write (modulo the ring), so it is a deterministic
+ * "bytes enqueued so far" signal for host observation and tests — unlike the
+ * queue length, the terminal draining bytes never moves it backwards.
+ */
+const readUartTransmitQueueTail = (memory: Memory): number =>
+  Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
+
+/**
  * Wait until the UART TX ring has data. Double-checks around a snapshot of the
  * nonempty level word (same pattern as `wfi` / hart IRQ level).
  */
@@ -179,5 +188,6 @@ export {
   popReceive,
   pushTransmit,
   readLineStatus,
+  readUartTransmitQueueTail,
   waitUartTransmit,
 };

@@ -17,7 +17,7 @@
 import { CLINT_HOST_BYTE_LENGTH, CLINT_REGION_ID, initializeClint } from '#emulator/clint';
 import { create as createCpu, type CpuHandle } from '#emulator/cpu';
 import { IRQ_LEVEL_HOST_BYTE_LENGTH, IRQ_LEVEL_REGION_ID } from '#emulator/irq-level';
-import { createMemory } from '#emulator/memory';
+import { createMemory, type Memory } from '#emulator/memory';
 import { initializePlic, PLIC_HOST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID, storeImageToRam } from '#emulator/ram';
 import { RESERVATION_HOST_BYTE_LENGTH, RESERVATION_REGION_ID } from '#emulator/reservation';
@@ -273,6 +273,10 @@ class Emulator implements EmulatorHandle {
       storeVirtioDevicePresent(this.#memory, true);
     }
   };
+
+  get memory(): Memory {
+    return this.#memory;
+  }
 
   then<TResult1 = void, TResult2 = never>(
     onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null | undefined,

@@ -55,7 +55,7 @@ import { CLINT_GUEST_BYTE_LENGTH, CLINT_REGION_ID } from '#emulator/clint';
 import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
-import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { readUartTransmitQueueTail, UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
 import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
@@ -143,6 +143,24 @@ const settleEmulator = async (emulator: EmulatorHandle): Promise<void> => {
 };
 
 /**
+ * Bounded poll until the guest has enqueued at least `tail` UART TX bytes. The
+ * queue tail advances on every accepted THR write and never moves backwards as
+ * the terminal drains, so this is a progress signal — not wall-clock luck.
+ */
+const waitForUartTransmitQueueTail = async (
+  emulator: EmulatorHandle,
+  tail: number
+): Promise<void> => {
+  const deadline = Date.now() + DEADLINE_MS;
+  while (readUartTransmitQueueTail(emulator.memory) < tail) {
+    if (Date.now() > deadline) {
+      throw new Error(`UART TX queue tail did not reach ${tail} within ${DEADLINE_MS}ms`);
+    }
+    await delay(OUTPUT_POLL_INTERVAL_MS);
+  }
+};
+
+/**
  * Assert the guest printed exactly `expected` and then powered off: the print is
  * drained guest-side (LSR.TEMT poll) before the syscon store, so the host only has
  * to wait for the terminal worker's last hand-off, and the emulator lifetime
@@ -198,4 +216,5 @@ export {
   guestRegions,
   runGuest,
   settleEmulator,
+  waitForUartTransmitQueueTail,
 };

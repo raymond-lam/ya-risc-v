@@ -17,6 +17,7 @@
 /* eslint-disable import/prefer-default-export -- emulator create option / handle types */
 import type { Readable, Writable } from 'node:stream';
 import type { DeviceTreeAddress } from '#fdt';
+import type { Memory } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
 
 /**
@@ -72,6 +73,8 @@ type EmulatorCreateOptions = {
 };
 
 type EmulatorHandle = Promise<void> & {
+  /** Read-only guest/host memory view (for host-side observation and debugging). */
+  readonly memory: Memory;
   /** Start the CPU, CLINT, and UART terminal workers. Throws if already started or already stopped. */
   start: () => void;
   /** Stop all workers. Throws if not started; idempotent after the first stop. */
