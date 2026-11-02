@@ -17,12 +17,14 @@
 /**
  * Split-virtqueue engine for the virtio block device (CPU worker only).
  *
- * pollVirtioDiskCompletions drains completed disk-worker requests (staging→guest DMA,
- * status byte, used-ring entry, idx bump) and submits the next request when the channel is
- * idle. Guest RAM stays single-writer: this module performs every guest-visible write;
- * the disk worker only touches the staging window and its channel words. Publication
- * order per request: status byte → used-ring entry → used->idx bump → PLIC source-1
- * assert. One request is in flight at a time (deliberate serialization).
+ * serviceVirtioDiskQueue services pending work: it drains a completed disk-worker request
+ * (staging→guest DMA, status byte, used-ring entry, idx bump) and submits the next request
+ * when the channel is idle. It does not poll or wait — callers invoke it per fetch, on
+ * QueueNotify, and after the completion wake word resolves. Guest RAM stays single-writer:
+ * this module performs every guest-visible write; the disk worker only touches the staging
+ * window and its channel words. Publication order per request: status byte → used-ring
+ * entry → used->idx bump → PLIC source-1 assert. One request is in flight at a time
+ * (deliberate serialization).
  */
 
 import type { ReadonlyUint8Array } from '#types';
@@ -642,8 +644,13 @@ const advanceVirtioQueue = (
   return publishedAny;
 };
 
-/** Drain completed disk requests and advance queue 0. Call per fetch and on QueueNotify. */
-const pollVirtioDiskCompletions = (memory: Memory): void => {
+/**
+ * Service pending disk work: drain a completed request and advance queue 0. Call per fetch,
+ * on QueueNotify, and after the completion wake word resolves. Draining a completed request
+ * into guest RAM is what raises the device's PLIC source (interrupt status plus wire), so a
+ * completion only becomes guest-visible through this call.
+ */
+const serviceVirtioDiskQueue = (memory: Memory): void => {
   if (loadVirtioDevicePresent(memory) === 0) {
     return;
   }
@@ -683,4 +690,4 @@ const waitVirtioDiskCompletion = async (
     signal,
   });
 
-export { loadVirtioDiskCompletionSeq, pollVirtioDiskCompletions, waitVirtioDiskCompletion };
+export { loadVirtioDiskCompletionSeq, serviceVirtioDiskQueue, waitVirtioDiskCompletion };

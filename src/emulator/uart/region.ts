@@ -21,10 +21,11 @@
  *   guestAddress + 0..7  →  hostIndex + 0..7   (RBR/THR … SCR)
  *
  * Host-only tail (not reachable via loadBytes/storeBytes):
- *   +8   queue meta (rx/tx head/tail)
- *   +12  RX ring
- *   +29  TX ring
- *   +48  TX nonempty wake Int32 (padded to stay 4-byte aligned)
+ *   +8   queue meta (rx head, rx tail, tx head, tx tail — one byte each)
+ *   +12  RX ring (UART_QUEUE_SLOT_COUNT = 17 slots: 16 usable + 1 head/tail sentinel)
+ *   +29  TX ring (UART_QUEUE_SLOT_COUNT slots, same shape)
+ *   +46  pad to +48
+ *   +48  TX nonempty wake Int32
  */
 
 import { bigIntAsNumber } from '#utils/int';
@@ -37,11 +38,14 @@ const UART_REGION_ID = 'uart';
 /** Guest-visible 16550 register window (dense prefix of this region). */
 const UART_GUEST_BYTE_LENGTH = 8n;
 
+/** Usable bytes per direction — a 16550 FIFO is 16 bytes deep. */
+const UART_QUEUE_DEPTH = 16;
+
 /**
- * Ring storage slots per direction. A 16550 FIFO is 16 bytes deep, so the ring
- * needs 17 slots: 16 usable plus one reserved so `head === tail` means empty.
+ * Ring storage slots per direction: one slot per usable byte plus one reserved slot, so
+ * `head === tail` can mean empty without wasting a byte of the 16-byte FIFO depth.
  */
-const UART_QUEUE_CAPACITY = 17;
+const UART_QUEUE_SLOT_COUNT = UART_QUEUE_DEPTH + 1;
 
 /** Relative host offsets inside the UART region (from that region's hostIndex). */
 const UART_HOST_OFFSET = {
@@ -113,7 +117,7 @@ export {
   UART_GUEST_BYTE_LENGTH,
   UART_HOST_BYTE_LENGTH,
   UART_HOST_OFFSET,
-  UART_QUEUE_CAPACITY,
+  UART_QUEUE_SLOT_COUNT,
   UART_REGION_ID,
   metaIndex,
   registerHostIndex,

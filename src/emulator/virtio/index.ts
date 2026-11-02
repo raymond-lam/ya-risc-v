@@ -50,7 +50,7 @@ export { loadVirtioDiskCapacity } from '#emulator/virtio/layout';
 export { loadBytesFromVirtio, storeBytesToVirtio } from '#emulator/virtio/memory';
 export {
   loadVirtioDiskCompletionSeq,
-  pollVirtioDiskCompletions,
+  serviceVirtioDiskQueue,
   waitVirtioDiskCompletion,
 } from '#emulator/virtio/queue';
 export { initializeVirtio };

@@ -23,7 +23,7 @@
 import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
 import { PLIC_SOURCE_VIRTIO, setPlicSourcePending } from '#emulator/plic';
-import { pollVirtioDiskCompletions } from '#emulator/virtio/queue';
+import { serviceVirtioDiskQueue } from '#emulator/virtio/queue';
 import type { VirtioRegisterKind } from '#emulator/virtio/layout';
 import {
   VIRTIO_BLK_SECTOR_BYTES,
@@ -308,7 +308,7 @@ const handleQueueNotify = (
   // existing queue (queue 0) and kicks it; any non-zero value names no queue and is
   // ignored entirely — real device behavior, NOT a trap.
   if (loadVirtioShadowU32(memory, VIRTIO_HOST_QUEUE_NOTIFY) === 0) {
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
   }
 };
 

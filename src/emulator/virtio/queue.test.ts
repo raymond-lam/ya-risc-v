@@ -39,7 +39,7 @@ import {
 } from '#emulator/virtio/layout';
 import {
   loadVirtioDiskCompletionSeq,
-  pollVirtioDiskCompletions,
+  serviceVirtioDiskQueue,
   waitVirtioDiskCompletion,
 } from '#emulator/virtio/queue';
 import type { ReadonlyUint8Array } from '#types';
@@ -257,13 +257,16 @@ const awaitDiskReady = async (memory: Memory): Promise<void> => {
   }
 };
 
-/** Bounded poll-and-drain until `predicate` holds (final drain included). */
-const pollVirtioUntil = async (memory: Memory, predicate: () => boolean): Promise<void> => {
+/** Repeatedly service pending queue work until `predicate` holds (final service included). */
+const serviceVirtioDiskQueueUntil = async (
+  memory: Memory,
+  predicate: () => boolean
+): Promise<void> => {
   for (let attempt = 0; attempt < 1000 && !predicate(); attempt += 1) {
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     await delay(1);
   }
-  pollVirtioDiskCompletions(memory);
+  serviceVirtioDiskQueue(memory);
 };
 
 /** Run `body` against a real disk worker with a fresh temp image. */
@@ -311,7 +314,7 @@ describe('virtio queue engine', () => {
       writeVirtioRegister(memory, 0x050n, 0);
       assert.equal(usedIdx(memory), 0);
 
-      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 1);
       assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
       assert.deepEqual(loadGuest(memory, DATA1, 16), SECTOR_HEAD);
       assert.equal(readU32(memory, USED_BASE + 4n), 0);
@@ -340,7 +343,7 @@ describe('virtio queue engine', () => {
       writeU16(memory, AVAIL_BASE + 2n, 1);
       writeU16(memory, AVAIL_BASE + 4n, 0);
       writeVirtioRegister(memory, 0x050n, 0);
-      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 1);
       assert.equal(readVirtioRegister(memory, 0x060n), 1);
       assert.equal(isPlicMachineExternalPending(memory), true);
 
@@ -375,7 +378,7 @@ describe('virtio queue engine', () => {
       writeVirtioRegister(memory, 0x050n, 0);
       assert.equal(usedIdx(memory), 0);
 
-      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 1);
       assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
       assert.deepEqual(readFileBytes(path).subarray(1024, 1040), outBytes);
       assert.equal(readU32(memory, USED_BASE + 4n), 0);
@@ -435,7 +438,7 @@ describe('virtio queue engine', () => {
       writeU16(memory, AVAIL_BASE + 6n, 5);
 
       writeVirtioRegister(memory, 0x050n, 0);
-      await pollVirtioUntil(memory, () => usedIdx(memory) === 2);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 2);
 
       assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
       assert.equal(loadGuest(memory, STATUS2, 1)[0], 0);
@@ -448,7 +451,7 @@ describe('virtio queue engine', () => {
 
       writeVirtioRegister(memory, 0x064n, 1);
       writeVirtioRegister(memory, 0x050n, 0);
-      pollVirtioDiskCompletions(memory);
+      serviceVirtioDiskQueue(memory);
       assert.equal(usedIdx(memory), 2);
       assert.equal(isPlicMachineExternalPending(memory), false);
     });
@@ -473,7 +476,7 @@ describe('virtio queue engine', () => {
       writeU16(memory, AVAIL_BASE + 2n, 1);
       writeU16(memory, AVAIL_BASE + 4n, 0);
       writeVirtioRegister(memory, 0x050n, 0);
-      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 1);
 
       assert.equal(loadGuest(memory, STATUS1, 1)[0], 1);
       assert.deepEqual(loadGuest(memory, DATA1, 16), new Uint8Array(16).fill(0xaa));
@@ -497,7 +500,7 @@ describe('virtio queue engine', () => {
     writeU16(absent, AVAIL_BASE + 2n, 1);
     writeU16(absent, AVAIL_BASE + 4n, 0);
     writeVirtioRegister(absent, 0x050n, 0);
-    pollVirtioDiskCompletions(absent);
+    serviceVirtioDiskQueue(absent);
     assert.equal(usedIdx(absent), 1);
     assert.equal(loadGuest(absent, STATUS1, 1)[0], 1);
     assert.equal(readU32(absent, USED_BASE + 4n), 0);
@@ -522,7 +525,7 @@ describe('virtio queue engine', () => {
     writeU16(memory, AVAIL_BASE + 2n, 1);
     writeU16(memory, AVAIL_BASE + 4n, 0);
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 1);
     assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
     assert.equal(readU32(memory, USED_BASE + 8n), 1);
@@ -541,7 +544,7 @@ describe('virtio queue engine', () => {
     writeU16(memory, AVAIL_BASE + 2n, 2);
     writeU16(memory, AVAIL_BASE + 6n, 3);
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 2);
     assert.equal(loadGuest(memory, STATUS2, 1)[0], 2);
   });
@@ -575,7 +578,7 @@ describe('virtio queue engine', () => {
 
     // A store of the full word 0 kicks queue 0; the capacity-less request IOERRs sync.
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 1);
   });
 
@@ -606,17 +609,17 @@ describe('virtio queue engine', () => {
     writeU16(memory, AVAIL_BASE + 4n, 0);
 
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 0);
 
     writeVirtioRegister(memory, 0x070n, 0xf); // DRIVER_OK, but QueueReady still 0
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 0);
 
     writeVirtioRegister(memory, 0x044n, 1);
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 1);
   });
 
@@ -654,15 +657,15 @@ describe('virtio queue engine', () => {
     writeU16(memory, AVAIL_BASE + 6n, 3); // valid
 
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 1);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 1); // no-op
 
     writeU16(memory, AVAIL_BASE + 2n, 3);
     writeU16(memory, AVAIL_BASE + 8n, 4); // cycle chain
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 1); // skipped, bounded walk
   });
 
@@ -703,7 +706,7 @@ describe('virtio queue engine', () => {
 
     assert.equal(loadVirtioShadowU32(memory, VIRTIO_HOST_REQUEST_SEQ), 0);
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 2);
     assert.equal(loadGuest(memory, STATUS1, 1)[0], 1);
     assert.equal(readU32(memory, USED_BASE + 4n), 0);
@@ -732,7 +735,7 @@ describe('virtio queue engine', () => {
       const fromLevel = loadVirtioDiskCompletionSeq(memory);
       writeVirtioRegister(memory, 0x050n, 0);
       await waitVirtioDiskCompletion(memory, fromLevel);
-      pollVirtioDiskCompletions(memory);
+      serviceVirtioDiskQueue(memory);
       assert.equal(usedIdx(memory), 1);
     });
   });
@@ -782,7 +785,7 @@ describe('virtio queue engine', () => {
       writeU16(memory, AVAIL_BASE + 4n, 0);
       writeVirtioRegister(memory, 0x050n, 0);
 
-      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 1);
       assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
       assert.deepEqual(loadGuest(memory, DATA1, 4), SECTOR_HEAD.subarray(0, 4));
       assert.deepEqual(loadGuest(memory, DATA2, 8), SECTOR_HEAD.subarray(4, 12));
@@ -824,7 +827,7 @@ describe('virtio queue engine', () => {
       writeU16(memory, AVAIL_BASE + 4n, 0);
       writeVirtioRegister(memory, 0x050n, 0);
 
-      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 1);
       assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
       assert.equal(readU32(memory, USED_BASE + 8n), 1); // used->len = 1 for OUT
 
@@ -852,7 +855,7 @@ describe('virtio queue engine', () => {
     writeU16(memory, AVAIL_BASE + 2n, 1);
     writeU16(memory, AVAIL_BASE + 4n, 0);
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 1);
     assert.equal(loadGuest(memory, STATUS1, 1)[0], 1); // IOERR
     assert.equal(readU32(memory, USED_BASE + 8n), 1);
@@ -880,7 +883,7 @@ describe('virtio queue engine', () => {
     writeU16(memory, AVAIL_BASE + 2n, 1);
     writeU16(memory, AVAIL_BASE + 4n, 0);
     writeVirtioRegister(memory, 0x050n, 0);
-    pollVirtioDiskCompletions(memory);
+    serviceVirtioDiskQueue(memory);
     assert.equal(usedIdx(memory), 1);
     assert.equal(loadGuest(memory, STATUS1, 1)[0], 1); // IOERR
     assert.equal(loadVirtioShadowU32(memory, VIRTIO_HOST_REQUEST_SEQ), 0); // no I/O submitted
@@ -919,7 +922,7 @@ describe('virtio queue engine', () => {
       writeU16(memory, AVAIL_BASE + 4n, 0);
       writeVirtioRegister(memory, 0x050n, 0);
 
-      await pollVirtioUntil(memory, () => usedIdx(memory) === 1);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 1);
       assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
       assert.deepEqual(loadGuest(memory, DATA1, 16), SECTOR_HEAD);
     } finally {

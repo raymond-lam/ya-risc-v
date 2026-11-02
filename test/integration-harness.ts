@@ -143,18 +143,20 @@ const settleEmulator = async (emulator: EmulatorHandle): Promise<void> => {
 };
 
 /**
- * Bounded poll until the guest has enqueued at least `tail` UART TX bytes. The
- * queue tail advances on every accepted THR write and never moves backwards as
- * the terminal drains, so this is a progress signal — not wall-clock luck.
+ * Bounded wait until the TX producer slot reaches `tail`. Starting from the empty queue's
+ * known index 0, fewer than 17 writes advance the index without wrapping; draining bytes only
+ * moves the consumer head, not this slot index. This is a progress check, not a byte counter.
  */
 const waitForUartTransmitQueueTail = async (
   emulator: EmulatorHandle,
-  tail: number
+  producerSlot: number
 ): Promise<void> => {
   const deadline = Date.now() + DEADLINE_MS;
-  while (readUartTransmitQueueTail(emulator.memory) < tail) {
+  while (readUartTransmitQueueTail(emulator.memory) < producerSlot) {
     if (Date.now() > deadline) {
-      throw new Error(`UART TX queue tail did not reach ${tail} within ${DEADLINE_MS}ms`);
+      throw new Error(
+        `UART TX producer slot did not reach ${producerSlot} within ${DEADLINE_MS}ms`
+      );
     }
     await delay(OUTPUT_POLL_INTERVAL_MS);
   }

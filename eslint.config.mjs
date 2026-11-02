@@ -41,6 +41,28 @@ const allPackagePrivatePatterns = [
   },
 ];
 
+/**
+ * Device packages with a host/worker half. Hart code reaches their guest-visible effects
+ * through `#emulator/machine`; CLINT and PLIC stay importable
+ * because the hart samples their IRQ wires directly.
+ */
+const hartDeviceImportPattern = {
+  group: [
+    '#emulator/virtio',
+    '#emulator/virtio/*',
+    '#emulator/uart',
+    '#emulator/uart/*',
+    '#emulator/syscon',
+    '#emulator/syscon/*',
+    '#emulator/timer',
+    '#emulator/timer/*',
+    '#emulator/terminal',
+    '#emulator/terminal/*',
+  ],
+  message:
+    'Hart code must not import device packages directly; use #emulator/machine for composition.',
+};
+
 /** Package-private patterns excluding one package's own `#pkg/*` siblings. */
 const packagePrivateExcept = (ownGroup) =>
   allPackagePrivatePatterns.map((pattern) => ({
@@ -252,16 +274,7 @@ const eslintConfig = [
           patterns: [
             ...importShapePatterns,
             ...packagePrivateExcept('#emulator/cpu/*'),
-            {
-              group: [
-                '#emulator/timer',
-                '#emulator/timer/*',
-                '#emulator/terminal',
-                '#emulator/terminal/*',
-              ],
-              message:
-                'Hart code uses #emulator/clint (device API); do not import #emulator/timer or #emulator/terminal.',
-            },
+            hartDeviceImportPattern,
           ],
         },
       ],
@@ -273,7 +286,11 @@ const eslintConfig = [
       'no-restricted-imports': [
         'error',
         {
-          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/cpu/*')],
+          patterns: [
+            ...importShapePatterns,
+            ...packagePrivateExcept('#emulator/cpu/*'),
+            hartDeviceImportPattern,
+          ],
         },
       ],
     },
