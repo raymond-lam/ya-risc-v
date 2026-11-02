@@ -168,7 +168,7 @@ describe('virtio guest window', () => {
     }
   });
 
-  it('config capacity is floor(fileSize / 512) sectors, 0 until published, 0 when absent', () => {
+  it('config capacity is floor(fileSize / 512) sectors, 0 until published, 0 when absent', async () => {
     const memory = createTestMemory(64n);
     assert.equal(readCapacity(memory), 0n);
 
@@ -176,13 +176,13 @@ describe('virtio guest window', () => {
     const path = join(dir, 'disk.img');
     writeFileSync(path, new Uint8Array(1280));
     try {
-      openVirtioImage(path);
+      await openVirtioImage(path);
       publishVirtioDiskCapacity(memory);
       assert.equal(readCapacity(memory), 2n);
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       assert.equal(readCapacity(memory), 0n);
     } finally {
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       rmSync(dir, { recursive: true, force: true });
     }
 
@@ -190,7 +190,7 @@ describe('virtio guest window', () => {
     assert.equal(readCapacity(memory), 0n);
   });
 
-  it('config generation reads 0 while absent and ≥1 once capacity publishes (§FIX 3)', () => {
+  it('config generation reads 0 while absent and ≥1 once capacity publishes (§FIX 3)', async () => {
     const memory = createTestMemory(64n);
     assert.equal(readVirtioRegister(memory, 0x0fcn), 0);
 
@@ -198,7 +198,7 @@ describe('virtio guest window', () => {
     const path = join(dir, 'disk.img');
     writeFileSync(path, new Uint8Array(1280));
     try {
-      openVirtioImage(path);
+      await openVirtioImage(path);
       // Capacity is published by the worker, not by open (so the counter is still 0).
       assert.equal(readVirtioRegister(memory, 0x0fcn), 0);
       publishVirtioDiskCapacity(memory);
@@ -208,7 +208,7 @@ describe('virtio guest window', () => {
       assert.equal(readVirtioRegister(memory, 0x0fcn), generation);
       assert.equal(readVirtioRegister(memory, 0x0fcn), generation);
     } finally {
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -79,93 +79,93 @@ const writeTempImage = (bytes: Uint8Array): { dir: string; path: string } => {
 };
 
 describe('virtio disk', () => {
-  it("openVirtioImage binds a raw file read-write ('r+') and publishVirtioDiskCapacity publishes capacity", () => {
+  it("openVirtioImage binds a raw file read-write ('r+') and publishVirtioDiskCapacity publishes capacity", async () => {
     const { dir, path } = writeTempImage(buildImage());
     const memory = createTestMemory(64n);
     try {
-      openVirtioImage(path);
+      await openVirtioImage(path);
       publishVirtioDiskCapacity(memory);
       assert.equal(loadVirtioDiskCapacity(memory), 1280n);
       assert.equal(readCapacitySectors(memory), 2n);
 
-      assert.equal(writeDiskSectors(0, new Uint8Array([0x5a, 0xa5])), 2);
+      assert.equal(await writeDiskSectors(0, new Uint8Array([0x5a, 0xa5])), 2);
       const onDisk = readFileBytes(path);
       assert.deepEqual(onDisk.subarray(0, 2), new Uint8Array([0x5a, 0xa5]));
       assert.equal(onDisk[2], 0x5a);
       assert.equal(onDisk[512], 0xaa);
 
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       assert.equal(loadVirtioDiskCapacity(memory), 0n);
     } finally {
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('readDiskSectors returns exact file bytes', () => {
+  it('readDiskSectors returns exact file bytes', async () => {
     const { dir, path } = writeTempImage(buildImage());
     const memory = createTestMemory(64n);
     try {
-      openVirtioImage(path);
+      await openVirtioImage(path);
       const atSector = new Uint8Array(8);
-      assert.equal(readDiskSectors(512, atSector), 8);
+      assert.equal(await readDiskSectors(512, atSector), 8);
       assert.deepEqual(atSector, new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd, 0x11, 0x22, 0x33, 0x44]));
 
       const atZero = new Uint8Array(8);
-      assert.equal(readDiskSectors(0, atZero), 8);
+      assert.equal(await readDiskSectors(0, atZero), 8);
       assert.deepEqual(atZero, new Uint8Array(8).fill(0x5a));
     } finally {
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('readDiskSectors short-reads at EOF and returns the partial count', () => {
+  it('readDiskSectors short-reads at EOF and returns the partial count', async () => {
     const { dir, path } = writeTempImage(buildImage());
     const memory = createTestMemory(64n);
     try {
-      openVirtioImage(path);
+      await openVirtioImage(path);
       const tail = new Uint8Array(8).fill(0xff);
-      assert.equal(readDiskSectors(1276, tail), 4);
+      assert.equal(await readDiskSectors(1276, tail), 4);
       assert.deepEqual(tail.subarray(0, 4), new Uint8Array(4).fill(0x5a));
 
       const pastEnd = new Uint8Array(8);
-      assert.equal(readDiskSectors(1280, pastEnd), 0);
+      assert.equal(await readDiskSectors(1280, pastEnd), 0);
     } finally {
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('openVirtioImage throws on a missing path', () => {
+  it('openVirtioImage rejects on a missing path', async () => {
     const { dir } = writeTempImage(buildImage());
     const memory = createTestMemory(64n);
     try {
-      assert.throws(() => openVirtioImage(join(dir, 'missing.img')), { code: 'ENOENT' });
+      await assert.rejects(openVirtioImage(join(dir, 'missing.img')), { code: 'ENOENT' });
       assert.equal(loadVirtioDiskCapacity(memory), 0n);
     } finally {
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('re-opening closes the previous image', () => {
+  it('re-opening closes the previous image', async () => {
     const first = writeTempImage(buildImage());
     const second = writeTempImage(new Uint8Array(512).fill(0x11));
     const memory = createTestMemory(64n);
     try {
-      openVirtioImage(first.path);
+      await openVirtioImage(first.path);
       publishVirtioDiskCapacity(memory);
       assert.equal(loadVirtioDiskCapacity(memory), 1280n);
-      openVirtioImage(second.path);
+      await openVirtioImage(second.path);
       publishVirtioDiskCapacity(memory);
       assert.equal(loadVirtioDiskCapacity(memory), 512n);
 
-      assert.equal(writeDiskSectors(0, new Uint8Array([0x0f, 0xf0])), 2);
+      assert.equal(await writeDiskSectors(0, new Uint8Array([0x0f, 0xf0])), 2);
       assert.deepEqual(readFileBytes(second.path).subarray(0, 2), new Uint8Array([0x0f, 0xf0]));
       assert.deepEqual(readFileBytes(first.path).subarray(0, 2), new Uint8Array([0x5a, 0x5a]));
     } finally {
-      closeVirtioImage(memory);
+      await closeVirtioImage(memory);
       rmSync(first.dir, { recursive: true, force: true });
       rmSync(second.dir, { recursive: true, force: true });
     }

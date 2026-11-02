@@ -26,7 +26,7 @@ import type { VirtioDiskWorkerData } from '#emulator/virtio/types';
 const main = async (): Promise<void> => {
   const { memory, diskImagePath } = workerData as VirtioDiskWorkerData;
   try {
-    openVirtioImage(diskImagePath); // 'r+'; throws on a bad path
+    await openVirtioImage(diskImagePath); // 'r+'; rejects on a bad path
   } catch (error) {
     // Signal the failure so the worker host's ready-wait returns immediately; device-present
     // stays 0 and the guest probe reads an absent device (§FIX 1).
@@ -37,7 +37,7 @@ const main = async (): Promise<void> => {
     // The service loop arms, publishes capacity, then publishes readiness before serving.
     await serviceVirtioDiskRequests(memory); // runs until the host terminates us
   } finally {
-    closeVirtioImage(memory); // hygiene on any normal unwind
+    await closeVirtioImage(memory); // hygiene on any normal unwind
   }
 };
 

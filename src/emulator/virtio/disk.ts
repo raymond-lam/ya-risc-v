@@ -16,8 +16,10 @@
 
 /**
  * Worker-side virtio disk storage — opens the raw image 'r+' once per disk worker,
- * performs positional synchronous file I/O through the staging window, and services
- * CPU-submitted requests on a wake word.
+ * performs positional asynchronous file I/O through the staging window, and services
+ * CPU-submitted requests on a wake word. Transfers are awaited one at a time, so the
+ * worker never has more than one request in flight and the publish contract below is
+ * unchanged by the asynchrony.
  *
  * Startup ordering (§FIX 1: atomic device appearance) is single-threaded here and MUST be
  * preserved: (a) the service loop arms `handled := current requestSeq` while the device is
@@ -29,7 +31,8 @@
  * The image is never loaded into memory; files ≥ 2^53 bytes are out of scope (JS offsets).
  */
 
-import { closeSync, fstatSync, openSync, readSync, writeSync } from 'node:fs';
+import { open } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import type { Memory } from '#emulator/memory';
 import { publishWakeLevel, waitWake } from '#emulator/wake';
 import { bigIntAsNumber } from '#utils/int';
@@ -54,29 +57,41 @@ import {
   storeVirtioShadowU32,
 } from '#emulator/virtio/layout';
 
-let diskFd: number | null = null;
+let diskHandle: FileHandle | null = null;
 
 /** Byte size of the currently-open image (0 while no image is open). */
 let diskImageSize = 0;
 
 const NO_IMAGE_OPEN = 'No virtio disk image is open.';
 
+/** The open image handle; throws when no image is bound (callers must open first). */
+const requireVirtioImage = (): FileHandle => {
+  if (diskHandle === null) {
+    throw new Error(NO_IMAGE_OPEN);
+  }
+  return diskHandle;
+};
+
 /** Open the raw image read-write and record its size. No slab writes: capacity is
  *  published separately (arm → capacity → ready) once the service loop is armed. */
-const openVirtioImage = (path: string): void => {
-  if (diskFd !== null) {
-    closeSync(diskFd);
-    diskFd = null;
+const openVirtioImage = async (path: string): Promise<void> => {
+  const previous = diskHandle;
+  diskHandle = null;
+  diskImageSize = 0;
+  await previous?.close();
+  const handle = await open(path, 'r+'); // ALWAYS 'r+' (constraint: no read-only mode)
+  try {
+    diskImageSize = (await handle.stat()).size;
+  } catch (error) {
+    await handle.close();
+    throw error;
   }
-  diskFd = openSync(path, 'r+'); // ALWAYS 'r+' (constraint: no read-only mode)
-  diskImageSize = fstatSync(diskFd).size;
+  diskHandle = handle;
 };
 
 /** Publish the open image's capacity words and advance the config generation. */
 const publishVirtioDiskCapacity = (memory: Memory): void => {
-  if (diskFd === null) {
-    throw new Error(NO_IMAGE_OPEN);
-  }
+  requireVirtioImage();
   storeVirtioShadowU32(memory, VIRTIO_HOST_DISK_CAPACITY_LOW, diskImageSize >>> 0);
   storeVirtioShadowU32(memory, VIRTIO_HOST_DISK_CAPACITY_HIGH, Math.floor(diskImageSize / 2 ** 32));
   // §FIX 3: the 0 → N capacity transition advances the guest-visible config generation.
@@ -87,15 +102,15 @@ const publishVirtioDiskCapacity = (memory: Memory): void => {
   Atomics.store(virtioHostInt32(memory, VIRTIO_HOST_DISK_CAPACITY_READY), 0, 1);
 };
 
-const closeVirtioImage = (memory: Memory): void => {
-  if (diskFd !== null) {
-    closeSync(diskFd);
-    diskFd = null;
-  }
+/** Unpublish capacity first (so no request is admitted mid-close), then close the image. */
+const closeVirtioImage = async (memory: Memory): Promise<void> => {
+  const handle = diskHandle;
+  diskHandle = null;
   diskImageSize = 0;
   Atomics.store(virtioHostInt32(memory, VIRTIO_HOST_DISK_CAPACITY_READY), 0, 0);
   storeVirtioShadowU32(memory, VIRTIO_HOST_DISK_CAPACITY_LOW, 0);
   storeVirtioShadowU32(memory, VIRTIO_HOST_DISK_CAPACITY_HIGH, 0);
+  await handle?.close();
 };
 
 /** Publish the disk worker's readiness level (0 not ready, 1 ready, -1 open failed). */
@@ -107,38 +122,43 @@ const publishVirtioDiskReady = (memory: Memory, level: number): void => {
   });
 };
 
-const readDiskSectors = (position: number, buffer: Uint8Array): number => {
-  if (diskFd === null) {
-    throw new Error(NO_IMAGE_OPEN);
-  }
+/** Positional read into `buffer`, looping over short reads; returns the bytes read (short
+ *  only at EOF). Positional I/O keeps the handle's file offset out of the picture. */
+const readDiskSectors = async (position: number, buffer: Uint8Array): Promise<number> => {
+  const handle = requireVirtioImage();
   let total = 0;
   while (total < buffer.length) {
-    const count = readSync(diskFd, buffer, total, buffer.length - total, position + total);
-    if (count <= 0) {
+    const { bytesRead } = await handle.read(buffer, total, buffer.length - total, position + total);
+    if (bytesRead <= 0) {
       break;
     }
-    total += count;
+    total += bytesRead;
   }
   return total;
 };
 
-const writeDiskSectors = (position: number, buffer: Uint8Array): number => {
-  if (diskFd === null) {
-    throw new Error(NO_IMAGE_OPEN);
-  }
+/** Positional write from `buffer`, looping over short writes; returns the bytes written. */
+const writeDiskSectors = async (position: number, buffer: Uint8Array): Promise<number> => {
+  const handle = requireVirtioImage();
   let total = 0;
   while (total < buffer.length) {
-    const count = writeSync(diskFd, buffer, total, buffer.length - total, position + total);
-    if (count <= 0) {
+    const { bytesWritten } = await handle.write(
+      buffer,
+      total,
+      buffer.length - total,
+      position + total
+    );
+    if (bytesWritten <= 0) {
       break;
     }
-    total += count;
+    total += bytesWritten;
   }
   return total;
 };
 
-/** Serve exactly one CPU-submitted request, then publish its completion level. */
-const serveVirtioDiskRequest = (memory: Memory): void => {
+/** Serve exactly one CPU-submitted request, then publish its completion level. The caller
+ *  awaits it, so the transfer, the IOERR word, and the completion wake level are ordered. */
+const serveVirtioDiskRequest = async (memory: Memory): Promise<void> => {
   const direction = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_DIRECTION), 0) >>> 0;
   const length = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_LENGTH), 0) >>> 0;
   const sectorLow = loadVirtioShadowU32(memory, VIRTIO_HOST_REQUEST_SECTOR_LOW);
@@ -149,10 +169,10 @@ const serveVirtioDiskRequest = (memory: Memory): void => {
   let ioError = 0;
   try {
     if (direction === 0) {
-      if (readDiskSectors(position, staging) !== length) {
+      if ((await readDiskSectors(position, staging)) !== length) {
         ioError = 1;
       }
-    } else if (writeDiskSectors(position, staging) !== length) {
+    } else if ((await writeDiskSectors(position, staging)) !== length) {
       ioError = 1;
     }
   } catch {
@@ -195,7 +215,7 @@ const serviceVirtioDiskRequests = async (memory: Memory): Promise<void> => {
   for (;;) {
     let submitted = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_SEQ), 0) >>> 0;
     while (handled !== submitted) {
-      serveVirtioDiskRequest(memory);
+      await serveVirtioDiskRequest(memory);
       handled = (handled + 1) >>> 0;
       submitted = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_SEQ), 0) >>> 0;
     }
