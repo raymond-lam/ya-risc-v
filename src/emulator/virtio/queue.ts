@@ -31,7 +31,7 @@ import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
 import { PLIC_SOURCE_VIRTIO, setPlicSourcePending } from '#emulator/plic';
 import { publishWakeLevel, waitWake } from '#emulator/wake';
-import { loadGuestRamBytes, storeGuestRamBytes } from '#emulator/virtio/dma';
+import { loadGuestRamBytes, storeGuestRamBytes } from '#emulator/dma';
 import {
   VIRTIO_BLK_HEADER_BYTES,
   VIRTIO_BLK_S_IOERR,

@@ -15,17 +15,16 @@
  */
 
 /**
- * RAM-only guest DMA for the virtio block engine.
+ * RAM-only guest DMA for emulated devices.
  *
- * This helper exists to break an import cycle: `#emulator/memory` imports
- * `loadBytesFromVirtio` / `storeBytesToVirtio` from `#emulator/virtio`, so the block engine
- * must not import `#emulator/memory` at runtime. It therefore drives `#emulator/ram`
- * (leaf) directly and mirrors `memory.storeBytes`' reservation-monitor critical section
- * exactly. Never add a runtime `#emulator/memory` import here.
+ * This leaf module lets device engines transfer guest RAM without depending on
+ * `#emulator/memory`, which imports the virtio device package. It drives `#emulator/ram`
+ * directly and mirrors `memory.storeBytes`' reservation-monitor critical section exactly.
+ * Never add a runtime `#emulator/memory` import here.
  *
  * Stores that fail (target outside the RAM window) do not write guest bytes; reads that
- * fail leave the destination untouched. Callers size the destination exactly. Only the
- * CPU worker calls these — the disk worker never touches guest RAM.
+ * fail leave the destination untouched. Callers size the destination exactly. The virtio
+ * disk worker never calls these helpers: only the CPU-side device engine owns guest RAM.
  */
 
 import { RAM_REGION_ID, loadBytesFromRam, storeBytesToRam } from '#emulator/ram';

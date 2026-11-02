@@ -23,7 +23,7 @@ import {
   setReservationLocked,
   withMonitorLock,
 } from '#emulator/reservation';
-import { loadGuestRamBytes, storeGuestRamBytes } from '#emulator/virtio/dma';
+import { loadGuestRamBytes, storeGuestRamBytes } from '#emulator/dma';
 import { bigIntAsNumber } from '#utils/int';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
@@ -54,7 +54,7 @@ const slotValid = (memory: Memory, hartId: number): boolean => {
   return Atomics.load(new Int32Array(memory.bytes.buffer, slotBase, 1), 0) !== 0;
 };
 
-describe('virtio dma', () => {
+describe('guest RAM DMA', () => {
   it('loadGuestRamBytes returns exact RAM bytes and true', () => {
     const memory = createTestMemory(256n);
     const ram = memory.regions.get(RAM_REGION_ID);

@@ -90,8 +90,8 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    lint error. A directory with `index.ts` is a package — sibling modules are private, and
    outside a directory you import only from the package root. Public subpaths: worker
    entries `#emulator/*/run`. Leaf modules (`#emulator/memory`, `#emulator/ram`,
-   `#emulator/reservation`, `#emulator/wake`, `#emulator/irq-level`) are their own public
-   API. Inside `emulator/`, packages import each other via roots only (hart samples CLINT
+   `#emulator/reservation`, `#emulator/wake`, `#emulator/irq-level`, `#emulator/dma`) are
+   their own public API. Inside `emulator/`, packages import each other via roots only (hart samples CLINT
    via `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
    `#emulator/timer` / `#emulator/terminal`). `eslint.config.mjs` is the authoritative
    statement of all of this — including the worker-bundle ban on `#emulator/timer`,

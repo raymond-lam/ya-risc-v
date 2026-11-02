@@ -15,18 +15,21 @@
  */
 
 import { parentPort, workerData } from 'node:worker_threads';
+import { openVirtioDiskImage } from '#emulator/virtio/disk';
+import type { VirtioDiskImage } from '#emulator/virtio/disk';
 import {
-  closeVirtioImage,
-  openVirtioImage,
+  armVirtioDiskService,
+  clearVirtioDiskCapacity,
   publishVirtioDiskReady,
   serviceVirtioDiskRequests,
-} from '#emulator/virtio/disk';
+} from '#emulator/virtio/service';
 import type { VirtioDiskWorkerData } from '#emulator/virtio/types';
 
 const main = async (): Promise<void> => {
   const { memory, diskImagePath } = workerData as VirtioDiskWorkerData;
+  let diskImage: VirtioDiskImage;
   try {
-    await openVirtioImage(diskImagePath); // 'r+'; rejects on a bad path
+    diskImage = await openVirtioDiskImage(diskImagePath); // 'r+'; rejects on a bad path
   } catch (error) {
     // Signal the failure so the worker host's ready-wait returns immediately; device-present
     // stays 0 and the guest probe reads an absent device (§FIX 1).
@@ -34,10 +37,13 @@ const main = async (): Promise<void> => {
     throw error;
   }
   try {
-    // The service loop arms, publishes capacity, then publishes readiness before serving.
-    await serviceVirtioDiskRequests(memory); // runs until the host terminates us
+    // Arm → capacity → readiness precedes the request loop, and the host only then presents
+    // the device to the guest.
+    const handled = armVirtioDiskService(memory, diskImage.size);
+    await serviceVirtioDiskRequests(memory, diskImage, handled);
   } finally {
-    await closeVirtioImage(memory); // hygiene on any normal unwind
+    clearVirtioDiskCapacity(memory);
+    await diskImage.close(); // hygiene on any normal unwind
   }
 };
 

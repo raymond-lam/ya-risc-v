@@ -21,11 +21,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { loadBytes, storeBytes, type Memory } from '#emulator/memory';
 import { initializeVirtio } from '#emulator/virtio';
-import {
-  closeVirtioImage,
-  openVirtioImage,
-  publishVirtioDiskCapacity,
-} from '#emulator/virtio/disk';
+import { openVirtioDiskImage } from '#emulator/virtio/disk';
+import { clearVirtioDiskCapacity, publishVirtioDiskCapacity } from '#emulator/virtio/service';
 import type { ReadonlyUint8Array } from '#types';
 import {
   bytesToBigInt,
@@ -175,14 +172,14 @@ describe('virtio guest window', () => {
     const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
     const path = join(dir, 'disk.img');
     writeFileSync(path, new Uint8Array(1280));
+    const diskImage = await openVirtioDiskImage(path);
     try {
-      await openVirtioImage(path);
-      publishVirtioDiskCapacity(memory);
+      publishVirtioDiskCapacity(memory, diskImage.size);
       assert.equal(readCapacity(memory), 2n);
-      await closeVirtioImage(memory);
+      clearVirtioDiskCapacity(memory);
       assert.equal(readCapacity(memory), 0n);
     } finally {
-      await closeVirtioImage(memory);
+      await diskImage.close();
       rmSync(dir, { recursive: true, force: true });
     }
 
@@ -197,18 +194,19 @@ describe('virtio guest window', () => {
     const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
     const path = join(dir, 'disk.img');
     writeFileSync(path, new Uint8Array(1280));
+    const diskImage = await openVirtioDiskImage(path);
     try {
-      await openVirtioImage(path);
-      // Capacity is published by the worker, not by open (so the counter is still 0).
+      // Capacity is published by the service, not by opening the file (generation is 0).
       assert.equal(readVirtioRegister(memory, 0x0fcn), 0);
-      publishVirtioDiskCapacity(memory);
+      publishVirtioDiskCapacity(memory, diskImage.size);
       const generation = readVirtioRegister(memory, 0x0fcn);
       assert.ok(generation >= 1);
       // Stable across reads while the config is unchanged.
       assert.equal(readVirtioRegister(memory, 0x0fcn), generation);
       assert.equal(readVirtioRegister(memory, 0x0fcn), generation);
     } finally {
-      await closeVirtioImage(memory);
+      clearVirtioDiskCapacity(memory);
+      await diskImage.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });

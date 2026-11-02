@@ -41,8 +41,8 @@ const VIRTIO_REGION_ID = 'virtio';
  *  diskless, so a probe reads 0x00000000 instead of taking a load access fault. */
 const VIRTIO_GUEST_BYTE_LENGTH = 0x1000n;
 /** Packed host slab: register shadows + engine state + disk channel + staging window,
- *  plus the appended config-generation / queue-notify / disk-ready / test-pause words after it. */
-const VIRTIO_HOST_BYTE_LENGTH = 4256n;
+ *  plus the appended config-generation / queue-notify / disk-ready words after it. */
+const VIRTIO_HOST_BYTE_LENGTH = 4252n;
 /** Maximum split-virtqueue depth this device supports (xv6's NUM). */
 const VIRTIO_QUEUE_NUM_MAX = 8;
 /** Staging window size — the device's maximum single-request data length. */
@@ -157,10 +157,6 @@ const VIRTIO_HOST_QUEUE_NOTIFY = 4244;
 /** Disk-readiness wake word (disk worker → host): 0 not ready, 1 ready, -1 open failed.
  *  The worker host consumes it and only then flips device-present (§FIX 1). */
 const VIRTIO_HOST_DISK_READY = 4248;
-/** Test-only freeze word: non-zero parks the disk worker between capacity publish and
- *  readiness so tests can observe the not-ready window deterministically (§FIX 1).
- *  Production never writes it; the worker treats non-zero as a pause. */
-const VIRTIO_HOST_TEST_PAUSE = 4252;
 
 type VirtioRegisterKind =
   | 'magic'
@@ -384,7 +380,6 @@ export {
   VIRTIO_HOST_REQUEST_SEQ,
   VIRTIO_HOST_STAGING,
   VIRTIO_HOST_STATUS,
-  VIRTIO_HOST_TEST_PAUSE,
   VIRTIO_MAGIC_VALUE,
   VIRTIO_MAX_CHAIN_DESCRIPTORS,
   VIRTIO_MMIO_CONFIG_CAPACITY,
