@@ -18,7 +18,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { initializeVirtio, VIRTIO_HOST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import {
-  VIRTIO_HOST_DEVICE_PRESENT,
   loadVirtioShadowU32,
   virtioOffsetToLocation,
   type VirtioRegisterKind,
@@ -69,6 +68,8 @@ const HOLES: readonly bigint[] = [
   0x1004n,
 ];
 
+const DEVICE_PRESENT_OFFSET = 128; // host slab word holding device-present (layout-fixed)
+
 describe('virtio layout', () => {
   it('virtioOffsetToLocation decodes every live register and rejects holes', () => {
     for (const [offset, kind] of LIVE_REGISTERS) {
@@ -102,12 +103,12 @@ describe('virtio layout', () => {
 
     initializeVirtio(memory, true);
     for (let index = 0; index < length; index += 1) {
-      assert.equal(memory.bytes[base + index], index === VIRTIO_HOST_DEVICE_PRESENT ? 1 : 0);
+      assert.equal(memory.bytes[base + index], index === DEVICE_PRESENT_OFFSET ? 1 : 0);
     }
 
     memory.bytes.fill(0xaa, base, base + length);
     initializeVirtio(memory, false);
-    assert.equal(loadVirtioShadowU32(memory, VIRTIO_HOST_DEVICE_PRESENT), 0);
-    assert.equal(memory.bytes[base + VIRTIO_HOST_DEVICE_PRESENT + 1], 0);
+    assert.equal(loadVirtioShadowU32(memory, DEVICE_PRESENT_OFFSET), 0);
+    assert.equal(memory.bytes[base + DEVICE_PRESENT_OFFSET + 1], 0);
   });
 });

@@ -22,7 +22,8 @@ import { describe, it } from 'node:test';
 import { loadBytes, storeBytes, type Memory } from '#emulator/memory';
 import { initializeVirtio } from '#emulator/virtio';
 import { openVirtioDiskImage } from '#emulator/virtio/disk';
-import { clearVirtioDiskCapacity, publishVirtioDiskCapacity } from '#emulator/virtio/service';
+import { closeVirtioDiskImage } from '#emulator/virtio/disk';
+import { armVirtioDiskService, clearVirtioDiskCapacity } from '#emulator/virtio/service';
 import type { ReadonlyUint8Array } from '#types';
 import {
   bytesToBigInt,
@@ -174,12 +175,12 @@ describe('virtio guest window', () => {
     writeFileSync(path, new Uint8Array(1280));
     const diskImage = await openVirtioDiskImage(path);
     try {
-      publishVirtioDiskCapacity(memory, diskImage.size);
+      armVirtioDiskService(memory, diskImage.sizeBytes);
       assert.equal(readCapacity(memory), 2n);
       clearVirtioDiskCapacity(memory);
       assert.equal(readCapacity(memory), 0n);
     } finally {
-      await diskImage.close();
+      await closeVirtioDiskImage(diskImage);
       rmSync(dir, { recursive: true, force: true });
     }
 
@@ -198,7 +199,7 @@ describe('virtio guest window', () => {
     try {
       // Capacity is published by the service, not by opening the file (generation is 0).
       assert.equal(readVirtioRegister(memory, 0x0fcn), 0);
-      publishVirtioDiskCapacity(memory, diskImage.size);
+      armVirtioDiskService(memory, diskImage.sizeBytes);
       const generation = readVirtioRegister(memory, 0x0fcn);
       assert.ok(generation >= 1);
       // Stable across reads while the config is unchanged.
@@ -206,7 +207,7 @@ describe('virtio guest window', () => {
       assert.equal(readVirtioRegister(memory, 0x0fcn), generation);
     } finally {
       clearVirtioDiskCapacity(memory);
-      await diskImage.close();
+      await closeVirtioDiskImage(diskImage);
       rmSync(dir, { recursive: true, force: true });
     }
   });

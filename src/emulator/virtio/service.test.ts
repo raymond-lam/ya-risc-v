@@ -69,13 +69,14 @@ const SERVICE_WORKER_SOURCE = `
   });
 
   const diskImage = {
-    read: (_position, buffer) => {
-      const count = ++readCount;
-      parentPort.postMessage({ type: 'read-started', count });
-      return new Promise((resolve) => pendingReads.set(count, resolve));
+    fileHandle: {
+      read: async (_buffer, _offset, _length, _position) => {
+        const count = ++readCount;
+        parentPort.postMessage({ type: 'read-started', count });
+        return { bytesRead: await new Promise((resolve) => pendingReads.set(count, resolve)) };
+      },
+      write: async () => ({ bytesWritten: 0 }),
     },
-    write: async () => 0,
-    close: async () => {},
   };
   const main = async () => {
     const { serviceVirtioDiskRequests } = await import(workerData.serviceUrl);

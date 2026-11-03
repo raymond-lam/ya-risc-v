@@ -32,12 +32,7 @@ import { create as createTimer, type TimerHandle } from '#emulator/timer';
 import type { EmulatorCreateOptions, EmulatorHandle, GuestRegionWindow } from '#emulator/types';
 import { UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
 import { VIRTIO_HOST_BYTE_LENGTH, VIRTIO_REGION_ID, initializeVirtio } from '#emulator/virtio';
-import { create as createVirtioDisk, type VirtioDiskHandle } from '#emulator/virtio/host';
-import {
-  VIRTIO_HOST_DISK_READY,
-  storeVirtioDevicePresent,
-  virtioHostInt32,
-} from '#emulator/virtio/layout';
+import { createVirtioDisk, presentVirtioDiskDevice, type VirtioDiskHandle } from '#emulator/virtio';
 import { storeDeviceTreeToRam } from '#fdt';
 import { bytesToBigInt } from '#utils/bytes';
 
@@ -267,11 +262,7 @@ class Emulator implements EmulatorHandle {
 
   /** Wait (bounded) for the disk worker's readiness, then flip device-present on success. */
   #presentDiskDevice = (): void => {
-    const ready = virtioHostInt32(this.#memory, VIRTIO_HOST_DISK_READY);
-    Atomics.wait(ready, 0, 0, VIRTIO_DISK_READY_TIMEOUT_MS);
-    if (Atomics.load(ready, 0) === 1) {
-      storeVirtioDevicePresent(this.#memory, true);
-    }
+    presentVirtioDiskDevice(this.#memory, VIRTIO_DISK_READY_TIMEOUT_MS);
   };
 
   get memory(): Memory {

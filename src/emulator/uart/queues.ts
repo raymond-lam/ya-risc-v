@@ -96,11 +96,7 @@ const waitUartTransmit = async (memory: Memory): Promise<void> => {
   }
 };
 
-/** Queued bytes (0..UART_QUEUE_DEPTH) for a head/tail pair of slot indices. */
-const queueLength = (head: number, tail: number): number =>
-  (tail - head + UART_QUEUE_SLOT_COUNT) % UART_QUEUE_SLOT_COUNT;
-
-/** True at UART_QUEUE_DEPTH queued bytes: the reserved slot keeps one slack position free. */
+/** True when a producer slot index would collide with the consumer: the ring has no room. */
 const queueIsFull = (head: number, tail: number): boolean =>
   (tail + 1) % UART_QUEUE_SLOT_COUNT === head;
 
@@ -110,7 +106,7 @@ const readLineStatus = (memory: Memory): number => {
   const txHead = Atomics.load(memory.bytes, metaIndex(memory, META_TX_HEAD));
   const txTail = Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
   let lsr = 0;
-  if (queueLength(rxHead, rxTail) > 0) {
+  if (rxHead !== rxTail) {
     lsr |= LSR_DR;
   }
   if (!queueIsFull(txHead, txTail)) {

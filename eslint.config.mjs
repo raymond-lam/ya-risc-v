@@ -209,7 +209,7 @@ const eslintConfig = [
     },
   },
   {
-    /** Emulator host entry may import `#emulator/types` and the virtio host subpath. */
+    /** Emulator host entry imports device packages only via their roots. */
     files: ['src/emulator/index.ts'],
     rules: {
       'no-restricted-imports': [
@@ -219,9 +219,7 @@ const eslintConfig = [
             ...importShapePatterns,
             ...allPackagePrivatePatterns.map((pattern) => ({
               ...pattern,
-              group: pattern.group.filter(
-                (group) => group !== '#emulator/types' && group !== '#emulator/virtio/*'
-              ),
+              group: pattern.group.filter((group) => group !== '#emulator/types'),
             })),
           ],
         },
@@ -377,7 +375,7 @@ const eslintConfig = [
   },
   {
     files: ['src/emulator/virtio/**/*.ts'],
-    ignores: ['src/emulator/virtio/**/*.test.ts', 'src/emulator/virtio/host.ts'],
+    ignores: ['src/emulator/virtio/**/*.test.ts', 'src/emulator/virtio/index.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -387,7 +385,7 @@ const eslintConfig = [
               name: 'node:worker_threads',
               importNames: ['Worker'],
               message:
-                'Only the virtio host (virtio/host.ts) may spawn workers; device code is bundled into worker entries and must not import Worker.',
+                'Only the virtio package root (virtio/index.ts) may spawn workers; device code is bundled into worker entries and must not import Worker.',
             },
           ],
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/virtio/*')],
@@ -396,7 +394,7 @@ const eslintConfig = [
     },
   },
   {
-    files: ['src/emulator/virtio/host.ts'],
+    files: ['src/emulator/virtio/index.ts'],
     rules: {
       'no-restricted-imports': [
         'error',

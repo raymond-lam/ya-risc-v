@@ -15,7 +15,7 @@
  */
 
 import { parentPort, workerData } from 'node:worker_threads';
-import { openVirtioDiskImage } from '#emulator/virtio/disk';
+import { closeVirtioDiskImage, openVirtioDiskImage } from '#emulator/virtio/disk';
 import type { VirtioDiskImage } from '#emulator/virtio/disk';
 import {
   armVirtioDiskService,
@@ -39,11 +39,11 @@ const main = async (): Promise<void> => {
   try {
     // Arm → capacity → readiness precedes the request loop, and the host only then presents
     // the device to the guest.
-    const handled = armVirtioDiskService(memory, diskImage.size);
+    const handled = armVirtioDiskService(memory, diskImage.sizeBytes);
     await serviceVirtioDiskRequests(memory, diskImage, handled);
   } finally {
     clearVirtioDiskCapacity(memory);
-    await diskImage.close(); // hygiene on any normal unwind
+    await closeVirtioDiskImage(diskImage); // hygiene on any normal unwind
   }
 };
 

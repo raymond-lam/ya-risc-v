@@ -20,6 +20,7 @@ import type { Memory } from '#emulator/memory';
 import { publishWakeLevel, waitWake } from '#emulator/wake';
 import { bigIntAsNumber } from '#utils/int';
 import type { VirtioDiskImage } from '#emulator/virtio/disk';
+import { readDiskImageBytes, writeDiskImageBytes } from '#emulator/virtio/disk';
 import {
   VIRTIO_HOST_COMPLETION_SEQ,
   VIRTIO_HOST_CONFIG_GENERATION,
@@ -90,10 +91,14 @@ const serveVirtioDiskRequest = async (
   let ioError = 0;
   try {
     if (direction === 0) {
-      if ((await diskImage.read(position, staging)) !== length) {
+      if (
+        (await readDiskImageBytes({ image: diskImage, position, destination: staging })) !== length
+      ) {
         ioError = 1;
       }
-    } else if ((await diskImage.write(position, staging)) !== length) {
+    } else if (
+      (await writeDiskImageBytes({ image: diskImage, position, source: staging })) !== length
+    ) {
       ioError = 1;
     }
   } catch {
@@ -130,7 +135,6 @@ const serviceVirtioDiskRequests = async (
 export {
   armVirtioDiskService,
   clearVirtioDiskCapacity,
-  publishVirtioDiskCapacity,
   publishVirtioDiskReady,
   serviceVirtioDiskRequests,
 };

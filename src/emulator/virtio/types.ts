@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-/* eslint-disable import/prefer-default-export -- virtio disk worker payload types */
 import type { Memory } from '#emulator/memory';
 
 /** Host arguments to create the disk worker. */

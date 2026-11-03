@@ -27,7 +27,7 @@ import {
   setReservationLocked,
   withMonitorLock,
 } from '#emulator/reservation';
-import { create as createVirtioDisk, type VirtioDiskHandle } from '#emulator/virtio/host';
+import { createVirtioDisk, type VirtioDiskHandle } from '#emulator/virtio';
 import { initializeVirtio } from '#emulator/virtio';
 import {
   VIRTIO_HOST_REQUEST_SEQ,

@@ -19,7 +19,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { openVirtioDiskImage } from '#emulator/virtio/disk';
+import {
+  closeVirtioDiskImage,
+  openVirtioDiskImage,
+  readDiskImageBytes,
+  writeDiskImageBytes,
+} from '#emulator/virtio/disk';
 
 const TEMP_PREFIX = 'ya-risc-v-virtio-';
 
@@ -44,14 +49,17 @@ describe('virtio disk image', () => {
     const { dir, path } = writeTempImage(buildImage());
     const image = await openVirtioDiskImage(path);
     try {
-      assert.equal(image.size, 1280);
-      assert.equal(await image.write(0, new Uint8Array([0x5a, 0xa5])), 2);
+      assert.equal(image.sizeBytes, 1280);
+      assert.equal(
+        await writeDiskImageBytes({ image, position: 0, source: new Uint8Array([0x5a, 0xa5]) }),
+        2
+      );
       const onDisk = readFileBytes(path);
       assert.deepEqual(onDisk.subarray(0, 2), new Uint8Array([0x5a, 0xa5]));
       assert.equal(onDisk[2], 0x5a);
       assert.equal(onDisk[512], 0xaa);
     } finally {
-      await image.close();
+      await closeVirtioDiskImage(image);
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -61,14 +69,14 @@ describe('virtio disk image', () => {
     const image = await openVirtioDiskImage(path);
     try {
       const atSector = new Uint8Array(8);
-      assert.equal(await image.read(512, atSector), 8);
+      assert.equal(await readDiskImageBytes({ image, position: 512, destination: atSector }), 8);
       assert.deepEqual(atSector, new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd, 0x11, 0x22, 0x33, 0x44]));
 
       const atZero = new Uint8Array(8);
-      assert.equal(await image.read(0, atZero), 8);
+      assert.equal(await readDiskImageBytes({ image, position: 0, destination: atZero }), 8);
       assert.deepEqual(atZero, new Uint8Array(8).fill(0x5a));
     } finally {
-      await image.close();
+      await closeVirtioDiskImage(image);
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -78,13 +86,13 @@ describe('virtio disk image', () => {
     const image = await openVirtioDiskImage(path);
     try {
       const tail = new Uint8Array(8).fill(0xff);
-      assert.equal(await image.read(1276, tail), 4);
+      assert.equal(await readDiskImageBytes({ image, position: 1276, destination: tail }), 4);
       assert.deepEqual(tail.subarray(0, 4), new Uint8Array(4).fill(0x5a));
 
       const pastEnd = new Uint8Array(8);
-      assert.equal(await image.read(1280, pastEnd), 0);
+      assert.equal(await readDiskImageBytes({ image, position: 1280, destination: pastEnd }), 0);
     } finally {
-      await image.close();
+      await closeVirtioDiskImage(image);
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -104,17 +112,27 @@ describe('virtio disk image', () => {
     const firstImage = await openVirtioDiskImage(first.path);
     const secondImage = await openVirtioDiskImage(second.path);
     try {
-      assert.equal(firstImage.size, 1280);
-      assert.equal(secondImage.size, 512);
-      assert.equal(await secondImage.write(0, new Uint8Array([0x0f, 0xf0])), 2);
+      assert.equal(firstImage.sizeBytes, 1280);
+      assert.equal(secondImage.sizeBytes, 512);
+      assert.equal(
+        await writeDiskImageBytes({
+          image: secondImage,
+          position: 0,
+          source: new Uint8Array([0x0f, 0xf0]),
+        }),
+        2
+      );
       assert.deepEqual(readFileBytes(second.path).subarray(0, 2), new Uint8Array([0x0f, 0xf0]));
       assert.deepEqual(readFileBytes(first.path).subarray(0, 2), new Uint8Array([0x5a, 0x5a]));
       const firstBytes = new Uint8Array(2);
-      assert.equal(await firstImage.read(0, firstBytes), 2);
+      assert.equal(
+        await readDiskImageBytes({ image: firstImage, position: 0, destination: firstBytes }),
+        2
+      );
       assert.deepEqual(firstBytes, new Uint8Array([0x5a, 0x5a]));
     } finally {
-      await firstImage.close();
-      await secondImage.close();
+      await closeVirtioDiskImage(firstImage);
+      await closeVirtioDiskImage(secondImage);
       rmSync(first.dir, { recursive: true, force: true });
       rmSync(second.dir, { recursive: true, force: true });
     }

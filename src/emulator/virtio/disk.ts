@@ -20,25 +20,33 @@
 import { open } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 
-/** An open image and its file-local capacity. */
+/** An open raw disk image: a structure with its file handle and image size in bytes. */
 type VirtioDiskImage = {
-  readonly size: number;
-  /** Positional read; short only at EOF. */
-  read: (position: number, buffer: Uint8Array) => Promise<number>;
-  /** Positional write; short only when the underlying file stops accepting bytes. */
-  write: (position: number, buffer: Uint8Array) => Promise<number>;
-  close: () => Promise<void>;
+  readonly fileHandle: FileHandle;
+  readonly sizeBytes: number;
 };
 
-/** Positional read into `buffer`, looping over short reads; returns bytes read. */
-const readDiskImage = async (
-  handle: FileHandle,
-  position: number,
-  buffer: Uint8Array
-): Promise<number> => {
+/** Close-once promises per image, so `closeVirtioDiskImage` is idempotent. */
+const closePromises = new WeakMap<VirtioDiskImage, Promise<void>>();
+
+/** Positional read into `destination`, looping over short reads; returns bytes read. */
+const readDiskImageBytes = async ({
+  image,
+  position,
+  destination,
+}: {
+  image: VirtioDiskImage;
+  position: number;
+  destination: Uint8Array;
+}): Promise<number> => {
   let total = 0;
-  while (total < buffer.length) {
-    const { bytesRead } = await handle.read(buffer, total, buffer.length - total, position + total);
+  while (total < destination.length) {
+    const { bytesRead } = await image.fileHandle.read(
+      destination,
+      total,
+      destination.length - total,
+      position + total
+    );
     if (bytesRead <= 0) {
       break;
     }
@@ -47,18 +55,22 @@ const readDiskImage = async (
   return total;
 };
 
-/** Positional write from `buffer`, looping over short writes; returns bytes written. */
-const writeDiskImage = async (
-  handle: FileHandle,
-  position: number,
-  buffer: Uint8Array
-): Promise<number> => {
+/** Positional write from `source`, looping over short writes; returns bytes written. */
+const writeDiskImageBytes = async ({
+  image,
+  position,
+  source,
+}: {
+  image: VirtioDiskImage;
+  position: number;
+  source: Uint8Array;
+}): Promise<number> => {
   let total = 0;
-  while (total < buffer.length) {
-    const { bytesWritten } = await handle.write(
-      buffer,
+  while (total < source.length) {
+    const { bytesWritten } = await image.fileHandle.write(
+      source,
       total,
-      buffer.length - total,
+      source.length - total,
       position + total
     );
     if (bytesWritten <= 0) {
@@ -69,27 +81,25 @@ const writeDiskImage = async (
   return total;
 };
 
-/** Open a raw image read-write ('r+') and bind its handle and capacity to this instance. */
+/** Open a raw image read-write ('r+') and bind its handle and capacity to this structure. */
 const openVirtioDiskImage = async (path: string): Promise<VirtioDiskImage> => {
-  const handle = await open(path, 'r+'); // ALWAYS 'r+' (constraint: no read-only mode)
-  let size: number;
+  const fileHandle = await open(path, 'r+'); // ALWAYS 'r+' (constraint: no read-only mode)
+  let sizeBytes: number;
   try {
-    size = (await handle.stat()).size;
+    sizeBytes = (await fileHandle.stat()).size;
   } catch (error) {
-    await handle.close();
+    await fileHandle.close();
     throw error;
   }
-  let closePromise: Promise<void> | undefined;
-  return {
-    size,
-    read: (position, buffer) => readDiskImage(handle, position, buffer),
-    write: (position, buffer) => writeDiskImage(handle, position, buffer),
-    close: () => {
-      closePromise ??= handle.close();
-      return closePromise;
-    },
-  };
+  return { fileHandle, sizeBytes };
 };
 
-export { openVirtioDiskImage };
+/** Close the image's file handle exactly once. */
+const closeVirtioDiskImage = (image: VirtioDiskImage): Promise<void> => {
+  let closePromise = closePromises.get(image);
+  closePromise ??= image.fileHandle.close();
+  return closePromise;
+};
+
+export { closeVirtioDiskImage, openVirtioDiskImage, readDiskImageBytes, writeDiskImageBytes };
 export type { VirtioDiskImage };
