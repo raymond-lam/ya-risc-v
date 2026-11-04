@@ -15,19 +15,22 @@
  */
 
 /** Positional asynchronous file operations for one raw virtio disk image.
- *  File offsets use JavaScript numbers, so images ≥ 2^53 bytes are out of scope. */
+ *  The image size is a `bigint` so the u64 virtio-blk capacity is published exactly, never
+ *  rounded through a `number`. Positions stay `number` (Node's positional `write()` types
+ *  accept only `number`): exact file offsets therefore reach 2^53 bytes, far beyond any
+ *  image this device can actually serve. */
 
 import { open } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 
 /** An open raw disk image: a structure with its file handle and image size in bytes. */
-type VirtioDiskImage = {
+type DiskImage = {
   readonly fileHandle: FileHandle;
-  readonly sizeBytes: number;
+  readonly sizeBytes: bigint;
 };
 
-/** Close-once promises per image, so `closeVirtioDiskImage` is idempotent. */
-const closePromises = new WeakMap<VirtioDiskImage, Promise<void>>();
+/** Close-once promises per image, so `closeDiskImage` is idempotent. */
+const closePromises = new WeakMap<DiskImage, Promise<void>>();
 
 /** Positional read into `destination`, looping over short reads; returns bytes read. */
 const readDiskImageBytes = async ({
@@ -35,7 +38,7 @@ const readDiskImageBytes = async ({
   position,
   destination,
 }: {
-  image: VirtioDiskImage;
+  image: DiskImage;
   position: number;
   destination: Uint8Array;
 }): Promise<number> => {
@@ -61,7 +64,7 @@ const writeDiskImageBytes = async ({
   position,
   source,
 }: {
-  image: VirtioDiskImage;
+  image: DiskImage;
   position: number;
   source: Uint8Array;
 }): Promise<number> => {
@@ -82,11 +85,13 @@ const writeDiskImageBytes = async ({
 };
 
 /** Open a raw image read-write ('r+') and bind its handle and capacity to this structure. */
-const openVirtioDiskImage = async (path: string): Promise<VirtioDiskImage> => {
+const openDiskImage = async (path: string): Promise<DiskImage> => {
   const fileHandle = await open(path, 'r+'); // ALWAYS 'r+' (constraint: no read-only mode)
-  let sizeBytes: number;
+  let sizeBytes: bigint;
   try {
-    sizeBytes = (await fileHandle.stat()).size;
+    // The bigint stat keeps the capacity exact above 2^53 bytes; a plain `number` size
+    // would round and publish the wrong sector count to the guest.
+    sizeBytes = (await fileHandle.stat({ bigint: true })).size;
   } catch (error) {
     await fileHandle.close();
     throw error;
@@ -95,11 +100,11 @@ const openVirtioDiskImage = async (path: string): Promise<VirtioDiskImage> => {
 };
 
 /** Close the image's file handle exactly once. */
-const closeVirtioDiskImage = (image: VirtioDiskImage): Promise<void> => {
+const closeDiskImage = (image: DiskImage): Promise<void> => {
   let closePromise = closePromises.get(image);
   closePromise ??= image.fileHandle.close();
   return closePromise;
 };
 
-export { closeVirtioDiskImage, openVirtioDiskImage, readDiskImageBytes, writeDiskImageBytes };
-export type { VirtioDiskImage };
+export { closeDiskImage, openDiskImage, readDiskImageBytes, writeDiskImageBytes };
+export type { DiskImage };

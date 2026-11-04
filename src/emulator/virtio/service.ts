@@ -17,9 +17,9 @@
 /** Worker-side virtio block request channel and startup publication protocol. */
 
 import type { Memory } from '#emulator/memory';
-import { publishWakeLevel, waitWake } from '#emulator/wake';
 import { bigIntAsNumber } from '#utils/int';
-import type { VirtioDiskImage } from '#emulator/virtio/disk';
+import { publishWakeLevel, waitWake } from '#emulator/wake';
+import type { DiskImage } from '#emulator/virtio/disk';
 import { readDiskImageBytes, writeDiskImageBytes } from '#emulator/virtio/disk';
 import {
   VIRTIO_HOST_COMPLETION_SEQ,
@@ -42,9 +42,9 @@ import {
 } from '#emulator/virtio/layout';
 
 /** Publish the open image's capacity words and advance the config generation. */
-const publishVirtioDiskCapacity = (memory: Memory, imageSize: number): void => {
-  storeVirtioShadowU32(memory, VIRTIO_HOST_DISK_CAPACITY_LOW, imageSize >>> 0);
-  storeVirtioShadowU32(memory, VIRTIO_HOST_DISK_CAPACITY_HIGH, Math.floor(imageSize / 2 ** 32));
+const publishVirtioDiskCapacity = (memory: Memory, imageSize: bigint): void => {
+  storeVirtioShadowU32(memory, VIRTIO_HOST_DISK_CAPACITY_LOW, Number(imageSize & 0xffff_ffffn));
+  storeVirtioShadowU32(memory, VIRTIO_HOST_DISK_CAPACITY_HIGH, Number(imageSize >> 32n));
   // The 0 → N capacity transition advances the guest-visible config generation.
   const generation = loadVirtioShadowU32(memory, VIRTIO_HOST_CONFIG_GENERATION);
   storeVirtioShadowU32(memory, VIRTIO_HOST_CONFIG_GENERATION, generation + 1);
@@ -68,7 +68,7 @@ const publishVirtioDiskReady = (memory: Memory, level: number): void => {
 };
 
 /** Arm first, then publish capacity and finally readiness; return the armed sequence. */
-const armVirtioDiskService = (memory: Memory, imageSize: number): number => {
+const armVirtioDiskService = (memory: Memory, imageSize: bigint): number => {
   // The device is absent until readiness has been published and consumed by the host.
   const handled = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_SEQ), 0) >>> 0;
   publishVirtioDiskCapacity(memory, imageSize);
@@ -77,10 +77,7 @@ const armVirtioDiskService = (memory: Memory, imageSize: number): number => {
 };
 
 /** Serve exactly one CPU-submitted request, then publish its completion level. */
-const serveVirtioDiskRequest = async (
-  memory: Memory,
-  diskImage: VirtioDiskImage
-): Promise<void> => {
+const serveVirtioDiskRequest = async (memory: Memory, diskImage: DiskImage): Promise<void> => {
   const direction = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_DIRECTION), 0) >>> 0;
   const length = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_LENGTH), 0) >>> 0;
   const sectorLow = loadVirtioShadowU32(memory, VIRTIO_HOST_REQUEST_SECTOR_LOW);
@@ -116,7 +113,7 @@ const serveVirtioDiskRequest = async (
 /** Service requests one at a time until the host terminates this worker. */
 const serviceVirtioDiskRequests = async (
   memory: Memory,
-  diskImage: VirtioDiskImage,
+  diskImage: DiskImage,
   handledSequence: number
 ): Promise<void> => {
   const requestIndex = virtioHostIndex(memory, VIRTIO_HOST_REQUEST_SEQ);

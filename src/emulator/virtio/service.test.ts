@@ -120,7 +120,7 @@ describe('virtio disk service startup', () => {
     initializeVirtio(memory, false);
     Atomics.store(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_SEQ), 0, 7);
 
-    const handled = armVirtioDiskService(memory, 1280);
+    const handled = armVirtioDiskService(memory, 1280n);
 
     assert.equal(handled, 7);
     assert.equal(Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_SEQ), 0), 7);

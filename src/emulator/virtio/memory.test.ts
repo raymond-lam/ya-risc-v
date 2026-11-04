@@ -21,8 +21,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { loadBytes, storeBytes, type Memory } from '#emulator/memory';
 import { initializeVirtio } from '#emulator/virtio';
-import { openVirtioDiskImage } from '#emulator/virtio/disk';
-import { closeVirtioDiskImage } from '#emulator/virtio/disk';
+import { openDiskImage } from '#emulator/virtio/disk';
+import { closeDiskImage } from '#emulator/virtio/disk';
 import { armVirtioDiskService, clearVirtioDiskCapacity } from '#emulator/virtio/service';
 import type { ReadonlyUint8Array } from '#types';
 import {
@@ -173,14 +173,14 @@ describe('virtio guest window', () => {
     const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
     const path = join(dir, 'disk.img');
     writeFileSync(path, new Uint8Array(1280));
-    const diskImage = await openVirtioDiskImage(path);
+    const diskImage = await openDiskImage(path);
     try {
       armVirtioDiskService(memory, diskImage.sizeBytes);
       assert.equal(readCapacity(memory), 2n);
       clearVirtioDiskCapacity(memory);
       assert.equal(readCapacity(memory), 0n);
     } finally {
-      await closeVirtioDiskImage(diskImage);
+      await closeDiskImage(diskImage);
       rmSync(dir, { recursive: true, force: true });
     }
 
@@ -195,7 +195,7 @@ describe('virtio guest window', () => {
     const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
     const path = join(dir, 'disk.img');
     writeFileSync(path, new Uint8Array(1280));
-    const diskImage = await openVirtioDiskImage(path);
+    const diskImage = await openDiskImage(path);
     try {
       // Capacity is published by the service, not by opening the file (generation is 0).
       assert.equal(readVirtioRegister(memory, 0x0fcn), 0);
@@ -207,7 +207,7 @@ describe('virtio guest window', () => {
       assert.equal(readVirtioRegister(memory, 0x0fcn), generation);
     } finally {
       clearVirtioDiskCapacity(memory);
-      await closeVirtioDiskImage(diskImage);
+      await closeDiskImage(diskImage);
       rmSync(dir, { recursive: true, force: true });
     }
   });
