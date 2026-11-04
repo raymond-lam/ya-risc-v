@@ -27,7 +27,7 @@ import {
   META_TX_HEAD,
   META_TX_TAIL,
   UART_HOST_OFFSET,
-  UART_QUEUE_CAPACITY,
+  UART_QUEUE_SLOT_COUNT,
   metaIndex,
   rxDataIndex,
   txDataIndex,
@@ -41,8 +41,8 @@ import {
 /** Data Ready (DR): at least one RX byte is available. */
 const LSR_DR = 0x01;
 /**
- * Transmitter Holding Register Empty (THRE): room to accept another TX byte
- * (TX queue not full).
+ * Transmitter Holding Register Empty (THRE): room to accept another TX byte — at most
+ * `UART_QUEUE_DEPTH` (16) bytes may be queued, the 17th store is dropped.
  */
 const LSR_THRE = 0x20;
 /** Transmitter Empty (TEMT): TX queue fully drained (nothing left to send). */
@@ -63,6 +63,16 @@ const uartTransmitPending = (memory: Memory): boolean => {
   const tail = Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
   return head !== tail;
 };
+
+/**
+ * Read the TX queue producer slot index (tail) without mutating it. It advances modulo
+ * `UART_QUEUE_SLOT_COUNT` on accepted THR writes and does not change when the terminal drains
+ * bytes (draining only moves the head). It is not a lifetime byte counter and wraps after 17
+ * slots; callers needing a simple progress threshold must observe fewer than 17 writes from
+ * the known initial index.
+ */
+const readUartTransmitQueueTail = (memory: Memory): number =>
+  Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
 
 /**
  * Wait until the UART TX ring has data. Double-checks around a snapshot of the
@@ -86,11 +96,9 @@ const waitUartTransmit = async (memory: Memory): Promise<void> => {
   }
 };
 
-const queueLength = (head: number, tail: number): number =>
-  (tail - head + UART_QUEUE_CAPACITY) % UART_QUEUE_CAPACITY;
-
+/** True when a producer slot index would collide with the consumer: the ring has no room. */
 const queueIsFull = (head: number, tail: number): boolean =>
-  (tail + 1) % UART_QUEUE_CAPACITY === head;
+  (tail + 1) % UART_QUEUE_SLOT_COUNT === head;
 
 const readLineStatus = (memory: Memory): number => {
   const rxHead = Atomics.load(memory.bytes, metaIndex(memory, META_RX_HEAD));
@@ -98,7 +106,7 @@ const readLineStatus = (memory: Memory): number => {
   const txHead = Atomics.load(memory.bytes, metaIndex(memory, META_TX_HEAD));
   const txTail = Atomics.load(memory.bytes, metaIndex(memory, META_TX_TAIL));
   let lsr = 0;
-  if (queueLength(rxHead, rxTail) > 0) {
+  if (rxHead !== rxTail) {
     lsr |= LSR_DR;
   }
   if (!queueIsFull(txHead, txTail)) {
@@ -118,7 +126,7 @@ const popReceive = (memory: Memory): number => {
     return 0;
   }
   const value = memory.bytes[rxDataIndex(memory, head)] ?? 0;
-  Atomics.store(memory.bytes, metaIndex(memory, META_RX_HEAD), (head + 1) % UART_QUEUE_CAPACITY);
+  Atomics.store(memory.bytes, metaIndex(memory, META_RX_HEAD), (head + 1) % UART_QUEUE_SLOT_COUNT);
   return value;
 };
 
@@ -130,7 +138,7 @@ const pushTransmit = (memory: Memory, value: number): boolean => {
     return false;
   }
   memory.bytes[txDataIndex(memory, tail)] = value & 0xff;
-  Atomics.store(memory.bytes, metaIndex(memory, META_TX_TAIL), (tail + 1) % UART_QUEUE_CAPACITY);
+  Atomics.store(memory.bytes, metaIndex(memory, META_TX_TAIL), (tail + 1) % UART_QUEUE_SLOT_COUNT);
   publishUartTransmitLevel(memory, true);
   return true;
 };
@@ -146,7 +154,7 @@ const enqueueReceive = (memory: Memory, value: number): boolean => {
     return false;
   }
   memory.bytes[rxDataIndex(memory, tail)] = value & 0xff;
-  Atomics.store(memory.bytes, metaIndex(memory, META_RX_TAIL), (tail + 1) % UART_QUEUE_CAPACITY);
+  Atomics.store(memory.bytes, metaIndex(memory, META_RX_TAIL), (tail + 1) % UART_QUEUE_SLOT_COUNT);
   return true;
 };
 
@@ -164,7 +172,7 @@ const dequeueTransmit = (
   }
   const threBefore = !queueIsFull(head, tail);
   const value = memory.bytes[txDataIndex(memory, head)] ?? 0;
-  const nextHead = (head + 1) % UART_QUEUE_CAPACITY;
+  const nextHead = (head + 1) % UART_QUEUE_SLOT_COUNT;
   Atomics.store(memory.bytes, metaIndex(memory, META_TX_HEAD), nextHead);
   publishUartTransmitLevel(memory, nextHead !== tail);
   const threAfter = !queueIsFull(nextHead, tail);
@@ -179,5 +187,6 @@ export {
   popReceive,
   pushTransmit,
   readLineStatus,
+  readUartTransmitQueueTail,
   waitUartTransmit,
 };

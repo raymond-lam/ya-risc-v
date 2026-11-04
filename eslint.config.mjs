@@ -32,6 +32,7 @@ const allPackagePrivatePatterns = [
       '#emulator/clint/*',
       '#emulator/plic/*',
       '#emulator/syscon/*',
+      '#emulator/virtio/*',
       '#emulator/types',
       '#tui/*',
     ],
@@ -40,9 +41,38 @@ const allPackagePrivatePatterns = [
   },
 ];
 
+/**
+ * Device packages with a host/worker half. Hart code reaches their guest-visible effects
+ * through `#emulator/machine`; CLINT and PLIC stay importable
+ * because the hart samples their IRQ wires directly.
+ */
+const hartDeviceImportPattern = {
+  group: [
+    '#emulator/virtio',
+    '#emulator/virtio/*',
+    '#emulator/uart',
+    '#emulator/uart/*',
+    '#emulator/syscon',
+    '#emulator/syscon/*',
+    '#emulator/timer',
+    '#emulator/timer/*',
+    '#emulator/terminal',
+    '#emulator/terminal/*',
+  ],
+  message:
+    'Hart code must not import device packages directly; use #emulator/machine for composition.',
+};
+
 /** Package-private patterns excluding one package's own `#pkg/*` siblings. */
 const packagePrivateExcept = (ownGroup) =>
   allPackagePrivatePatterns.map((pattern) => ({
+    ...pattern,
+    group: pattern.group.filter((group) => group !== ownGroup),
+  }));
+
+/** Test package-private patterns excluding one package's own `#pkg/*` siblings. */
+const testPackagePrivateExcept = (ownGroup) =>
+  testPackagePrivatePatterns.map((pattern) => ({
     ...pattern,
     group: pattern.group.filter((group) => group !== ownGroup),
   }));
@@ -59,6 +89,7 @@ const testPackagePrivatePatterns = [
       '#emulator/clint/*',
       '#emulator/plic/*',
       '#emulator/syscon/*',
+      '#emulator/virtio/*',
       '#emulator/types',
       '#tui/*',
     ],
@@ -156,6 +187,7 @@ const eslintConfig = [
       'src/emulator/clint/**',
       'src/emulator/plic/**',
       'src/emulator/syscon/**',
+      'src/emulator/virtio/**',
       'src/emulator/terminal/**',
       'src/emulator/timer/**',
       'src/emulator/cpu/**',
@@ -177,7 +209,7 @@ const eslintConfig = [
     },
   },
   {
-    /** Emulator host entry may import `#emulator/types`. */
+    /** Emulator host entry imports device packages only via their roots. */
     files: ['src/emulator/index.ts'],
     rules: {
       'no-restricted-imports': [
@@ -212,6 +244,17 @@ const eslintConfig = [
     },
   },
   {
+    files: ['src/emulator/virtio/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...testPackagePrivateExcept('#emulator/virtio/*')],
+        },
+      ],
+    },
+  },
+  {
     files: ['src/emulator/cpu/**/*.ts'],
     ignores: ['src/emulator/cpu/**/*.test.ts', 'src/emulator/cpu/index.ts'],
     rules: {
@@ -229,16 +272,7 @@ const eslintConfig = [
           patterns: [
             ...importShapePatterns,
             ...packagePrivateExcept('#emulator/cpu/*'),
-            {
-              group: [
-                '#emulator/timer',
-                '#emulator/timer/*',
-                '#emulator/terminal',
-                '#emulator/terminal/*',
-              ],
-              message:
-                'Hart code uses #emulator/clint (device API); do not import #emulator/timer or #emulator/terminal.',
-            },
+            hartDeviceImportPattern,
           ],
         },
       ],
@@ -250,7 +284,11 @@ const eslintConfig = [
       'no-restricted-imports': [
         'error',
         {
-          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/cpu/*')],
+          patterns: [
+            ...importShapePatterns,
+            ...packagePrivateExcept('#emulator/cpu/*'),
+            hartDeviceImportPattern,
+          ],
         },
       ],
     },
@@ -331,6 +369,37 @@ const eslintConfig = [
             },
           ],
           patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/syscon/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/virtio/**/*.ts'],
+    ignores: ['src/emulator/virtio/**/*.test.ts', 'src/emulator/virtio/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'node:worker_threads',
+              importNames: ['Worker'],
+              message:
+                'Only the virtio package root (virtio/index.ts) may spawn workers; device code is bundled into worker entries and must not import Worker.',
+            },
+          ],
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/virtio/*')],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/emulator/virtio/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [...importShapePatterns, ...packagePrivateExcept('#emulator/virtio/*')],
         },
       ],
     },

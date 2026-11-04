@@ -19,7 +19,7 @@
  */
 
 export { loadBytesFromUart, storeBytesToUart } from '#emulator/uart/memory';
-export { waitUartTransmit } from '#emulator/uart/queues';
+export { readUartTransmitQueueTail, waitUartTransmit } from '#emulator/uart/queues';
 export { popUartTransmit, pushUartReceive } from '#emulator/uart/registers';
 export {
   UART_GUEST_BYTE_LENGTH,

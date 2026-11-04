@@ -55,7 +55,8 @@ import { CLINT_GUEST_BYTE_LENGTH, CLINT_REGION_ID } from '#emulator/clint';
 import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
-import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { readUartTransmitQueueTail, UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -71,7 +72,7 @@ const OUTPUT_POLL_INTERVAL_MS = 2;
 const guestAddress = (address: bigint): ReadonlyUint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), address);
 
-/** Standard virtual map: ram → uart → clint → plic → syscon (the emulator packs the rest). */
+/** Standard virtual map: ram → uart → clint → plic → syscon → virtio (the emulator packs the rest). */
 const guestRegions = (): Map<
   string,
   { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }
@@ -93,6 +94,10 @@ const guestRegions = (): Map<
     [
       SYSCON_REGION_ID,
       { guestAddress: guestAddress(0x0010_0000n), guestByteLength: SYSCON_GUEST_BYTE_LENGTH },
+    ],
+    [
+      VIRTIO_REGION_ID,
+      { guestAddress: guestAddress(0x1000_1000n), guestByteLength: VIRTIO_GUEST_BYTE_LENGTH },
     ],
   ]);
 
@@ -138,6 +143,26 @@ const settleEmulator = async (emulator: EmulatorHandle): Promise<void> => {
 };
 
 /**
+ * Bounded wait until the TX producer slot reaches `tail`. Starting from the empty queue's
+ * known index 0, fewer than 17 writes advance the index without wrapping; draining bytes only
+ * moves the consumer head, not this slot index. This is a progress check, not a byte counter.
+ */
+const waitForUartTransmitQueueTail = async (
+  emulator: EmulatorHandle,
+  producerSlot: number
+): Promise<void> => {
+  const deadline = Date.now() + DEADLINE_MS;
+  while (readUartTransmitQueueTail(emulator.memory) < producerSlot) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `UART TX producer slot did not reach ${producerSlot} within ${DEADLINE_MS}ms`
+      );
+    }
+    await delay(OUTPUT_POLL_INTERVAL_MS);
+  }
+};
+
+/**
  * Assert the guest printed exactly `expected` and then powered off: the print is
  * drained guest-side (LSR.TEMT poll) before the syscon store, so the host only has
  * to wait for the terminal worker's last hand-off, and the emulator lifetime
@@ -161,7 +186,8 @@ const runGuest = async (
     stdin: PassThrough;
     output: GuestOutput;
     emulator: EmulatorHandle;
-  }) => Promise<void>
+  }) => Promise<void>,
+  { diskImagePath = null }: { diskImagePath?: string | null } = {}
 ): Promise<void> => {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
@@ -174,6 +200,7 @@ const runGuest = async (
     resetPc: guestAddress(RAM_BASE),
     timebaseHz: TIMEBASE_HZ,
     deviceTreeAddress: 'end',
+    diskImagePath,
   });
   try {
     emulator.start();
@@ -191,4 +218,5 @@ export {
   guestRegions,
   runGuest,
   settleEmulator,
+  waitForUartTransmitQueueTail,
 };

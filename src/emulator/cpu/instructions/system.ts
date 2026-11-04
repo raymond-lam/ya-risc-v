@@ -28,19 +28,17 @@ import {
   writeControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
-import sampleDevicePending from '#emulator/cpu/sample-device-pending';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ILLEGAL_INSTRUCTION,
   ecallCauseForPrivilege,
   enterTrap,
   instructionWordTrapValue,
-  isPendingEnabledInterrupt,
   returnFromMachineTrap,
   returnFromSupervisorTrap,
 } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
-import { loadIrqLevel, waitIrqLevel } from '#emulator/irq-level';
+import { waitForMachineInterrupt } from '#emulator/machine';
 import type { Memory } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
 
@@ -182,6 +180,7 @@ const sfenceVma = (
  *
  * With `menvcfg.STCE` set, mip.STIP is driven by the CLINT supervisor timer wire (the
  * `stimecmp` compare in the CLINT) just like mip.MTIP, so an expiring compare notifies the wait.
+ * The machine composition owns interrupt sampling and device completion wake policy.
  */
 const wfi = async (
   registers: Registers,
@@ -202,20 +201,7 @@ const wfi = async (
   advanceProgramCounter(registers, instructionByteLength);
   // Retire before waiting so minstret/mcycle advance when wfi executes, not when it wakes.
   retireInstructionNow(registers);
-  for (;;) {
-    sampleDevicePending(registers, memory);
-    if (isPendingEnabledInterrupt(registers)) {
-      return;
-    }
-    // Snapshot the level word, then re-sample wires so a publish between the first
-    // check and this load cannot leave us waiting on an already-current level.
-    const fromLevel = loadIrqLevel(memory);
-    sampleDevicePending(registers, memory);
-    if (isPendingEnabledInterrupt(registers)) {
-      return;
-    }
-    await waitIrqLevel(memory, fromLevel);
-  }
+  await waitForMachineInterrupt(registers, memory);
 };
 
 /** csrrw: rd = csr; csr = rs1. */

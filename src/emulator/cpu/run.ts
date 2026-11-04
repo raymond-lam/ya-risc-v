@@ -26,7 +26,7 @@ import {
   readProgramCounter,
   setProgramCounter,
 } from '#emulator/cpu/registers';
-import sampleDevicePending from '#emulator/cpu/sample-device-pending';
+import { sampleMachineInterrupts } from '#emulator/machine';
 import {
   CAUSE_INSTRUCTION_ACCESS_FAULT,
   enterTrap,
@@ -108,7 +108,7 @@ const main = async (): Promise<void> => {
     // NOTE: IRQ wire sampling runs every instruction for interrupt latency correctness.
     // Coalescing samples across iterations would be a micro-opt with observable timing
     // changes; leave per-instruction sampling until a proven bottleneck exists.
-    sampleDevicePending(registers, memory);
+    sampleMachineInterrupts(registers, memory);
     if (takeInterruptIfAny(registers)) {
       continue;
     }

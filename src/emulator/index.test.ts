@@ -23,6 +23,7 @@ import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -48,6 +49,7 @@ const virtRegions = (
     [CLINT_REGION_ID, window(0x0200_0000n, CLINT_GUEST_BYTE_LENGTH)],
     [PLIC_REGION_ID, window(0x0c00_0000n, PLIC_GUEST_BYTE_LENGTH)],
     [SYSCON_REGION_ID, window(0x0010_0000n, SYSCON_GUEST_BYTE_LENGTH)],
+    [VIRTIO_REGION_ID, window(0x1000_1000n, VIRTIO_GUEST_BYTE_LENGTH)],
   ]);
 
 describe('emulator create', () => {

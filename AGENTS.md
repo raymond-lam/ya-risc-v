@@ -90,8 +90,8 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    lint error. A directory with `index.ts` is a package — sibling modules are private, and
    outside a directory you import only from the package root. Public subpaths: worker
    entries `#emulator/*/run`. Leaf modules (`#emulator/memory`, `#emulator/ram`,
-   `#emulator/reservation`, `#emulator/wake`, `#emulator/irq-level`) are their own public
-   API. Inside `emulator/`, packages import each other via roots only (hart samples CLINT
+   `#emulator/reservation`, `#emulator/wake`, `#emulator/irq-level`, `#emulator/dma`) are
+   their own public API. Inside `emulator/`, packages import each other via roots only (hart samples CLINT
    via `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
    `#emulator/timer` / `#emulator/terminal`). `eslint.config.mjs` is the authoritative
    statement of all of this — including the worker-bundle ban on `#emulator/timer`,
@@ -227,3 +227,10 @@ streams, real `guestRegions`, and a real `image`. Rules:
   `it(..., { timeout })`, a `Promise.race` deadline around `await emulator`, bounded
   stdout polling; teardown (`emulator.stop()` + awaited settle) in `finally`. Prove
   non-flakiness with repeated runs.
+- **The terminal lifetime settles on the writable flush, not the harness's read
+  side.** The terminal worker ends its writable stream and awaits `finish`; a
+  `PassThrough` harness delivers those bytes to its `data` listener on a later tick.
+  After `await emulator` / `settleEmulator`, wait for the output to reach the host
+  stream (`waitForByteCount`) before asserting exact text. The UART TX/RX rings hold
+  16 bytes (17 slots with one reserved so `head === tail` means empty), matching a
+  16550 FIFO — a guest may fill all 16 without polling `LSR.THRE`.

@@ -13,7 +13,7 @@ repos:
           - bash
         language: system
         files: ^(src/.*\.(ts|tsx|json|md)|test/.*\.ts)$
-        stages: [pre-commit]
+        stages: [commit]
       - id: eslint
         name: eslint
         entry: bash
@@ -26,11 +26,11 @@ repos:
           - bash
         language: system
         files: ^(src/.*\.(ts|tsx)|test/.*\.ts)$
-        stages: [pre-commit]
+        stages: [commit]
       - id: tsc
         name: tsc
         entry: npm run type-check
         language: system
         files: ^(src|test)/
         pass_filenames: false
-        stages: [pre-commit]
+        stages: [commit]
