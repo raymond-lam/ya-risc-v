@@ -40,7 +40,6 @@ import {
   VIRTIO_HOST_DRIVER_FEATURES_SEL,
   VIRTIO_HOST_INTERRUPT_STATUS,
   VIRTIO_HOST_LAST_AVAIL_IDX,
-  VIRTIO_HOST_PENDING_DATA_ADDRESS,
   VIRTIO_HOST_PENDING_DATA_LENGTH,
   VIRTIO_HOST_PENDING_HEAD,
   VIRTIO_HOST_PENDING_STATUS_ADDRESS,
@@ -75,13 +74,8 @@ import {
   virtioHostInt32,
   virtioOffsetToLocation,
 } from '#emulator/virtio/layout';
-
-/** Byte `byteOffset` of an unsigned 32-bit host word. */
-const byteOf = (value: number, byteOffset: number): number => (value >>> (byteOffset * 8)) & 0xff;
-
-/** Byte `byteOffset` of an unsigned 64-bit host value. */
-const byteOfBig = (value: bigint, byteOffset: number): number =>
-  Number((value >> BigInt(byteOffset * 8)) & 0xffn);
+import { byteOfU32, byteOfU64 } from '#utils/bytes';
+import { rangesOverlap } from '#utils/ranges';
 
 /** Read one guest virtio byte; every register the device is absent reads 0. */
 const loadVirtioByte = (memory: Memory, offset: bigint): number => {
@@ -96,21 +90,21 @@ const loadVirtioByte = (memory: Memory, offset: bigint): number => {
   const queueSel = loadVirtioShadowU32(memory, VIRTIO_HOST_QUEUE_SEL);
   switch (kind) {
     case 'magic':
-      return byteOf(VIRTIO_MAGIC_VALUE, byteOffset);
+      return byteOfU32(VIRTIO_MAGIC_VALUE, byteOffset);
     case 'version':
-      return byteOf(VIRTIO_VERSION, byteOffset);
+      return byteOfU32(VIRTIO_VERSION, byteOffset);
     case 'deviceId':
-      return byteOf(VIRTIO_DEVICE_ID_BLOCK, byteOffset);
+      return byteOfU32(VIRTIO_DEVICE_ID_BLOCK, byteOffset);
     case 'vendorId':
-      return byteOf(VIRTIO_VENDOR_ID, byteOffset);
+      return byteOfU32(VIRTIO_VENDOR_ID, byteOffset);
     case 'deviceFeatures': {
       const sel = loadVirtioShadowU32(memory, VIRTIO_HOST_DEVICE_FEATURES_SEL);
       const word =
         sel === 0 ? VIRTIO_DEVICE_FEATURES_LO : sel === 1 ? VIRTIO_DEVICE_FEATURES_HI : 0;
-      return byteOf(word, byteOffset);
+      return byteOfU32(word, byteOffset);
     }
     case 'queueNumMax':
-      return queueSel === 0 ? byteOf(VIRTIO_QUEUE_NUM_MAX, byteOffset) : 0;
+      return queueSel === 0 ? byteOfU32(VIRTIO_QUEUE_NUM_MAX, byteOffset) : 0;
     case 'queueNum':
       return queueSel === 0 ? loadVirtioShadowByte(memory, VIRTIO_HOST_QUEUE_NUM, byteOffset) : 0;
     case 'queueReady':
@@ -120,9 +114,9 @@ const loadVirtioByte = (memory: Memory, offset: bigint): number => {
     case 'status':
       return loadVirtioShadowByte(memory, VIRTIO_HOST_STATUS, byteOffset);
     case 'configGeneration':
-      return byteOf(loadVirtioShadowU32(memory, VIRTIO_HOST_CONFIG_GENERATION), byteOffset);
+      return byteOfU32(loadVirtioShadowU32(memory, VIRTIO_HOST_CONFIG_GENERATION), byteOffset);
     case 'configCapacity':
-      return byteOfBig(
+      return byteOfU64(
         loadVirtioDiskCapacity(memory) / BigInt(VIRTIO_BLK_SECTOR_BYTES),
         byteOffset
       );
@@ -246,10 +240,6 @@ const loadBytesFromVirtio = ({
   }
 };
 
-/** True when the accessed byte span covers any byte of the 4-byte `registerOffset`. */
-const coversRegister = (offset: bigint, byteLength: number, registerOffset: bigint): boolean =>
-  offset < registerOffset + 4n && offset + BigInt(byteLength) > registerOffset;
-
 /** Reset the device to its power-on shadows; swallow any in-flight completion once. */
 const resetVirtioDevice = (memory: Memory): void => {
   const clearedHostOffsets = [
@@ -271,17 +261,15 @@ const resetVirtioDevice = (memory: Memory): void => {
     VIRTIO_HOST_INTERRUPT_STATUS,
     VIRTIO_HOST_PENDING_HEAD,
     VIRTIO_HOST_PENDING_STATUS_ADDRESS,
-    VIRTIO_HOST_PENDING_DATA_ADDRESS,
     VIRTIO_HOST_PENDING_DATA_LENGTH,
     VIRTIO_HOST_PENDING_USED_LEN,
   ];
   for (const hostOffset of clearedHostOffsets) {
     storeVirtioShadowU32(memory, hostOffset, 0);
   }
-  // The two u64 pending-address fields span 8 bytes each; the u32 loop above only
-  // cleared their low words, so clear the high words explicitly.
+  // The u64 pending-status-address field spans 8 bytes; the u32 loop above only cleared
+  // its low word, so clear the high word explicitly.
   storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_STATUS_ADDRESS + 4, 0);
-  storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_DATA_ADDRESS + 4, 0);
   // Swallow any in-flight completion exactly once; do NOT touch requestSeq /
   // completionSeq / staging / capacity words — the disk worker owns the channel.
   storeVirtioShadowU32(
@@ -299,7 +287,7 @@ const handleQueueNotify = (
   byteLength: number,
   _source: ReadonlyUint8Array
 ): void => {
-  if (!coversRegister(offset, byteLength, VIRTIO_MMIO_QUEUE_NOTIFY)) {
+  if (!rangesOverlap(offset, BigInt(byteLength), VIRTIO_MMIO_QUEUE_NOTIFY, 4n)) {
     return;
   }
   // §FIX 2: assemble the FULL 32-bit word from the store (the per-byte writes above have
@@ -319,7 +307,7 @@ const handleInterruptAck = (
   byteLength: number,
   source: ReadonlyUint8Array
 ): void => {
-  if (!coversRegister(offset, byteLength, VIRTIO_MMIO_INTERRUPT_ACK)) {
+  if (!rangesOverlap(offset, BigInt(byteLength), VIRTIO_MMIO_INTERRUPT_ACK, 4n)) {
     return;
   }
   let ackBits = 0;
@@ -351,7 +339,7 @@ const driverFeaturesAreValid = (memory: Memory): boolean => {
 
 /** Status: a stored word with ACKNOWLEDGE clear resets the device; FEATURES_OK is validated. */
 const handleStatusWrite = (memory: Memory, offset: bigint, byteLength: number): void => {
-  if (!coversRegister(offset, byteLength, VIRTIO_MMIO_STATUS)) {
+  if (!rangesOverlap(offset, BigInt(byteLength), VIRTIO_MMIO_STATUS, 4n)) {
     return;
   }
   const status = loadVirtioShadowU32(memory, VIRTIO_HOST_STATUS);

@@ -25,6 +25,11 @@
  * window and its channel words. Publication order per request: status byte → used-ring
  * entry → used->idx bump → PLIC source-1 assert. One request is in flight at a time
  * (deliberate serialization).
+ *
+ * Despite the name, this shares no machinery with the UART RX/TX rings
+ * (`#emulator/uart/queues`): those are single-producer/single-consumer byte rings in the host
+ * slab, whereas this walks the driver's descriptor chains in guest RAM and stages one
+ * contiguous transfer, so only the wake-word helpers in `#emulator/wake` are common.
  */
 
 import type { ReadonlyUint8Array } from '#types';

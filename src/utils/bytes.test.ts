@@ -20,6 +20,8 @@ import {
   addBytes,
   andBytes,
   byte0ToNumber,
+  byteOfU32,
+  byteOfU64,
   bytesToBigInt,
   bytesToBigInt64Array,
   bytesToBigUint64Array,
@@ -139,6 +141,17 @@ describe('utils/bytes', () => {
     assert.equal(bytesToNumber(bytes), 0x12345678);
     assert.equal(byte0ToNumber(bytes, 0xff), 0x78);
     assert.equal(byte0ToNumber(bytes, 0x3f), 0x38);
+  });
+
+  it('byteOfU32 and byteOfU64 extract a lane of a scalar, high lanes included', () => {
+    assert.equal(byteOfU32(0x1234_5678, 0), 0x78);
+    assert.equal(byteOfU32(0x1234_5678, 3), 0x12);
+    assert.equal(byteOfU32(0xffff_ffff, 3), 0xff);
+    // A u64 lane above bit 31 is unreachable through `number` shifting; only the bigint
+    // form keeps it exact.
+    assert.equal(byteOfU64(0x0102_0304_0506_0708n, 0), 0x08);
+    assert.equal(byteOfU64(0x0102_0304_0506_0708n, 7), 0x01);
+    assert.equal(byteOfU64(0xffff_ffff_ffff_ffffn, 5), 0xff);
   });
 
   it('unsignedNumberToBytes zero-extends a u32 (including when bit 31 is set)', () => {
