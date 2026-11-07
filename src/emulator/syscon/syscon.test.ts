@@ -48,7 +48,7 @@ describe('syscon', () => {
   it('a poweroff store wakes the host watch', async () => {
     const memory = createTestMemory(64n);
     const pending = watchSyscon(memory);
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
       source: registerBytes(SYSCON_POWEROFF_VALUE),
@@ -60,7 +60,7 @@ describe('syscon', () => {
   it('a reboot store wakes the host watch', async () => {
     const memory = createTestMemory(64n);
     const pending = watchSyscon(memory);
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, SYSCON_REBOOT_OFFSET),
       source: registerBytes(SYSCON_REBOOT_VALUE),
@@ -69,24 +69,24 @@ describe('syscon', () => {
     assert.equal(await pending, 'reboot');
   });
 
-  it('partial and straddling stores update each register word without tearing', () => {
+  it('partial and straddling stores update each register word without tearing', async () => {
     const memory = createTestMemory(64n);
 
     // A partial store updates one register without tearing the other bytes.
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
       source: Uint8Array.of(0x01, 0x02, 0x03, 0x04),
       byteLength: 4,
     });
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, 1),
       source: Uint8Array.of(0xaa),
       byteLength: 1,
     });
     const partial = new Uint8Array(4);
-    loadBytes({
+    await loadBytes({
       destination: partial,
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
@@ -96,19 +96,19 @@ describe('syscon', () => {
 
     // A store straddling both registers updates each word.
     const word = Uint8Array.of(0x01, 0x02, 0x03, 0x04);
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
       source: word,
       byteLength: 4,
     });
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, SYSCON_REBOOT_OFFSET),
       source: word,
       byteLength: 4,
     });
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, 3),
       source: Uint8Array.of(0xee, 0xff),
@@ -116,13 +116,13 @@ describe('syscon', () => {
     });
     const poweroff = new Uint8Array(4);
     const reboot = new Uint8Array(4);
-    loadBytes({
+    await loadBytes({
       destination: poweroff,
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
       byteLength: 4,
     });
-    loadBytes({
+    await loadBytes({
       destination: reboot,
       memory,
       address: sysconAddress(memory, SYSCON_REBOOT_OFFSET),
@@ -134,14 +134,14 @@ describe('syscon', () => {
 
   it('another value does not request poweroff, and the register reads back', async () => {
     const memory = createTestMemory(64n);
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
       source: registerBytes(0),
       byteLength: 4,
     });
     const destination = new Uint8Array(4);
-    loadBytes({
+    await loadBytes({
       destination,
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
@@ -163,7 +163,7 @@ describe('syscon', () => {
 
   it('cancelling does not overwrite a live poweroff request: the watch still resolves it', async () => {
     const memory = createTestMemory(64n);
-    storeBytes({
+    await storeBytes({
       memory,
       address: sysconAddress(memory, SYSCON_POWEROFF_OFFSET),
       source: registerBytes(SYSCON_POWEROFF_VALUE),

@@ -18,8 +18,8 @@
  * UART 16550 public API — guest MMIO, host RX/TX queues, and region sizing.
  */
 
-export { loadBytesFromUart, storeBytesToUart } from '#emulator/uart/memory';
-export { waitUartTransmit } from '#emulator/uart/queues';
+export { loadBytesFromUart, storeBytesToUart, uartMemoryLockIndexes } from '#emulator/uart/memory';
+export { dequeueTransmit, waitUartTransmit } from '#emulator/uart/queues';
 export { popUartTransmit, pushUartReceive } from '#emulator/uart/registers';
 export {
   UART_GUEST_BYTE_LENGTH,

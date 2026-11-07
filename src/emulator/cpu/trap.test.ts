@@ -99,12 +99,12 @@ const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as Re
  * compare published into the CLINT mirror, then the mirror's STIP wire sampled into `mip`.
  * STIP is read-only in that mode, so it cannot be poked through a CSR write.
  */
-const armSupervisorTimerCompare = (
+const armSupervisorTimerCompare = async (
   registers: ReturnType<typeof createRegisters>,
   memory: ReturnType<typeof testMemory>
-): void => {
+): Promise<void> => {
   writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
-  storeBytes({
+  await storeBytes({
     memory,
     address: CLINT_MTIME,
     source: unsignedBigIntToBytes(new Uint8Array(8), 100n),
@@ -849,11 +849,11 @@ describe('trap', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
   });
 
-  it('mideleg still gates STIP delivery when menvcfg.STCE is set', () => {
+  it('mideleg still gates STIP delivery when menvcfg.STCE is set', async () => {
     // Delegated: mideleg[5] sends the Sstc interrupt to the S handler.
     const delegated = createRegisters();
     const delegatedMemory = testMemory(256n);
-    armSupervisorTimerCompare(delegated, delegatedMemory);
+    await armSupervisorTimerCompare(delegated, delegatedMemory);
     writeControlAndStatusRegister(
       delegated,
       MIDELEG,
@@ -894,7 +894,7 @@ describe('trap', () => {
     // traps to M (guarding against an undocumented "Sstc is always delivered in S" rule).
     const undelegated = createRegisters();
     const undelegatedMemory = testMemory(256n);
-    armSupervisorTimerCompare(undelegated, undelegatedMemory);
+    await armSupervisorTimerCompare(undelegated, undelegatedMemory);
     writeControlAndStatusRegister(
       undelegated,
       MIE,

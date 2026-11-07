@@ -109,14 +109,17 @@ const CLINT_MTIMECMP = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_4000n) as
 const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as ReadonlyUint8Array;
 
 /** Assert CLINT timer wire and `mie.MTIE` so `wfi` returns without waiting. */
-const armTimerWake = (registers: ReturnType<typeof createRegisters>, memory: Memory): void => {
-  storeBytes({
+const armTimerWake = async (
+  registers: ReturnType<typeof createRegisters>,
+  memory: Memory
+): Promise<void> => {
+  await storeBytes({
     memory,
     address: CLINT_MTIMECMP,
     source: unsignedBigIntToBytes(new Uint8Array(8), 0n),
     byteLength: 8,
   });
-  storeBytes({
+  await storeBytes({
     memory,
     address: CLINT_MTIME,
     source: unsignedBigIntToBytes(new Uint8Array(8), 0n),
@@ -238,7 +241,7 @@ describe('system', () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
-    armTimerWake(registers, memory);
+    await armTimerWake(registers, memory);
     await wfi(registers, memory, FOUR_BYTES);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
   });
@@ -247,7 +250,7 @@ describe('system', () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
-    armTimerWake(registers, memory);
+    await armTimerWake(registers, memory);
     beginInstructionRetire(registers);
     await wfi(registers, memory, FOUR_BYTES);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
@@ -312,7 +315,7 @@ describe('system', () => {
       MSTATUS,
       signedNumberToBytes(new Uint8Array(8), 0x20_0000, 32)
     );
-    armTimerWake(registers, memory);
+    await armTimerWake(registers, memory);
     await wfi(registers, memory, FOUR_BYTES);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
   });
@@ -1092,11 +1095,11 @@ describe('system', () => {
     );
   });
 
-  it('M-mode can read time from CLINT mtime; cycle/instret count retires', () => {
+  it('M-mode can read time from CLINT mtime; cycle/instret count retires', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     const seeded = 12_345n;
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MTIME,
       source: unsignedBigIntToBytes(new Uint8Array(8), seeded),
@@ -1220,10 +1223,10 @@ describe('system', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
   });
 
-  it('mcounteren gates S-mode time/cycle; M-mode ignores the enable bits', () => {
+  it('mcounteren gates S-mode time/cycle; M-mode ignores the enable bits', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MTIME,
       source: unsignedBigIntToBytes(new Uint8Array(8), 50n),
@@ -1327,10 +1330,10 @@ describe('system', () => {
     );
   });
 
-  it('U-mode time needs both mcounteren.TM and scounteren.TM', () => {
+  it('U-mode time needs both mcounteren.TM and scounteren.TM', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MTIME,
       source: unsignedBigIntToBytes(new Uint8Array(8), 77n),
@@ -1445,41 +1448,38 @@ describe('system', () => {
   });
 
   /** Pack a 32-bit instruction encoding as little-endian bytes and execute it. */
-  const runEncoded = (
+  const runEncoded = async (
     encoding: number,
     registers: ReturnType<typeof createRegisters>,
     memory: ReturnType<typeof testMemory>
-  ): void => {
+  ): Promise<void> => {
     const bytes = new Uint8Array(4);
     bytes[0] = encoding & 0xff;
     bytes[1] = (encoding >>> 8) & 0xff;
     bytes[2] = (encoding >>> 16) & 0xff;
     bytes[3] = (encoding >>> 24) & 0xff;
     const [execute, instructionByteLength] = decode(bytes);
-    const result = execute(registers, memory, instructionByteLength);
-    if (result !== undefined) {
-      throw new Error('sfence.vma is synchronous');
-    }
+    await execute(registers, memory, instructionByteLength);
   };
 
-  it('decodes sfence.vma and advances pc', () => {
+  it('decodes sfence.vma and advances pc', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     // sfence.vma x0, x0 (M-mode)
-    runEncoded(0x12000073, registers, memory);
+    await runEncoded(0x12000073, registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
     // sfence.vma x1, x2 (M-mode)
-    runEncoded(0x12208073, registers, memory);
+    await runEncoded(0x12208073, registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
 
     // The same decoded thunk runs in S-mode and still advances pc.
     setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
-    runEncoded(0x12000073, registers, memory);
+    await runEncoded(0x12000073, registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 
-  it('sfence.vma with rd set raises illegal-instruction', () => {
+  it('sfence.vma with rd set raises illegal-instruction', async () => {
     const registers = createRegisters();
     const instructionWord = 0x120000f3;
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
@@ -1488,7 +1488,7 @@ describe('system', () => {
       MTVEC,
       signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
     );
-    runEncoded(instructionWord, registers, testMemory(256n));
+    await runEncoded(instructionWord, registers, testMemory(256n));
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MCAUSE),
       signedNumberToBytes(new Uint8Array(8), CAUSE_ILLEGAL_INSTRUCTION, 32)
@@ -1828,7 +1828,7 @@ describe('system', () => {
     );
 
     // Expire the compare through the CLINT guest window.
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MTIME,
       source: unsignedBigIntToBytes(new Uint8Array(8), 1_000n),
@@ -1841,11 +1841,11 @@ describe('system', () => {
     assert.notEqual(snapshotControlAndStatusRegister(registers, MIP)[0]! & 0x20, 0);
   });
 
-  it('disabling menvcfg.STCE drops the supervisor timer wire', () => {
+  it('disabling menvcfg.STCE drops the supervisor timer wire', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MTIME,
       source: unsignedBigIntToBytes(new Uint8Array(8), 10n),

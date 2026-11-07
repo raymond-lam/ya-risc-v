@@ -41,7 +41,10 @@ type TerminalWorkerData = {
 type TerminalHandle = Promise<void> & {
   /** Spawn the terminal worker. Throws if already started or already stopped. */
   start: () => void;
-  /** Stop the worker. Throws if not started; idempotent after the first stop. */
+  /**
+   * Stop the worker and drain queued output; idempotent even before start.
+   * Stop transmit producers first for a complete drain. The final drain does not refresh IRQs.
+   */
   stop: () => void;
 };
 

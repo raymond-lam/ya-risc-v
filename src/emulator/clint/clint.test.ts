@@ -45,8 +45,8 @@ const timeBytes = (value: bigint): ReadonlyUint8Array =>
  * reproduces the seeded value instead of reading the host clock, which keeps these cases
  * deterministic.
  */
-const seedMtime = (memory: Memory, mtime: bigint): void => {
-  storeBytes({ memory, address: CLINT_MTIME, source: timeBytes(mtime), byteLength: 8 });
+const seedMtime = async (memory: Memory, mtime: bigint): Promise<void> => {
+  await storeBytes({ memory, address: CLINT_MTIME, source: timeBytes(mtime), byteLength: 8 });
 };
 
 describe('clint supervisor timer wire', () => {
@@ -69,7 +69,7 @@ describe('clint supervisor timer wire', () => {
     assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_STIP, 0);
   });
 
-  it('leaves the wires alone when the mirror already holds the value', () => {
+  it('leaves the wires alone when the mirror already holds the value', async () => {
     const memory = testMemory(256n);
     setClintStimecmpMirror(memory, timeBytes(1n));
     assert.equal(isClintSupervisorTimerPending(memory), false);
@@ -82,13 +82,13 @@ describe('clint supervisor timer wire', () => {
 
     // `mtime` is what asserts the wire: seed it past the compare (the guest store re-derives),
     // then confirm the timebase tick keeps the compare expired.
-    seedMtime(memory, 2n);
+    await seedMtime(memory, 2n);
     tickClint(memory);
     assert.equal(isClintSupervisorTimerPending(memory), true);
     assert.notEqual(loadIrqLevel(memory) & IRQ_LEVEL_STIP, 0);
   });
 
-  it('resets the stimecmp mirror to all-ones so nothing is pending', () => {
+  it('resets the stimecmp mirror to all-ones so nothing is pending', async () => {
     const memory = testMemory(256n);
     setClintStimecmpMirror(memory, timeBytes(0n));
     assert.equal(isClintSupervisorTimerPending(memory), true);
@@ -98,7 +98,7 @@ describe('clint supervisor timer wire', () => {
 
     // `mtime` ahead of zero: only an all-ones mirror keeps the wire low, and re-publishing
     // all-ones is a no-op exactly when the reset already wrote it.
-    seedMtime(memory, 5n);
+    await seedMtime(memory, 5n);
     setClintStimecmpMirror(memory, ALL_ONES);
     assert.equal(isClintSupervisorTimerPending(memory), false);
   });

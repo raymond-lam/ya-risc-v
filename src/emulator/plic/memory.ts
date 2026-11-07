@@ -16,6 +16,7 @@
 
 /**
  * PLIC guest loadBytes / storeBytes (window decode + claim/complete side effects).
+ * Callers hold the gateway lock across each whole access.
  */
 
 import type { ReadonlyUint8Array } from '#types';
@@ -27,9 +28,9 @@ import {
 import {
   claimPlicSource,
   completePlicSource,
+  plicGatewayLockIndex,
   refreshAllContextWires,
   refreshContextWire,
-  withPlicGatewayLock,
 } from '#emulator/plic/gateway';
 import type { Memory } from '#emulator/memory';
 import { addBytes, copyBytes, signedNumberToBytes } from '#utils/bytes';
@@ -65,27 +66,21 @@ const storePlicByte = (memory: Memory, address: ReadonlyUint8Array, value: numbe
       if (location.source === 0) {
         return;
       }
-      withPlicGatewayLock(memory, () => {
-        Atomics.store(memory.bytes, plicHostIndexForLocation(memory, location), byte);
-        refreshAllContextWires(memory);
-      });
+      Atomics.store(memory.bytes, plicHostIndexForLocation(memory, location), byte);
+      refreshAllContextWires(memory);
       return;
     case 'pending':
       return;
     case 'enable': {
       const index = plicHostIndexForLocation(memory, location);
       // Source 0 enable bit is reserved; clear it when writing byte 0.
-      withPlicGatewayLock(memory, () => {
-        Atomics.store(memory.bytes, index, location.byteOffset === 0 ? byte & ~1 : byte);
-        refreshContextWire(memory, location.context);
-      });
+      Atomics.store(memory.bytes, index, location.byteOffset === 0 ? byte & ~1 : byte);
+      refreshContextWire(memory, location.context);
       return;
     }
     case 'threshold':
-      withPlicGatewayLock(memory, () => {
-        Atomics.store(memory.bytes, plicHostIndexForLocation(memory, location), byte);
-        refreshContextWire(memory, location.context);
-      });
+      Atomics.store(memory.bytes, plicHostIndexForLocation(memory, location), byte);
+      refreshContextWire(memory, location.context);
       return;
     case 'claim': {
       // Guests store a full u32; accept the low byte as the source id (sources are ≤ 31).
@@ -140,4 +135,7 @@ const storeBytesToPlic = ({
   }
 };
 
-export { loadBytesFromPlic, storeBytesToPlic };
+/** PLIC MMIO and gateway mutations share this lock. */
+const plicMemoryLockIndexes = (memory: Memory): readonly number[] => [plicGatewayLockIndex(memory)];
+
+export { loadBytesFromPlic, plicMemoryLockIndexes, storeBytesToPlic };

@@ -47,15 +47,10 @@ import type { Registers } from '#emulator/cpu/types';
 import {
   atomicCompareExchangeBytes,
   atomicLoadBytes,
-  atomicStoreBytes,
+  atomicLoadReservedBytes,
+  atomicStoreConditionalBytes,
   type Memory,
 } from '#emulator/memory';
-import {
-  releaseScMonitorIfHeld,
-  setReservationLocked,
-  tryTakeReservation,
-  withMonitorLock,
-} from '#emulator/reservation';
 import type { ReadonlyUint8Array } from '#types';
 
 type AmoArgs = {
@@ -141,12 +136,12 @@ const trapAtomicAccessFault = ({
 };
 
 /** lr.w: rd = sext(mem[rs1]); reserve 32 bits. Misaligned / non-RAM / unmapped → trap (no reservation). */
-const lrW = (
+const lrW = async (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   if (trapIfAtomicMisaligned({ registers, address, byteLength: 4, access: 'load' })) {
     return;
@@ -155,30 +150,29 @@ const lrW = (
     return;
   }
   const oldValue = new Uint8Array(8);
-  let loaded = false;
-  withMonitorLock(memory, () => {
-    if (!atomicLoadBytes({ destination: oldValue, memory, address, byteLength: 4 })) {
-      return;
-    }
-    signExtendBytes(oldValue, 4);
-    setReservationLocked(memory, hartIdOf(registers), address, 4);
-    loaded = true;
+  const loaded = await atomicLoadReservedBytes({
+    destination: oldValue,
+    memory,
+    address,
+    byteLength: 4,
+    hartId: hartIdOf(registers),
   });
   if (!loaded) {
     trapAtomicAccessFault({ registers, address, access: 'load' });
     return;
   }
+  signExtendBytes(oldValue, 4);
   writeGeneralPurposeRegister(registers, args.destinationRegister, oldValue);
   advanceProgramCounter(registers, instructionByteLength);
 };
 
 /** lr.d: rd = mem[rs1]; reserve 64 bits. Misaligned / non-RAM / unmapped → trap (no reservation). */
-const lrD = (
+const lrD = async (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   if (trapIfAtomicMisaligned({ registers, address, byteLength: 8, access: 'load' })) {
     return;
@@ -187,13 +181,12 @@ const lrD = (
     return;
   }
   const oldValue = new Uint8Array(8);
-  let loaded = false;
-  withMonitorLock(memory, () => {
-    if (!atomicLoadBytes({ destination: oldValue, memory, address, byteLength: 8 })) {
-      return;
-    }
-    setReservationLocked(memory, hartIdOf(registers), address, 8);
-    loaded = true;
+  const loaded = await atomicLoadReservedBytes({
+    destination: oldValue,
+    memory,
+    address,
+    byteLength: 8,
+    hartId: hartIdOf(registers),
   });
   if (!loaded) {
     trapAtomicAccessFault({ registers, address, access: 'load' });
@@ -207,12 +200,12 @@ const lrD = (
  * sc.w: if reservation matches, mem[rs1] = rs2[31:0], rd = 0; else rd ≠ 0.
  * Misaligned / non-RAM / unmapped → trap before taking the reservation.
  */
-const scW = (
+const scW = async (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   if (trapIfAtomicMisaligned({ registers, address, byteLength: 4, access: 'store' })) {
     return;
@@ -225,19 +218,13 @@ const scW = (
     trapAtomicAccessFault({ registers, address, access: 'store' });
     return;
   }
-  const success = tryTakeReservation(memory, hartIdOf(registers), address, 4);
-  try {
-    if (success) {
-      atomicStoreBytes({
-        memory,
-        address,
-        source: readGeneralPurposeRegister(registers, args.sourceRegister2),
-        byteLength: 4,
-      });
-    }
-  } finally {
-    releaseScMonitorIfHeld(memory);
-  }
+  const success = await atomicStoreConditionalBytes({
+    memory,
+    address,
+    source: readGeneralPurposeRegister(registers, args.sourceRegister2),
+    byteLength: 4,
+    hartId: hartIdOf(registers),
+  });
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -250,12 +237,12 @@ const scW = (
  * sc.d: if reservation matches, mem[rs1] = rs2, rd = 0; else rd ≠ 0.
  * Misaligned / non-RAM / unmapped → trap before taking the reservation.
  */
-const scD = (
+const scD = async (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   if (trapIfAtomicMisaligned({ registers, address, byteLength: 8, access: 'store' })) {
     return;
@@ -268,19 +255,13 @@ const scD = (
     trapAtomicAccessFault({ registers, address, access: 'store' });
     return;
   }
-  const success = tryTakeReservation(memory, hartIdOf(registers), address, 8);
-  try {
-    if (success) {
-      atomicStoreBytes({
-        memory,
-        address,
-        source: readGeneralPurposeRegister(registers, args.sourceRegister2),
-        byteLength: 8,
-      });
-    }
-  } finally {
-    releaseScMonitorIfHeld(memory);
-  }
+  const success = await atomicStoreConditionalBytes({
+    memory,
+    address,
+    source: readGeneralPurposeRegister(registers, args.sourceRegister2),
+    byteLength: 8,
+    hartId: hartIdOf(registers),
+  });
   writeGeneralPurposeRegister(
     registers,
     args.destinationRegister,
@@ -295,14 +276,14 @@ type AmoCombine = (
   byteLength: 4 | 8
 ) => Uint8Array;
 
-const amoReadModifyWrite = (
+const amoReadModifyWrite = async (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   byteLength: 4 | 8,
   combine: AmoCombine,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
   if (trapIfAtomicMisaligned({ registers, address, byteLength, access: 'store' })) {
     return;
@@ -320,7 +301,7 @@ const amoReadModifyWrite = (
   for (;;) {
     const next = combine(oldValue, source, byteLength);
     if (
-      atomicCompareExchangeBytes({
+      await atomicCompareExchangeBytes({
         destination: observed,
         memory,
         address,
@@ -378,8 +359,8 @@ const amoswap = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -396,8 +377,8 @@ const amoadd = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -417,8 +398,8 @@ const amoxor = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -438,8 +419,8 @@ const amoand = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -459,8 +440,8 @@ const amoor = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -480,8 +461,8 @@ const amomin = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -502,8 +483,8 @@ const amomax = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -524,8 +505,8 @@ const amominu = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -546,8 +527,8 @@ const amomaxu = (
   args: AmoArgs,
   byteLength: 4 | 8,
   instructionByteLength: ReadonlyUint8Array
-): void => {
-  amoReadModifyWrite(
+): Promise<void> => {
+  return amoReadModifyWrite(
     registers,
     memory,
     args,
@@ -566,109 +547,109 @@ const amoswapW = (
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoswap(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amoswap(registers, memory, args, 4, instructionByteLength);
 const amoswapD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoswap(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amoswap(registers, memory, args, 8, instructionByteLength);
 const amoaddW = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoadd(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amoadd(registers, memory, args, 4, instructionByteLength);
 const amoaddD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoadd(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amoadd(registers, memory, args, 8, instructionByteLength);
 const amoxorW = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoxor(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amoxor(registers, memory, args, 4, instructionByteLength);
 const amoxorD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoxor(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amoxor(registers, memory, args, 8, instructionByteLength);
 const amoandW = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoand(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amoand(registers, memory, args, 4, instructionByteLength);
 const amoandD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoand(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amoand(registers, memory, args, 8, instructionByteLength);
 const amoorW = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoor(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amoor(registers, memory, args, 4, instructionByteLength);
 const amoorD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amoor(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amoor(registers, memory, args, 8, instructionByteLength);
 const amominW = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amomin(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amomin(registers, memory, args, 4, instructionByteLength);
 const amominD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amomin(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amomin(registers, memory, args, 8, instructionByteLength);
 const amomaxW = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amomax(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amomax(registers, memory, args, 4, instructionByteLength);
 const amomaxD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amomax(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amomax(registers, memory, args, 8, instructionByteLength);
 const amominuW = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amominu(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amominu(registers, memory, args, 4, instructionByteLength);
 const amominuD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amominu(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amominu(registers, memory, args, 8, instructionByteLength);
 const amomaxuW = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amomaxu(registers, memory, args, 4, instructionByteLength);
+): Promise<void> => amomaxu(registers, memory, args, 4, instructionByteLength);
 const amomaxuD = (
   registers: Registers,
   memory: Memory,
   args: AmoArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => amomaxu(registers, memory, args, 8, instructionByteLength);
+): Promise<void> => amomaxu(registers, memory, args, 8, instructionByteLength);
 
 export {
   lrW,

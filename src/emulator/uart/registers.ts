@@ -19,7 +19,7 @@
  */
 
 import type { Memory } from '#emulator/memory';
-import { PLIC_SOURCE_UART, setPlicSourcePending } from '#emulator/plic';
+import { PLIC_SOURCE_UART, setPlicSourcePending, withPlicGatewayLock } from '#emulator/plic';
 import {
   LSR_DR,
   LSR_THRE,
@@ -127,7 +127,7 @@ const refreshUartIrq = (memory: Memory): void => {
 /**
  * Host/keyboard: enqueue a received byte. Returns false if the RX ring is full (byte dropped).
  */
-const pushUartReceive = (memory: Memory, value: number): boolean => {
+const pushUartReceiveLocked = (memory: Memory, value: number): boolean => {
   if (!enqueueReceive(memory, value)) {
     return false;
   }
@@ -138,7 +138,7 @@ const pushUartReceive = (memory: Memory, value: number): boolean => {
 /**
  * Host: dequeue a transmitted byte. Returns `null` if the TX ring is empty.
  */
-const popUartTransmit = (memory: Memory): number | null => {
+const popUartTransmitLocked = (memory: Memory): number | null => {
   const dequeued = dequeueTransmit(memory);
   if (dequeued === null) {
     return null;
@@ -196,6 +196,26 @@ const storeUartRegister = (memory: Memory, registerIndex: number, value: number)
     armThreIrqIfEnabledAndReady(memory);
     refreshUartIrq(memory);
   }
+};
+
+const pushUartReceive = async (memory: Memory, value: number): Promise<boolean> => {
+  let pushed = false;
+  await withPlicGatewayLock(memory, () => {
+    pushed = pushUartReceiveLocked(memory, value);
+  });
+  return pushed;
+};
+const popUartTransmit = async (
+  memory: Memory,
+  cancelled: () => boolean = () => false
+): Promise<number | null> => {
+  let value: number | null = null;
+  await withPlicGatewayLock(memory, () => {
+    if (!cancelled()) {
+      value = popUartTransmitLocked(memory);
+    }
+  });
+  return value;
 };
 
 export { loadUartRegister, popUartTransmit, pushUartReceive, storeUartRegister };

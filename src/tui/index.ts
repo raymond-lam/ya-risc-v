@@ -108,5 +108,5 @@ class Tui implements TuiHandle {
 
 const create = (options: TuiCreateOptions): TuiHandle => new Tui(options);
 
+// eslint-disable-next-line import/prefer-default-export -- Preserve the TUI factory's named export.
 export { create };
-export type { TuiHandle };

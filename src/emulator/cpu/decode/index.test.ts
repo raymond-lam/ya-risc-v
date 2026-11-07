@@ -17,11 +17,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import decode from '#emulator/cpu/decode';
+import decode32 from '#emulator/cpu/decode/decode-32';
+import decodeC from '#emulator/cpu/decode/decode-c';
 import {
   createRegisters,
   readProgramCounter,
   setProgramCounter,
   FOUR_BYTES,
+  TWO_BYTES,
 } from '#emulator/cpu/registers';
 import createTestMemory from '#test/guest-memory';
 import { signedNumberToBytes } from '#utils/bytes';
@@ -37,7 +40,42 @@ const instructionBytes = (encoding: number): Uint8Array => {
 };
 
 describe('decode cache', () => {
-  it('still decodes correctly after LRU eviction pressure', () => {
+  it('returns promises for both compressed and 32-bit instructions', async () => {
+    const memory = createTestMemory(256n);
+    for (const [encoding, expectedPc] of [
+      [0x0000_0001, 2], // c.nop
+      [0x0000_0013, 4], // nop
+    ] as const) {
+      const registers = createRegisters();
+      const [execute, length] = decode(instructionBytes(encoding));
+      const result = execute(registers, memory, length);
+      assert.ok(result instanceof Promise);
+      await result;
+      assert.deepEqual(
+        readProgramCounter(registers),
+        signedNumberToBytes(new Uint8Array(8), expectedPc, 32)
+      );
+    }
+  });
+
+  it('returns promises directly from both instruction decoders', async () => {
+    const memory = createTestMemory(256n);
+    for (const [execute, length, expectedPc] of [
+      [decodeC(0x0001), TWO_BYTES, 2],
+      [decode32(0x0000_0013), FOUR_BYTES, 4],
+    ] as const) {
+      const registers = createRegisters();
+      const result = execute(registers, memory, length);
+      assert.ok(result instanceof Promise);
+      await result;
+      assert.deepEqual(
+        readProgramCounter(registers),
+        signedNumberToBytes(new Uint8Array(8), expectedPc, 32)
+      );
+    }
+  });
+
+  it('still decodes correctly after LRU eviction pressure', async () => {
     // Walk far more unique 32-bit encodings than the LRU cap; must not throw.
     for (let encoding = 0; encoding < 20_000; encoding += 1) {
       // Force 32-bit encodings (low two bits = 0b11) with varying upper bits.
@@ -52,7 +90,7 @@ describe('decode cache', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
     const addi = instructionBytes(0x0000_0013);
     const [execute] = decode(addi);
-    execute(registers, memory, FOUR_BYTES);
+    await execute(registers, memory, FOUR_BYTES);
     assert.deepEqual(readProgramCounter(registers), signedNumberToBytes(new Uint8Array(8), 4, 32));
   });
 });

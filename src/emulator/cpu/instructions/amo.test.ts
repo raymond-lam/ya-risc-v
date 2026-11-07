@@ -56,7 +56,7 @@ import {
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 describe('amo', () => {
-  it('lr.d / sc.d succeed and advance pc', () => {
+  it('lr.d / sc.d succeed and advance pc', async () => {
     const guest = testMemory(256n);
     guest.bytes[16] = 0x11;
     guest.bytes[17] = 0x22;
@@ -74,7 +74,7 @@ describe('amo', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0x99aa_bbcc_ddeeff00n)
     );
 
-    lrD(
+    await lrD(
       registers,
       guest,
       {
@@ -90,7 +90,7 @@ describe('amo', () => {
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
 
-    scD(
+    await scD(
       registers,
       guest,
       {
@@ -111,7 +111,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
   });
 
-  it('sc.w fails after an overlapping store clears the reservation', () => {
+  it('sc.w fails after an overlapping store clears the reservation', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 32, 32));
@@ -126,7 +126,7 @@ describe('amo', () => {
       signedNumberToBytes(new Uint8Array(8), 0x22222222, 32)
     );
 
-    lrW(
+    await lrW(
       registers,
       guest,
       {
@@ -136,7 +136,7 @@ describe('amo', () => {
       },
       FOUR_BYTES
     );
-    sw(
+    await sw(
       registers,
       guest,
       {
@@ -146,7 +146,7 @@ describe('amo', () => {
       },
       FOUR_BYTES
     );
-    scW(
+    await scW(
       registers,
       guest,
       {
@@ -163,7 +163,7 @@ describe('amo', () => {
     assert.deepEqual(guest.bytes.slice(32, 36), Uint8Array.of(0x22, 0x22, 0x22, 0x22));
   });
 
-  it('sc.w fails after a same-line neighbor store', () => {
+  it('sc.w fails after a same-line neighbor store', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 32, 32));
@@ -179,7 +179,7 @@ describe('amo', () => {
       signedNumberToBytes(new Uint8Array(8), 0x33333333, 32)
     );
 
-    lrW(
+    await lrW(
       registers,
       guest,
       {
@@ -189,7 +189,7 @@ describe('amo', () => {
       },
       FOUR_BYTES
     );
-    sw(
+    await sw(
       registers,
       guest,
       {
@@ -199,7 +199,7 @@ describe('amo', () => {
       },
       FOUR_BYTES
     );
-    scW(
+    await scW(
       registers,
       guest,
       {
@@ -216,7 +216,7 @@ describe('amo', () => {
     assert.deepEqual(guest.bytes.slice(32, 36), new Uint8Array(4));
   });
 
-  it('amoadd.w returns the old value and stores the sum', () => {
+  it('amoadd.w returns the old value and stores the sum', async () => {
     const guest = testMemory(256n);
     guest.bytes[8] = 0xfe;
     guest.bytes[9] = 0xff;
@@ -226,7 +226,7 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 8, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 3, 32));
 
-    amoaddW(
+    await amoaddW(
       registers,
       guest,
       {
@@ -244,7 +244,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('amoswap.d exchanges memory and rd', () => {
+  it('amoswap.d exchanges memory and rd', async () => {
     const guest = testMemory(256n);
     for (let index = 0; index < 8; index += 1) {
       guest.bytes[40 + index] = index + 1;
@@ -257,7 +257,7 @@ describe('amo', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0x0102_0304_0506_0708n)
     );
 
-    amoswapD(
+    await amoswapD(
       registers,
       guest,
       {
@@ -277,7 +277,7 @@ describe('amo', () => {
     );
   });
 
-  it('amomin.w and amominu.w differ on high bit', () => {
+  it('amomin.w and amominu.w differ on high bit', async () => {
     const guest = testMemory(256n);
     guest.bytes[48] = 0xff;
     guest.bytes[49] = 0xff;
@@ -287,7 +287,7 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 48, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
 
-    amominW(
+    await amominW(
       registers,
       guest,
       {
@@ -307,7 +307,7 @@ describe('amo', () => {
     guest.bytes[49] = 0xff;
     guest.bytes[50] = 0xff;
     guest.bytes[51] = 0x7f;
-    amominuW(
+    await amominuW(
       registers,
       guest,
       {
@@ -320,7 +320,7 @@ describe('amo', () => {
     assert.deepEqual(guest.bytes.slice(48, 52), Uint8Array.of(0xff, 0xff, 0xff, 0x7f));
   });
 
-  it('amoadd.d wraps at 64 bits and advances pc', () => {
+  it('amoadd.d wraps at 64 bits and advances pc', async () => {
     const guest = testMemory(256n);
     for (let index = 0; index < 8; index += 1) {
       guest.bytes[64 + index] = 0xff;
@@ -329,7 +329,7 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 64, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
 
-    amoaddD(
+    await amoaddD(
       registers,
       guest,
       {
@@ -347,7 +347,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('amoxor/amoand/amoor/amomax/amomaxu.w pin the remaining AMO ops', () => {
+  it('amoxor/amoand/amoor/amomax/amomaxu.w pin the remaining AMO ops', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     const args = {
@@ -362,7 +362,7 @@ describe('amo', () => {
     guest.bytes[82] = 0x00;
     guest.bytes[83] = 0x00;
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
-    amoxorW(registers, guest, args, FOUR_BYTES);
+    await amoxorW(registers, guest, args, FOUR_BYTES);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 3),
       signedNumberToBytes(new Uint8Array(8), 0xf0, 32)
@@ -372,12 +372,12 @@ describe('amo', () => {
 
     guest.bytes[80] = 0xf0;
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
-    amoandW(registers, guest, args, FOUR_BYTES);
+    await amoandW(registers, guest, args, FOUR_BYTES);
     assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0x00, 0, 0, 0));
 
     guest.bytes[80] = 0xf0;
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
-    amoorW(registers, guest, args, FOUR_BYTES);
+    await amoorW(registers, guest, args, FOUR_BYTES);
     assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0xff, 0, 0, 0));
 
     // mem = 0x7fffffff, rs2 = -1 → signed max keeps mem; unsigned max stores -1.
@@ -386,7 +386,7 @@ describe('amo', () => {
     guest.bytes[82] = 0xff;
     guest.bytes[83] = 0x7f;
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
-    amomaxW(registers, guest, args, FOUR_BYTES);
+    await amomaxW(registers, guest, args, FOUR_BYTES);
     assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0xff, 0xff, 0xff, 0x7f));
 
     guest.bytes[80] = 0xff;
@@ -394,12 +394,12 @@ describe('amo', () => {
     guest.bytes[82] = 0xff;
     guest.bytes[83] = 0x7f;
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), -1, 32));
-    amomaxuW(registers, guest, args, FOUR_BYTES);
+    await amomaxuW(registers, guest, args, FOUR_BYTES);
     assert.deepEqual(guest.bytes.slice(80, 84), Uint8Array.of(0xff, 0xff, 0xff, 0xff));
     assert.equal(bytesToNumber(readProgramCounter(registers)), 20);
   });
 
-  it('misaligned lr.w traps with cause 4 and does not arm a reservation', () => {
+  it('misaligned lr.w traps with cause 4 and does not arm a reservation', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -410,7 +410,7 @@ describe('amo', () => {
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 2, 32));
 
-    lrW(
+    await lrW(
       registers,
       guest,
       {
@@ -439,7 +439,7 @@ describe('amo', () => {
       2,
       signedNumberToBytes(new Uint8Array(8), 0x11111111, 32)
     );
-    scW(
+    await scW(
       registers,
       guest,
       {
@@ -456,7 +456,7 @@ describe('amo', () => {
     assert.deepEqual(guest.bytes.slice(16, 20), new Uint8Array(4));
   });
 
-  it('misaligned amoadd.w and sc.d trap with cause 6 and leave memory unchanged', () => {
+  it('misaligned amoadd.w and sc.d trap with cause 6 and leave memory unchanged', async () => {
     const guest = testMemory(256n);
     guest.bytes[2] = 0xaa;
     const registers = createRegisters();
@@ -468,7 +468,7 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 2, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
 
-    amoaddW(
+    await amoaddW(
       registers,
       guest,
       {
@@ -498,7 +498,7 @@ describe('amo', () => {
     );
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 4, 32));
 
-    scD(
+    await scD(
       registers,
       guest,
       {
@@ -516,7 +516,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x3000);
   });
 
-  it('aligned lr.w and lr.d to unmapped holes trap with cause 5 without arming a reservation', () => {
+  it('aligned lr.w and lr.d to unmapped holes trap with cause 5 without arming a reservation', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -532,7 +532,7 @@ describe('amo', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0x1_0000_0000n)
     );
 
-    lrW(
+    await lrW(
       registers,
       guest,
       {
@@ -560,7 +560,7 @@ describe('amo', () => {
       2,
       signedNumberToBytes(new Uint8Array(8), 0x22222222, 32)
     );
-    scW(
+    await scW(
       registers,
       guest,
       {
@@ -587,7 +587,7 @@ describe('amo', () => {
     writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 0x800n));
     writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 0xdead, 32));
 
-    lrD(
+    await lrD(
       registers,
       guest,
       {
@@ -613,7 +613,7 @@ describe('amo', () => {
     );
   });
 
-  it('aligned amoadd.w to UART MMIO traps with cause 7', () => {
+  it('aligned amoadd.w to UART MMIO traps with cause 7', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -628,7 +628,7 @@ describe('amo', () => {
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 1, 32));
 
-    amoaddW(
+    await amoaddW(
       registers,
       guest,
       {
@@ -646,7 +646,7 @@ describe('amo', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
   });
 
-  it('aligned sc.d past the end of DRAM traps with cause 7', () => {
+  it('aligned sc.d past the end of DRAM traps with cause 7', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -657,7 +657,7 @@ describe('amo', () => {
     // Aligned, but the last byte falls past the 256-byte RAM window.
     writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 0x100n));
 
-    scD(
+    await scD(
       registers,
       guest,
       {

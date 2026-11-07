@@ -17,6 +17,8 @@
 /* eslint-disable complexity, sonarjs/cognitive-complexity, max-lines --
    intentional nested switch/case decode; RVC encoding is dense by nature. */
 
+/* eslint-disable @typescript-eslint/require-await -- all decoded instruction thunks return promises */
+
 import { signedNumberToBytes } from '#utils/bytes';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
@@ -39,7 +41,7 @@ type ExecuteThunk = (
   registers: Registers,
   memory: Memory,
   instructionByteLength: ReadonlyUint8Array
-) => void | Promise<void>;
+) => Promise<void>;
 
 const STACK_POINTER = 2;
 const RETURN_ADDRESS = 1;
@@ -50,12 +52,12 @@ const compactRegister = (encoded: number): number => 8 + (encoded & 0x7);
 
 const illegalC =
   (halfword: number): ExecuteThunk =>
-  (registers, _memory, _instructionByteLength) => {
+  async (registers, _memory, _instructionByteLength) => {
     enterTrap(registers, CAUSE_ILLEGAL_INSTRUCTION, instructionWordTrapValue(halfword & 0xffff));
   };
 
 /** HINT / NOP: architecturally no register side effects; advance by instruction length. */
-const cNop: ExecuteThunk = (registers, _memory, instructionByteLength) => {
+const cNop: ExecuteThunk = async (registers, _memory, instructionByteLength) => {
   advanceProgramCounter(registers, instructionByteLength);
 };
 
@@ -186,7 +188,7 @@ const decodeQuadrant0 = (halfword: number): ExecuteThunk => {
       }
       const destinationRegister = rdPrimeOf(halfword);
       const immediate = signedNumberToBytes(new Uint8Array(8), nzuimm, 32);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         addi(
           registers,
           memory,
@@ -203,7 +205,7 @@ const decodeQuadrant0 = (halfword: number): ExecuteThunk => {
       const destinationRegister = rdPrimeOf(halfword);
       const sourceRegister1 = rs1PrimeOf(halfword);
       const immediate = decodeLwSwOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         lw(
           registers,
           memory,
@@ -216,7 +218,7 @@ const decodeQuadrant0 = (halfword: number): ExecuteThunk => {
       const destinationRegister = rdPrimeOf(halfword);
       const sourceRegister1 = rs1PrimeOf(halfword);
       const immediate = decodeLdSdOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         ld(
           registers,
           memory,
@@ -229,7 +231,7 @@ const decodeQuadrant0 = (halfword: number): ExecuteThunk => {
       const sourceRegister1 = rs1PrimeOf(halfword);
       const sourceRegister2 = rs2PrimeOf(halfword);
       const immediate = decodeLwSwOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         sw(
           registers,
           memory,
@@ -242,7 +244,7 @@ const decodeQuadrant0 = (halfword: number): ExecuteThunk => {
       const sourceRegister1 = rs1PrimeOf(halfword);
       const sourceRegister2 = rs2PrimeOf(halfword);
       const immediate = decodeLdSdOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         sd(
           registers,
           memory,
@@ -265,7 +267,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
     if (shiftAmount === 0) {
       return cNop;
     }
-    return (registers, memory, instructionByteLength) =>
+    return async (registers, memory, instructionByteLength) =>
       srli(
         registers,
         memory,
@@ -283,7 +285,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
     if (shiftAmount === 0) {
       return cNop;
     }
-    return (registers, memory, instructionByteLength) =>
+    return async (registers, memory, instructionByteLength) =>
       srai(
         registers,
         memory,
@@ -298,7 +300,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
   if (funct2High === 0b10) {
     // c.andi → andi rd', rd', imm
     const immediate = decodeCiImm6(halfword);
-    return (registers, memory, instructionByteLength) =>
+    return async (registers, memory, instructionByteLength) =>
       andi(
         registers,
         memory,
@@ -318,7 +320,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
   if (bit12 === 0) {
     switch (funct2Low) {
       case 0b00:
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           sub(
             registers,
             memory,
@@ -330,7 +332,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
             instructionByteLength
           );
       case 0b01:
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           xor(
             registers,
             memory,
@@ -342,7 +344,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
             instructionByteLength
           );
       case 0b10:
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           or(
             registers,
             memory,
@@ -354,7 +356,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
             instructionByteLength
           );
       case 0b11:
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           and(
             registers,
             memory,
@@ -372,7 +374,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
   // bit12 === 1: c.subw / c.addw (RV64); other funct2 values reserved
   switch (funct2Low) {
     case 0b00:
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         subw(
           registers,
           memory,
@@ -384,7 +386,7 @@ const decodeQuadrant1Arithmetic = (halfword: number): ExecuteThunk => {
           instructionByteLength
         );
     case 0b01:
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         addw(
           registers,
           memory,
@@ -411,7 +413,7 @@ const decodeQuadrant1 = (halfword: number): ExecuteThunk => {
         // rd=x0 (any imm) or nzimm=0 (any rd): NOP or HINT
         return cNop;
       }
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         addi(
           registers,
           memory,
@@ -430,7 +432,7 @@ const decodeQuadrant1 = (halfword: number): ExecuteThunk => {
         return illegalC(halfword);
       }
       const immediate = decodeCiImm6(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         addiw(
           registers,
           memory,
@@ -449,7 +451,7 @@ const decodeQuadrant1 = (halfword: number): ExecuteThunk => {
         return cNop;
       }
       const immediate = decodeCiImm6(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         addi(
           registers,
           memory,
@@ -470,7 +472,7 @@ const decodeQuadrant1 = (halfword: number): ExecuteThunk => {
           return illegalC(halfword);
         }
         const immediate = decodeAddi16SpImmediate(halfword);
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           addi(
             registers,
             memory,
@@ -490,7 +492,7 @@ const decodeQuadrant1 = (halfword: number): ExecuteThunk => {
         return cNop;
       }
       const immediate = decodeLuiImmediate(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         lui(registers, memory, { destinationRegister: rd, immediate }, instructionByteLength);
     }
     case 0b100:
@@ -498,14 +500,14 @@ const decodeQuadrant1 = (halfword: number): ExecuteThunk => {
     case 0b101: {
       // c.j → jal x0, offset
       const immediate = decodeCjOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         jal(registers, memory, { destinationRegister: 0, immediate }, instructionByteLength);
     }
     case 0b110: {
       // c.beqz → beq rs1', x0, offset
       const sourceRegister1 = rs1PrimeOf(halfword);
       const immediate = decodeCbOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         beq(
           registers,
           memory,
@@ -521,7 +523,7 @@ const decodeQuadrant1 = (halfword: number): ExecuteThunk => {
       // c.bnez → bne rs1', x0, offset
       const sourceRegister1 = rs1PrimeOf(halfword);
       const immediate = decodeCbOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         bne(
           registers,
           memory,
@@ -547,7 +549,7 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
       if (rd === 0 || shiftAmount === 0) {
         return cNop;
       }
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         slli(
           registers,
           memory,
@@ -566,7 +568,7 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
         return illegalC(halfword);
       }
       const immediate = decodeLwSpOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         lw(
           registers,
           memory,
@@ -585,7 +587,7 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
         return illegalC(halfword);
       }
       const immediate = decodeLdSpOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         ld(
           registers,
           memory,
@@ -607,7 +609,7 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
           if (rs1 === 0) {
             return illegalC(halfword);
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             jalr(
               registers,
               memory,
@@ -623,7 +625,7 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
         if (rs1 === 0) {
           return cNop;
         }
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           add(
             registers,
             memory,
@@ -638,11 +640,11 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
       if (rs2 === 0) {
         if (rs1 === 0) {
           // c.ebreak
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             ebreak(registers, memory, instructionByteLength);
         }
         // c.jalr → jalr x1, rs1, 0
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           jalr(
             registers,
             memory,
@@ -658,7 +660,7 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
       if (rs1 === 0) {
         return cNop;
       }
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         add(
           registers,
           memory,
@@ -674,7 +676,7 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
       // c.swsp → sw rs2, offset(x2)
       const sourceRegister2 = rs2Of(halfword);
       const immediate = decodeSwSpOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         sw(
           registers,
           memory,
@@ -690,7 +692,7 @@ const decodeQuadrant2 = (halfword: number): ExecuteThunk => {
       // c.sdsp → sd rs2, offset(x2)
       const sourceRegister2 = rs2Of(halfword);
       const immediate = decodeSdSpOffset(halfword);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         sd(
           registers,
           memory,

@@ -33,19 +33,19 @@ const instructionBytes = (encoding: number): Uint8Array => {
 };
 
 describe('misc-mem', () => {
-  it('fence and fence.i decode and advance pc', () => {
+  it('fence and fence.i decode and advance pc', async () => {
     const memory = testMemory(256n);
 
     // fence: funct3=0, opcode 0x0f.
     const [fenceExecute, fenceLength] = decode(instructionBytes(0x0000000f));
     const fenceRegisters = createRegisters();
-    fenceExecute(fenceRegisters, memory, fenceLength);
+    await fenceExecute(fenceRegisters, memory, fenceLength);
     assert.equal(bytesToNumber(readProgramCounter(fenceRegisters)), 4);
 
     // fence.i.
     const [fenceIExecute, fenceILength] = decode(instructionBytes(0x0000100f));
     const fenceIRegisters = createRegisters();
-    fenceIExecute(fenceIRegisters, memory, fenceILength);
+    await fenceIExecute(fenceIRegisters, memory, fenceILength);
     assert.equal(bytesToNumber(readProgramCounter(fenceIRegisters)), 4);
 
     // Direct fence.i call also advances pc.

@@ -23,11 +23,8 @@
  *   - **slot** — host SAB record for one hart (valid / width / LR address). Indexed by
  *     `mhartid`; not a guest address.
  *
- * Updates run under a SAB spinlock so clearing other harts / arming a slot is
- * transactional. A successful `tryTakeReservation` keeps the reservation held and
- * retains the monitor lock until the matching `storeBytes` / `atomicStoreBytes`
- * releases it (SC store window). Plain stores and AMO writes also hold the lock
- * across invalidate and the RAM write so a remote hart cannot LR in the gap.
+ * Updates run under a SAB lock. SC checks and stores in one synchronous critical
+ * section; plain stores and AMOs hold the lock across invalidation and the write.
  */
 
 import { bytesToBigInt, bytesToBigUint64Array, bytesToInt32Array } from '#utils/bytes';
@@ -63,12 +60,6 @@ const RESERVATION_HOST_BYTE_LENGTH = BigInt(
   RESERVATION_LOCK_BYTES + RESERVATION_LOCK_PAD + RESERVATION_HART_COUNT * RESERVATION_SLOT_SIZE
 );
 
-/** Per-worker reentry depth for the monitor lock (SC holds across tryTake→store). */
-let monitorLockDepth = 0;
-
-/** True when this worker's successful tryTake still holds the lock for the SC store. */
-let scMonitorHeld = false;
-
 const reservationRegion = (memory: Memory) => {
   const region = memory.regions.get(RESERVATION_REGION_ID);
   if (region === undefined) {
@@ -82,8 +73,8 @@ const reservationRegion = (memory: Memory) => {
   return region;
 };
 
-const reservationLockInt32 = (memory: Memory): Int32Array =>
-  bytesToInt32Array(memory.bytes, bigIntAsNumber(reservationRegion(memory).hostIndex));
+const reservationLockIndex = (memory: Memory): number =>
+  bigIntAsNumber(reservationRegion(memory).hostIndex);
 
 /** Guest-physical base of the reservation line that contains `guestAddress`. */
 const reservationLineBase = (guestAddress: bigint): bigint =>
@@ -108,55 +99,6 @@ const reservationSlotAddressUint64 = (memory: Memory, hartId: number): BigUint64
 
 const isValidHartId = (hartId: number): boolean =>
   Number.isInteger(hartId) && hartId >= 0 && hartId < RESERVATION_HART_COUNT;
-
-const acquireMonitorLock = (memory: Memory): void => {
-  if (monitorLockDepth > 0) {
-    monitorLockDepth += 1;
-    return;
-  }
-  const lock = reservationLockInt32(memory);
-  for (;;) {
-    if (Atomics.compareExchange(lock, 0, 0, 1) === 0) {
-      monitorLockDepth = 1;
-      return;
-    }
-    Atomics.wait(lock, 0, 1);
-  }
-};
-
-const releaseMonitorLock = (memory: Memory): void => {
-  if (monitorLockDepth <= 0) {
-    return;
-  }
-  monitorLockDepth -= 1;
-  if (monitorLockDepth > 0) {
-    return;
-  }
-  const lock = reservationLockInt32(memory);
-  Atomics.store(lock, 0, 0);
-  Atomics.notify(lock, 0, 1);
-};
-
-/**
- * Release a monitor lock held across a successful SC `tryTakeReservation`.
- * Called at the end of `storeBytes` / `atomicStoreBytes`.
- */
-const releaseScMonitorIfHeld = (memory: Memory): void => {
-  if (!scMonitorHeld) {
-    return;
-  }
-  scMonitorHeld = false;
-  releaseMonitorLock(memory);
-};
-
-const withMonitorLock = <T>(memory: Memory, run: () => T): T => {
-  acquireMonitorLock(memory);
-  try {
-    return run();
-  } finally {
-    releaseMonitorLock(memory);
-  }
-};
 
 /** Clear hart `hartId`'s monitor slot (caller must hold the monitor lock). */
 const clearReservationLocked = (memory: Memory, hartId: number): void => {
@@ -215,10 +157,7 @@ const setReservationLocked = (
   Atomics.store(reservationSlotValidInt32(memory, hartId), 0, 1);
 };
 
-/**
- * If this hart's slot still matches, keep the reservation held and retain the monitor
- * lock until `releaseScMonitorIfHeld` (SC store path). Otherwise clear and return false.
- */
+/** Consume the hart's reservation on every SC attempt; caller holds the monitor. */
 const tryTakeReservation = (
   memory: Memory,
   hartId: number,
@@ -228,15 +167,9 @@ const tryTakeReservation = (
   if (!isValidHartId(hartId)) {
     return false;
   }
-  acquireMonitorLock(memory);
-  if (!reservationHoldsLocked(memory, hartId, address, byteLength)) {
-    clearReservationLocked(memory, hartId);
-    releaseMonitorLock(memory);
-    return false;
-  }
-  // Keep valid=1 across the store; hold the lock so other harts cannot invalidate mid-window.
-  scMonitorHeld = true;
-  return true;
+  const matches = reservationHoldsLocked(memory, hartId, address, byteLength);
+  clearReservationLocked(memory, hartId);
+  return matches;
 };
 
 /**
@@ -269,8 +202,7 @@ export {
   RESERVATION_HOST_BYTE_LENGTH,
   RESERVATION_REGION_ID,
   invalidateOverlappingReservationsLocked,
-  releaseScMonitorIfHeld,
+  reservationLockIndex,
   setReservationLocked,
   tryTakeReservation,
-  withMonitorLock,
 };

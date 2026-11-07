@@ -54,9 +54,9 @@ import {
   isPlicMachineExternalPending,
   isPlicSupervisorExternalPending,
   PLIC_SOURCE_UART,
-  setPlicSourcePending,
 } from '#emulator/plic';
 import createTestMemory from '#test/guest-memory';
+import setPlicSourcePending from '#test/set-plic-source-pending';
 import type { ReadonlyUint8Array } from '#types';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -95,12 +95,12 @@ const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as Re
 const interruptCauseBytes = (code: number): Uint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), (1n << 63n) | BigInt(code));
 
-const plicStore = (
+const plicStore = async (
   memory: ReturnType<typeof createTestMemory>,
   offset: bigint,
   value: number
-): void => {
-  storeBytes({
+): Promise<void> => {
+  await storeBytes({
     memory,
     address: unsignedBigIntToBytes(new Uint8Array(8), 0x0c00_0000n + offset),
     source: unsignedBigIntToBytes(new Uint8Array(8), BigInt(value >>> 0)),
@@ -109,21 +109,25 @@ const plicStore = (
 };
 
 /** Priority > 0, S-context enable for UART, threshold 0 — leaves MEIP clear. */
-const enablePlicSupervisorUart = (memory: ReturnType<typeof createTestMemory>): void => {
-  plicStore(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
-  plicStore(memory, 0x2080n, 1 << PLIC_SOURCE_UART);
-  plicStore(memory, 0x201000n, 0);
+const enablePlicSupervisorUart = async (
+  memory: ReturnType<typeof createTestMemory>
+): Promise<void> => {
+  await plicStore(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+  await plicStore(memory, 0x2080n, 1 << PLIC_SOURCE_UART);
+  await plicStore(memory, 0x201000n, 0);
 };
 
 /** Priority > 0, M-context enable for UART, threshold 0. */
-const enablePlicMachineUart = (memory: ReturnType<typeof createTestMemory>): void => {
-  plicStore(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
-  plicStore(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
-  plicStore(memory, 0x200000n, 0);
+const enablePlicMachineUart = async (
+  memory: ReturnType<typeof createTestMemory>
+): Promise<void> => {
+  await plicStore(memory, BigInt(PLIC_SOURCE_UART * 4), 1);
+  await plicStore(memory, 0x2000n, 1 << PLIC_SOURCE_UART);
+  await plicStore(memory, 0x200000n, 0);
 };
 
 describe('device wire → mip → takeInterruptIfAny', () => {
-  it('takes a machine software interrupt after CLINT msip asserts', () => {
+  it('takes a machine software interrupt after CLINT msip asserts', async () => {
     const registers = createRegisters();
     const memory = createTestMemory(256n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
@@ -143,7 +147,7 @@ describe('device wire → mip → takeInterruptIfAny', () => {
       signedNumberToBytes(new Uint8Array(8), MIE_MSIE, 32)
     );
 
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MSIP,
       source: new Uint8Array([1, 0, 0, 0]),
@@ -160,7 +164,7 @@ describe('device wire → mip → takeInterruptIfAny', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
   });
 
-  it('takes a machine timer interrupt after mtime catches mtimecmp', () => {
+  it('takes a machine timer interrupt after mtime catches mtimecmp', async () => {
     const registers = createRegisters();
     const memory = createTestMemory(256n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
@@ -180,13 +184,13 @@ describe('device wire → mip → takeInterruptIfAny', () => {
       signedNumberToBytes(new Uint8Array(8), MIE_MTIE, 32)
     );
 
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MTIMECMP,
       source: unsignedBigIntToBytes(new Uint8Array(8), 1n),
       byteLength: 8,
     });
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MTIME,
       source: unsignedBigIntToBytes(new Uint8Array(8), 1n),
@@ -203,7 +207,7 @@ describe('device wire → mip → takeInterruptIfAny', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
   });
 
-  it('takes a machine external interrupt after PLIC UART pending is enabled', () => {
+  it('takes a machine external interrupt after PLIC UART pending is enabled', async () => {
     const registers = createRegisters();
     const memory = createTestMemory(256n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
@@ -223,8 +227,8 @@ describe('device wire → mip → takeInterruptIfAny', () => {
       signedNumberToBytes(new Uint8Array(8), MIE_MEIE, 32)
     );
 
-    enablePlicMachineUart(memory);
-    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    await enablePlicMachineUart(memory);
+    await setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
     assert.equal(isPlicMachineExternalPending(memory), true);
 
     sampleDevicePending(registers, memory);
@@ -236,7 +240,7 @@ describe('device wire → mip → takeInterruptIfAny', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x4000);
   });
 
-  it('takes a supervisor external interrupt after PLIC S-context UART via mideleg', () => {
+  it('takes a supervisor external interrupt after PLIC S-context UART via mideleg', async () => {
     const registers = createRegisters();
     const memory = createTestMemory(256n);
     setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
@@ -263,8 +267,8 @@ describe('device wire → mip → takeInterruptIfAny', () => {
     );
 
     // S-context only — enabling M as well would assert MEIP and take MEI first in S.
-    enablePlicSupervisorUart(memory);
-    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    await enablePlicSupervisorUart(memory);
+    await setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
     assert.equal(isPlicSupervisorExternalPending(memory), true);
     assert.equal(isPlicMachineExternalPending(memory), false);
 
@@ -277,7 +281,7 @@ describe('device wire → mip → takeInterruptIfAny', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x5000);
   });
 
-  it('takes a supervisor timer interrupt after the Sstc compare expires', () => {
+  it('takes a supervisor timer interrupt after the Sstc compare expires', async () => {
     const registers = createRegisters();
     const memory = createTestMemory(256n);
     setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
@@ -311,7 +315,7 @@ describe('device wire → mip → takeInterruptIfAny', () => {
       STIMECMP,
       unsignedBigIntToBytes(new Uint8Array(8), 1n)
     );
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MTIME,
       source: unsignedBigIntToBytes(new Uint8Array(8), 1n),
@@ -340,7 +344,7 @@ describe('wfi irq-level notify', () => {
 
     const waiting = waitIrqLevel(memory, fromLevel);
     await delay(20);
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MSIP,
       source: new Uint8Array([1, 0, 0, 0]),
@@ -362,7 +366,7 @@ describe('wfi irq-level notify', () => {
 
     const done = wfi(registers, memory, FOUR_BYTES);
     await delay(20);
-    storeBytes({
+    await storeBytes({
       memory,
       address: CLINT_MSIP,
       source: new Uint8Array([1, 0, 0, 0]),
@@ -381,12 +385,12 @@ describe('wfi irq-level notify', () => {
       MIE,
       signedNumberToBytes(new Uint8Array(8), MIE_MEIE, 32)
     );
-    enablePlicMachineUart(memory);
+    await enablePlicMachineUart(memory);
     assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_MEIP, 0);
 
     const done = wfi(registers, memory, FOUR_BYTES);
     await delay(20);
-    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    await setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
     await done;
     assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_MEIP, IRQ_LEVEL_MEIP);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);
@@ -401,12 +405,12 @@ describe('wfi irq-level notify', () => {
       MIE,
       signedNumberToBytes(new Uint8Array(8), MIE_SEIE, 32)
     );
-    enablePlicSupervisorUart(memory);
+    await enablePlicSupervisorUart(memory);
     assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_SEIP, 0);
 
     const done = wfi(registers, memory, FOUR_BYTES);
     await delay(20);
-    setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
+    await setPlicSourcePending(memory, PLIC_SOURCE_UART, true);
     await done;
     assert.equal(loadIrqLevel(memory) & IRQ_LEVEL_SEIP, IRQ_LEVEL_SEIP);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x84);

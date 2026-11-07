@@ -78,8 +78,11 @@ const STIP = 1 << 5;
 const CLINT_MTIME = unsignedBigIntToBytes(new Uint8Array(8), 0x0200_bff8n) as ReadonlyUint8Array;
 
 /** Seed CLINT `mtime` with a fixed value (no timebase worker runs in unit tests). */
-const seedClintMtime = (memory: ReturnType<typeof testMemory>, mtime: bigint): void => {
-  storeBytes({
+const seedClintMtime = async (
+  memory: ReturnType<typeof testMemory>,
+  mtime: bigint
+): Promise<void> => {
+  await storeBytes({
     memory,
     address: CLINT_MTIME,
     source: unsignedBigIntToBytes(new Uint8Array(8), mtime),
@@ -551,7 +554,7 @@ describe('registers', () => {
     assert.equal(isControlAndStatusRegisterAccessAllowed(registers, MENVCFG, false), false);
   });
 
-  it('M-mode stimecmp is legal while menvcfg.STCE is clear', () => {
+  it('M-mode stimecmp is legal while menvcfg.STCE is clear', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
 
@@ -569,7 +572,7 @@ describe('registers', () => {
     );
 
     // STIP stays software-owned: publishing the compare must not drive it from the mirror.
-    seedClintMtime(memory, 0x2000n);
+    await seedClintMtime(memory, 0x2000n);
     publishAndSampleSupervisorTimer(registers, memory);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MIP),
@@ -617,11 +620,11 @@ describe('registers', () => {
     assert.equal(isControlAndStatusRegisterAccessAllowed(registers, STIMECMP, false), true);
   });
 
-  it('stimecmp compare sets and clears mip.STIP', () => {
+  it('stimecmp compare sets and clears mip.STIP', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
-    seedClintMtime(memory, 500n);
+    await seedClintMtime(memory, 500n);
 
     writeControlAndStatusRegister(
       registers,
@@ -701,11 +704,11 @@ describe('registers', () => {
     );
   });
 
-  it('mip and sip STIP are read-only while menvcfg.STCE is set', () => {
+  it('mip and sip STIP are read-only while menvcfg.STCE is set', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
-    seedClintMtime(memory, 10n);
+    await seedClintMtime(memory, 10n);
     writeControlAndStatusRegister(
       registers,
       STIMECMP,
@@ -730,11 +733,11 @@ describe('registers', () => {
     );
   });
 
-  it('mip and sip STIP writes are dropped while the compare is not pending', () => {
+  it('mip and sip STIP writes are dropped while the compare is not pending', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
-    seedClintMtime(memory, 10n);
+    await seedClintMtime(memory, 10n);
     // Compare above `mtime`: STIP is not pending, so a surviving write would be visible.
     writeControlAndStatusRegister(
       registers,
@@ -762,11 +765,11 @@ describe('registers', () => {
     );
   });
 
-  it('clearing menvcfg.STCE clears a hardware STIP', () => {
+  it('clearing menvcfg.STCE clears a hardware STIP', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     writeControlAndStatusRegister(registers, MENVCFG, MENVCFG_STCE);
-    seedClintMtime(memory, 10n);
+    await seedClintMtime(memory, 10n);
     writeControlAndStatusRegister(
       registers,
       STIMECMP,

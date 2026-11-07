@@ -69,19 +69,19 @@ const rvc = (fields: {
 };
 
 describe('RV64C decode + execute', () => {
-  it('c.nop advances pc by 2', () => {
+  it('c.nop advances pc by 2', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
-    runDecoded(compressedBytes(0x0001), registers, memory);
+    await runDecoded(compressedBytes(0x0001), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x102);
   });
 
-  it('c.li writes rd and advances pc by 2', () => {
+  it('c.li writes rd and advances pc by 2', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     // c.li x1, 1 → 0x4085
-    runDecoded(compressedBytes(0x4085), registers, memory);
+    await runDecoded(compressedBytes(0x4085), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 1, 32)
@@ -89,12 +89,12 @@ describe('RV64C decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 2);
   });
 
-  it('c.addi adds an immediate into rd', () => {
+  it('c.addi adds an immediate into rd', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 10, 32));
     // c.addi x1, 5 → funct3=000, rd=1, imm=5, q=01 → 0x0095
-    runDecoded(compressedBytes(0x0095), registers, memory);
+    await runDecoded(compressedBytes(0x0095), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 15, 32)
@@ -102,32 +102,32 @@ describe('RV64C decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 2);
   });
 
-  it('c.mv copies rs2 into rd', () => {
+  it('c.mv copies rs2 into rd', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 99, 32));
     // c.mv x1, x2 → 0x808a
-    runDecoded(compressedBytes(0x808a), registers, memory);
+    await runDecoded(compressedBytes(0x808a), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 99, 32)
     );
   });
 
-  it('c.add adds rs2 into rd', () => {
+  it('c.add adds rs2 into rd', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 3, 32));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 4, 32));
     // c.add x1, x2 → bit12=1, rs1=1, rs2=2, funct3=100, q=10 → 0x908a
-    runDecoded(compressedBytes(0x908a), registers, memory);
+    await runDecoded(compressedBytes(0x908a), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 7, 32)
     );
   });
 
-  it('c.lw / c.sw round-trip through compact registers', () => {
+  it('c.lw / c.sw round-trip through compact registers', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     // x8 base = 0x40; store x9 (=0x12345678) at 0(x8) via c.sw, then c.lw into x10
@@ -138,49 +138,49 @@ describe('RV64C decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x12345678, 32)
     );
     // c.sw rs2'=x9 (1), rs1'=x8 (0), offset=0
-    runDecoded(compressedBytes(0xc004), registers, memory);
+    await runDecoded(compressedBytes(0xc004), registers, memory);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
     // c.lw rd'=x10 (2), rs1'=x8 (0), offset=0
-    runDecoded(compressedBytes(0x4008), registers, memory);
+    await runDecoded(compressedBytes(0x4008), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 10),
       signedNumberToBytes(new Uint8Array(8), 0x12345678, 32)
     );
   });
 
-  it('c.ld / c.sd round-trip a doubleword', () => {
+  it('c.ld / c.sd round-trip a doubleword', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
     writeGeneralPurposeRegister(registers, 9, signedNumberToBytes(new Uint8Array(8), -1, 32));
     // c.sd rs2'=x9, rs1'=x8, offset=0 → funct3=111, q=00 → 0xe004
-    runDecoded(compressedBytes(0xe004), registers, memory);
+    await runDecoded(compressedBytes(0xe004), registers, memory);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
     // c.ld rd'=x10, rs1'=x8, offset=0 → funct3=011 → 0x6008
-    runDecoded(compressedBytes(0x6008), registers, memory);
+    await runDecoded(compressedBytes(0x6008), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 10),
       signedNumberToBytes(new Uint8Array(8), -1, 32)
     );
   });
 
-  it('c.lwsp / c.swsp use x2 as base', () => {
+  it('c.lwsp / c.swsp use x2 as base', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x20, 32));
     writeGeneralPurposeRegister(registers, 5, signedNumberToBytes(new Uint8Array(8), 0x55, 32));
     // c.swsp x5, 0
-    runDecoded(compressedBytes(0xc016), registers, memory);
+    await runDecoded(compressedBytes(0xc016), registers, memory);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
     // c.lwsp x6, 0
-    runDecoded(compressedBytes(0x4302), registers, memory);
+    await runDecoded(compressedBytes(0x4302), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 6),
       signedNumberToBytes(new Uint8Array(8), 0x55, 32)
     );
   });
 
-  it('c.ldsp / c.sdsp use x2 as base with a doubleword offset', () => {
+  it('c.ldsp / c.sdsp use x2 as base with a doubleword offset', async () => {
     const registers = createRegisters();
     const memory = testMemory(256n);
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x20, 32));
@@ -190,14 +190,14 @@ describe('RV64C decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x11223344, 32)
     );
     // c.sdsp x5, 8 → offset=8
-    runDecoded(compressedBytes(0xe416), registers, memory);
+    await runDecoded(compressedBytes(0xe416), registers, memory);
     assert.deepEqual(
       memory.bytes.subarray(0x28, 0x30),
       Uint8Array.of(0x44, 0x33, 0x22, 0x11, 0, 0, 0, 0)
     );
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0, 32));
     // c.ldsp x6, 8
-    runDecoded(compressedBytes(0x6322), registers, memory);
+    await runDecoded(compressedBytes(0x6322), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 6),
       signedNumberToBytes(new Uint8Array(8), 0x11223344, 32)
@@ -205,9 +205,9 @@ describe('RV64C decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 2);
   });
 
-  it('c.lwsp / c.ldsp with rd=x0 and c.jr x0 are illegal', () => {
+  it('c.lwsp / c.ldsp with rd=x0 and c.jr x0 are illegal', async () => {
     const memory = testMemory(64n);
-    const expectIllegal = (halfword: number): void => {
+    const expectIllegal = async (halfword: number): Promise<void> => {
       const registers = createRegisters();
       writeControlAndStatusRegister(
         registers,
@@ -215,7 +215,7 @@ describe('RV64C decode + execute', () => {
         signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
       );
       setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
-      runDecoded(compressedBytes(halfword), registers, memory);
+      await runDecoded(compressedBytes(halfword), registers, memory);
       assert.deepEqual(
         snapshotControlAndStatusRegister(registers, 0x342),
         signedNumberToBytes(new Uint8Array(8), 2, 32)
@@ -223,14 +223,14 @@ describe('RV64C decode + execute', () => {
       assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
     };
     // c.lwsp x0, 0
-    expectIllegal(0x4002);
+    await expectIllegal(0x4002);
     // c.ldsp x0, 0
-    expectIllegal(0x6002);
+    await expectIllegal(0x6002);
     // c.jr x0 (rs1=x0 reserved)
-    expectIllegal(0x8002);
+    await expectIllegal(0x8002);
   });
 
-  it('c.j jumps with a PC-relative offset', () => {
+  it('c.j jumps with a PC-relative offset', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
@@ -239,17 +239,17 @@ describe('RV64C decode + execute', () => {
     // imm[3:1] = inst[5:3], for offset 8 = 0b1000 → imm[3:1]=100, imm[5]=0,...
     // inst[5:3]=100 = 4<<3 = 0x20? bits 5:3 = 100 binary = 4, so (4<<3)=0x20 in halfword
     // 0xa000 | 0x20 | 0x1 = 0xa021
-    runDecoded(compressedBytes(0xa021), registers, memory);
+    await runDecoded(compressedBytes(0xa021), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x108);
   });
 
-  it('c.jr jumps to rs1 without linking', () => {
+  it('c.jr jumps to rs1 without linking', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 5, signedNumberToBytes(new Uint8Array(8), 0x200, 32));
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     // c.jr x5
-    runDecoded(compressedBytes(0x8282), registers, memory);
+    await runDecoded(compressedBytes(0x8282), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x200);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
@@ -257,13 +257,13 @@ describe('RV64C decode + execute', () => {
     );
   });
 
-  it('c.jalr links pc+2 into x1', () => {
+  it('c.jalr links pc+2 into x1', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 5, signedNumberToBytes(new Uint8Array(8), 0x200, 32));
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
     // c.jalr x5
-    runDecoded(compressedBytes(0x9282), registers, memory);
+    await runDecoded(compressedBytes(0x9282), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x200);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
@@ -271,34 +271,34 @@ describe('RV64C decode + execute', () => {
     );
   });
 
-  it('c.beqz / c.bnez take and fall through', () => {
+  it('c.beqz / c.bnez take and fall through', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 0, 32));
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
     // c.beqz x8, +8 (offset bit3 → inst[11:10]=01) → 0xc401
-    runDecoded(compressedBytes(0xc401), registers, memory);
+    await runDecoded(compressedBytes(0xc401), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x108);
 
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 1, 32));
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
-    runDecoded(compressedBytes(0xc401), registers, memory);
+    await runDecoded(compressedBytes(0xc401), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x102);
 
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
     // c.bnez x8, +8 → 0xe401
-    runDecoded(compressedBytes(0xe401), registers, memory);
+    await runDecoded(compressedBytes(0xe401), registers, memory);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x108);
   });
 
-  it('c.sub / c.and / c.or / c.xor on compact registers', () => {
+  it('c.sub / c.and / c.or / c.xor on compact registers', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 0xf0, 32));
     writeGeneralPurposeRegister(registers, 9, signedNumberToBytes(new Uint8Array(8), 0x0f, 32));
     // c.and x8, x9 → funct3=100, funct2High=11, bit12=0, funct2Low=11, rd'=0, rs2'=1
     // 100 0 11 000 11 001 01 = 0x8c65
-    runDecoded(compressedBytes(0x8c65), registers, memory);
+    await runDecoded(compressedBytes(0x8c65), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), 0x00, 32)
@@ -306,7 +306,7 @@ describe('RV64C decode + execute', () => {
 
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 0xf0, 32));
     // c.or x8, x9 → funct2Low=10 → 0x8c45
-    runDecoded(compressedBytes(0x8c45), registers, memory);
+    await runDecoded(compressedBytes(0x8c45), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), 0xff, 32)
@@ -314,7 +314,7 @@ describe('RV64C decode + execute', () => {
 
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 0xf0, 32));
     // c.xor x8, x9 → funct2Low=01 → 0x8c25
-    runDecoded(compressedBytes(0x8c25), registers, memory);
+    await runDecoded(compressedBytes(0x8c25), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), 0xff, 32)
@@ -323,14 +323,14 @@ describe('RV64C decode + execute', () => {
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 10, 32));
     writeGeneralPurposeRegister(registers, 9, signedNumberToBytes(new Uint8Array(8), 3, 32));
     // c.sub x8, x9 → funct2Low=00 → 0x8c05
-    runDecoded(compressedBytes(0x8c05), registers, memory);
+    await runDecoded(compressedBytes(0x8c05), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), 7, 32)
     );
   });
 
-  it('c.addiw / c.addw / c.subw operate on 32-bit values', () => {
+  it('c.addiw / c.addw / c.subw operate on 32-bit values', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(
@@ -339,7 +339,7 @@ describe('RV64C decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x7fffffff, 32)
     );
     // c.addiw x1, 1 → funct3=001, rd=1, imm=1, q=01 → 0x2085
-    runDecoded(compressedBytes(0x2085), registers, memory);
+    await runDecoded(compressedBytes(0x2085), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), -0x80000000, 32)
@@ -348,7 +348,7 @@ describe('RV64C decode + execute', () => {
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 5, 32));
     writeGeneralPurposeRegister(registers, 9, signedNumberToBytes(new Uint8Array(8), 3, 32));
     // c.addw x8, x9 → bit12=1, funct2Low=01 → 0x9c25
-    runDecoded(compressedBytes(0x9c25), registers, memory);
+    await runDecoded(compressedBytes(0x9c25), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), 8, 32)
@@ -356,20 +356,20 @@ describe('RV64C decode + execute', () => {
 
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 5, 32));
     // c.subw x8, x9 → funct2Low=00 → 0x9c05
-    runDecoded(compressedBytes(0x9c05), registers, memory);
+    await runDecoded(compressedBytes(0x9c05), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), 2, 32)
     );
   });
 
-  it('c.slli / c.srli / c.srai shift compact and full registers', () => {
+  it('c.slli / c.srli / c.srai shift compact and full registers', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 1, 32));
     // c.slli x1, 3 → funct3=000, rd=1, shamt=3, q=10 → 0x00ce?
     // 000 0 00001 00011 10 = 0x008e
-    runDecoded(compressedBytes(0x008e), registers, memory);
+    await runDecoded(compressedBytes(0x008e), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 8, 32)
@@ -378,7 +378,7 @@ describe('RV64C decode + execute', () => {
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
     // c.srli x8, 4 → funct2High=00, shamt=4 → 0x8011?
     // 100 0 00 000 00100 01 = 0x8011
-    runDecoded(compressedBytes(0x8011), registers, memory);
+    await runDecoded(compressedBytes(0x8011), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), 0x08, 32)
@@ -387,14 +387,14 @@ describe('RV64C decode + execute', () => {
     writeGeneralPurposeRegister(registers, 8, signedNumberToBytes(new Uint8Array(8), -32, 32));
     // c.srai x8, 2 → funct2High=01 → 0x8409
     // 100 0 01 000 00010 01 = 0x8409
-    runDecoded(compressedBytes(0x8409), registers, memory);
+    await runDecoded(compressedBytes(0x8409), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), -8, 32)
     );
   });
 
-  it('c.addi4spn / c.addi16sp adjust the stack pointer', () => {
+  it('c.addi4spn / c.addi16sp adjust the stack pointer', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
@@ -403,7 +403,7 @@ describe('RV64C decode + execute', () => {
     // imm=16 = 0b10000 → imm[4]=1 → inst[12:11]=01?
     // imm layout: [9:6]=inst[10:7], [5:4]=inst[12:11], [3]=inst[5], [2]=inst[6]
     // For 16 = bit 4 set: inst[12:11]=01, rest 0 → 000 01 0000 000 000 00 = 0x0800
-    runDecoded(compressedBytes(0x0800), registers, memory);
+    await runDecoded(compressedBytes(0x0800), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 8),
       signedNumberToBytes(new Uint8Array(8), 0x1010, 32)
@@ -411,26 +411,26 @@ describe('RV64C decode + execute', () => {
 
     // c.addi16sp 32 → nzimm=32: imm[5]=1 → inst[2]=1
     // funct3=011, rd=x2, q=01: 011 0 00010 00001 01 = 0x6145
-    runDecoded(compressedBytes(0x6145), registers, memory);
+    await runDecoded(compressedBytes(0x6145), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 2),
       signedNumberToBytes(new Uint8Array(8), 0x1030, 32)
     );
   });
 
-  it('c.lui loads an upper immediate', () => {
+  it('c.lui loads an upper immediate', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     // c.lui x1, 1 → nzimm=1 at [16:12]: inst[6:2]=00001, bit12=0
     // funct3=011, rd=1, q=01: 011 0 00001 00001 01 = 0x6085
-    runDecoded(compressedBytes(0x6085), registers, memory);
+    await runDecoded(compressedBytes(0x6085), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), 0x1000, 32)
     );
   });
 
-  it('c.ebreak traps like ebreak', () => {
+  it('c.ebreak traps like ebreak', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeControlAndStatusRegister(
@@ -439,7 +439,7 @@ describe('RV64C decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
     );
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
-    runDecoded(compressedBytes(0x9002), registers, memory);
+    await runDecoded(compressedBytes(0x9002), registers, memory);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
       signedNumberToBytes(new Uint8Array(8), 3, 32)
@@ -447,7 +447,7 @@ describe('RV64C decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
   });
 
-  it('all-zero halfword and reserved encodings trap as illegal', () => {
+  it('all-zero halfword and reserved encodings trap as illegal', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeControlAndStatusRegister(
@@ -456,7 +456,7 @@ describe('RV64C decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
     );
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
-    runDecoded(compressedBytes(0x0000), registers, memory);
+    await runDecoded(compressedBytes(0x0000), registers, memory);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
       signedNumberToBytes(new Uint8Array(8), 2, 32)
@@ -471,7 +471,7 @@ describe('RV64C decode + execute', () => {
       signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
     );
     // c.fld-looking encoding (quadrant 0, funct3=001) without F → illegal
-    runDecoded(
+    await runDecoded(
       compressedBytes(rvc({ funct3: 0b001, rd: 0, imm5: 0, quadrant: 0b00 })),
       registers2,
       memory
@@ -482,19 +482,19 @@ describe('RV64C decode + execute', () => {
     );
   });
 
-  it('c.li and c.addi sign-extend negative 6-bit immediates', () => {
+  it('c.li and c.addi sign-extend negative 6-bit immediates', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
 
     // c.li x1, -1: bit 12 set with imm[5]=0x1f → 0x50fd.
-    runDecoded(compressedBytes(0x50fd), registers, memory);
+    await runDecoded(compressedBytes(0x50fd), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), -1, 32)
     );
 
     // c.addi x1, -1 on top of -1 must reach -2 (0x10fd).
-    runDecoded(compressedBytes(0x10fd), registers, memory);
+    await runDecoded(compressedBytes(0x10fd), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       signedNumberToBytes(new Uint8Array(8), -2, 32)
@@ -502,12 +502,12 @@ describe('RV64C decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('c.lui sign-extends the negative nzimm from bit 17', () => {
+  it('c.lui sign-extends the negative nzimm from bit 17', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
 
     // c.lui x1, -1: nzimm[17]=1 with imm[16:12]=0x1f → 0x70fd → 0xffff_ffff_ffff_f000.
-    runDecoded(compressedBytes(0x70fd), registers, memory);
+    await runDecoded(compressedBytes(0x70fd), registers, memory);
     assert.deepEqual(
       readGeneralPurposeRegister(registers, 1),
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_f000n)
@@ -515,7 +515,7 @@ describe('RV64C decode + execute', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 2);
   });
 
-  it('c.addi4spn with zero immediate is illegal', () => {
+  it('c.addi4spn with zero immediate is illegal', async () => {
     const registers = createRegisters();
     const memory = testMemory(64n);
     writeControlAndStatusRegister(
@@ -523,7 +523,7 @@ describe('RV64C decode + execute', () => {
       0x305,
       signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
     );
-    runDecoded(compressedBytes(0x0004), registers, memory);
+    await runDecoded(compressedBytes(0x0004), registers, memory);
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, 0x342),
       signedNumberToBytes(new Uint8Array(8), 2, 32)

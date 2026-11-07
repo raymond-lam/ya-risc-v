@@ -47,8 +47,8 @@ const publishWakeLevel = ({
 };
 
 /**
- * Sleep until the word at `index` differs from `fromLevel`.
- * Callers double-check their condition around loading `fromLevel`.
+ * Wait while the word at `index` equals `fromLevel`, or until notified.
+ * Callers must recheck their condition after the wait.
  */
 const waitWake = async ({
   bytes,

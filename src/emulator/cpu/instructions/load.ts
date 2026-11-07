@@ -62,18 +62,18 @@ const denyLoad = (
 };
 
 /** lb: rd = sext(mem[rs1+imm], 8). */
-const lb = (
+const lb = async (
   registers: Registers,
   memory: Memory,
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = loadEffectiveAddress(registers, args);
   if (denyLoad(registers, memory, address, 1)) {
     return;
   }
   const loaded = new Uint8Array(8);
-  loadBytes({
+  await loadBytes({
     destination: loaded,
     memory,
     address,
@@ -84,18 +84,18 @@ const lb = (
 };
 
 /** lh: rd = sext(mem[rs1+imm], 16). */
-const lh = (
+const lh = async (
   registers: Registers,
   memory: Memory,
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = loadEffectiveAddress(registers, args);
   if (denyLoad(registers, memory, address, 2)) {
     return;
   }
   const loaded = new Uint8Array(8);
-  loadBytes({
+  await loadBytes({
     destination: loaded,
     memory,
     address,
@@ -106,18 +106,18 @@ const lh = (
 };
 
 /** lw: rd = sext(mem[rs1+imm], 32). */
-const lw = (
+const lw = async (
   registers: Registers,
   memory: Memory,
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = loadEffectiveAddress(registers, args);
   if (denyLoad(registers, memory, address, 4)) {
     return;
   }
   const loaded = new Uint8Array(8);
-  loadBytes({
+  await loadBytes({
     destination: loaded,
     memory,
     address,
@@ -128,18 +128,18 @@ const lw = (
 };
 
 /** ld: rd = mem[rs1+imm] (64 bits). */
-const ld = (
+const ld = async (
   registers: Registers,
   memory: Memory,
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = loadEffectiveAddress(registers, args);
   if (denyLoad(registers, memory, address, 8)) {
     return;
   }
   const loaded = new Uint8Array(8);
-  loadBytes({
+  await loadBytes({
     destination: loaded,
     memory,
     address,
@@ -150,18 +150,18 @@ const ld = (
 };
 
 /** lbu: rd = zext(mem[rs1+imm], 8). */
-const lbu = (
+const lbu = async (
   registers: Registers,
   memory: Memory,
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = loadEffectiveAddress(registers, args);
   if (denyLoad(registers, memory, address, 1)) {
     return;
   }
   const loaded = new Uint8Array(8);
-  loadBytes({
+  await loadBytes({
     destination: loaded,
     memory,
     address,
@@ -172,18 +172,18 @@ const lbu = (
 };
 
 /** lhu: rd = zext(mem[rs1+imm], 16). */
-const lhu = (
+const lhu = async (
   registers: Registers,
   memory: Memory,
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = loadEffectiveAddress(registers, args);
   if (denyLoad(registers, memory, address, 2)) {
     return;
   }
   const loaded = new Uint8Array(8);
-  loadBytes({
+  await loadBytes({
     destination: loaded,
     memory,
     address,
@@ -194,18 +194,18 @@ const lhu = (
 };
 
 /** lwu: rd = zext(mem[rs1+imm], 32). */
-const lwu = (
+const lwu = async (
   registers: Registers,
   memory: Memory,
   args: LoadArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = loadEffectiveAddress(registers, args);
   if (denyLoad(registers, memory, address, 4)) {
     return;
   }
   const loaded = new Uint8Array(8);
-  loadBytes({
+  await loadBytes({
     destination: loaded,
     memory,
     address,

@@ -55,10 +55,15 @@ class Cpu implements CpuHandle {
     });
     this.#worker = worker;
     this.#started = true;
-    worker.once('error', (error) => {
-      this.#lifetime.reject(error);
+    let workerError: Error | undefined;
+    worker.once('error', (error: unknown) => {
+      workerError = error instanceof Error ? error : new Error(String(error));
     });
     worker.once('exit', (code) => {
+      if (workerError !== undefined) {
+        this.#lifetime.reject(workerError);
+        return;
+      }
       if (this.#stopped || code === 0) {
         this.#lifetime.resolve();
         return;

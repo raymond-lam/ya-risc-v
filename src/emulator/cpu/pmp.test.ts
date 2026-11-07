@@ -144,7 +144,7 @@ describe('pmp', () => {
     assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, MCAUSE)), 2);
   });
 
-  it('allows an S-mode load inside a NAPOT region and denies one outside it', () => {
+  it('allows an S-mode load inside a NAPOT region and denies one outside it', async () => {
     const registers = createRegisters();
     const guest = testMemory(256n);
     guest.bytes[0x10] = 0x2a;
@@ -158,7 +158,7 @@ describe('pmp', () => {
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x10, 32));
 
-    lb(
+    await lb(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -170,7 +170,7 @@ describe('pmp', () => {
     setProgramCounter(registers, new Uint8Array(8));
     writeGeneralPurposeRegister(registers, 1, new Uint8Array(8));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x20, 32));
-    lb(
+    await lb(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -182,7 +182,7 @@ describe('pmp', () => {
     assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, MTVAL)), 0x20);
   });
 
-  it('denies an S-mode load that spans past the matching region', () => {
+  it('denies an S-mode load that spans past the matching region', async () => {
     const registers = createRegisters();
     const guest = testMemory(256n);
     writePmp(registers, PMPADDR0, 0n);
@@ -194,7 +194,7 @@ describe('pmp', () => {
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 6, 32));
-    lw(
+    await lw(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -204,7 +204,7 @@ describe('pmp', () => {
     assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, MCAUSE)), 5);
   });
 
-  it('allows an S-mode load below a TOR top and denies one at the top', () => {
+  it('allows an S-mode load below a TOR top and denies one at the top', async () => {
     const registers = createRegisters();
     const guest = testMemory(256n);
     guest.bytes[0x1f] = 0x3;
@@ -217,7 +217,7 @@ describe('pmp', () => {
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x1f, 32));
-    lb(
+    await lb(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -227,7 +227,7 @@ describe('pmp', () => {
 
     setProgramCounter(registers, new Uint8Array(8));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x20, 32));
-    lb(
+    await lb(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -236,7 +236,7 @@ describe('pmp', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x80);
   });
 
-  it('faults when the first matching entry covers only part of the access', () => {
+  it('faults when the first matching entry covers only part of the access', async () => {
     const registers = createRegisters();
     const guest = testMemory(256n);
     guest.bytes[0x10] = 0xab;
@@ -252,7 +252,7 @@ describe('pmp', () => {
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x10, 32));
-    ld(
+    await ld(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -267,7 +267,7 @@ describe('pmp', () => {
     writePmp(machine, PMPCFG0, BigInt(CFG_NA4));
     writeControlAndStatusRegister(machine, MTVEC, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
     writeGeneralPurposeRegister(machine, 2, signedNumberToBytes(new Uint8Array(8), 0x10, 32));
-    lw(
+    await lw(
       machine,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -275,7 +275,7 @@ describe('pmp', () => {
     );
     assert.equal(bytesToNumber(readGeneralPurposeRegister(machine, 1)), 0xab);
     setProgramCounter(machine, new Uint8Array(8));
-    ld(
+    await ld(
       machine,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -285,14 +285,14 @@ describe('pmp', () => {
     assert.equal(bytesToNumber(snapshotControlAndStatusRegister(machine, MCAUSE)), 5);
   });
 
-  it('lets M-mode through an unlocked deny and stops it on a locked entry', () => {
+  it('lets M-mode through an unlocked deny and stops it on a locked entry', async () => {
     const registers = createRegisters();
     const guest = testMemory(256n);
     guest.bytes[0x10] = 0x11;
     writePmp(registers, PMPADDR0, 0x10n >> 2n);
     writePmp(registers, PMPCFG0, BigInt(0x18));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x10, 32));
-    lb(
+    await lb(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -308,7 +308,7 @@ describe('pmp', () => {
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
     );
     setProgramCounter(registers, new Uint8Array(8));
-    sb(
+    await sb(
       registers,
       guest,
       { sourceRegister1: 2, sourceRegister2: 3, immediate: new Uint8Array(8) },
@@ -319,7 +319,7 @@ describe('pmp', () => {
     assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, MCAUSE)), 7);
   });
 
-  it('applies MPP when mstatus.MPRV is set', () => {
+  it('applies MPP when mstatus.MPRV is set', async () => {
     const registers = createRegisters();
     const guest = testMemory(256n);
     const mstatus = new Uint8Array(8);
@@ -332,7 +332,7 @@ describe('pmp', () => {
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 4, 32));
-    lb(
+    await lb(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -342,7 +342,7 @@ describe('pmp', () => {
     assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, MCAUSE)), 5);
   });
 
-  it('allows an NA4 read and denies the next byte', () => {
+  it('allows an NA4 read and denies the next byte', async () => {
     const registers = createRegisters();
     const guest = testMemory(256n);
     guest.bytes[0x10] = 0x7;
@@ -356,7 +356,7 @@ describe('pmp', () => {
       signedNumberToBytes(new Uint8Array(8), 0x80, 32)
     );
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x10, 32));
-    lb(
+    await lb(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
@@ -366,7 +366,7 @@ describe('pmp', () => {
 
     setProgramCounter(registers, new Uint8Array(8));
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x14, 32));
-    lb(
+    await lb(
       registers,
       guest,
       { destinationRegister: 1, sourceRegister1: 2, immediate: new Uint8Array(8) },
