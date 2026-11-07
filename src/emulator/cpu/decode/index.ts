@@ -26,7 +26,7 @@ type ExecuteThunk = (
   registers: Registers,
   memory: Memory,
   instructionByteLength: ReadonlyUint8Array
-) => void | Promise<void>;
+) => Promise<void>;
 
 type DecodeResult = readonly [ExecuteThunk, ReadonlyUint8Array];
 
@@ -47,11 +47,11 @@ const ENCODING_LENGTH_32_BIT = 0x03;
 const decode = (instructionWord: ReadonlyUint8Array): DecodeResult => {
   const encodedInstructionWord = bytesToNumber(instructionWord);
 
-  if ((encodedInstructionWord & ENCODING_LENGTH_MASK) !== ENCODING_LENGTH_32_BIT) {
-    return [decodeC(encodedInstructionWord & 0xffff), TWO_BYTES];
-  }
-
-  return [decode32(encodedInstructionWord), FOUR_BYTES];
+  const compressed = (encodedInstructionWord & ENCODING_LENGTH_MASK) !== ENCODING_LENGTH_32_BIT;
+  const execute = compressed
+    ? decodeC(encodedInstructionWord & 0xffff)
+    : decode32(encodedInstructionWord);
+  return [execute, compressed ? TWO_BYTES : FOUR_BYTES];
 };
 
 const thunkByInstructionWord = new Map<number, ExecuteThunk>();

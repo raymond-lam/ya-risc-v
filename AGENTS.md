@@ -39,13 +39,12 @@ assuming this summary is enough.
    destination corrupts state; allocate a fresh buffer. `bytesToNumber` reads u32 from
    architectural bytes; `signedNumberToBytes`, `unsignedNumberToBytes`,
    `unsignedBigIntToBytes`, and `low32Bytes` pack values into a caller-allocated buffer.
-2. **Decode returns a curried thunk: `(registers, memory, instructionByteLength) => void |
-Promise<void>`.** Decode closes over instruction args — the thunk itself takes no args
+2. **Decode returns a curried thunk: `(registers, memory, instructionByteLength) =>
+   Promise<void>`.** Decode closes over instruction args — the thunk itself takes no args
    type. The thunk **owns the PC**: call `advanceProgramCounter(registers, instructionByteLength)`
    on the fall-through path, or `setProgramCounter` when jumping/branching (`jal`/`jalr` use
-   the length for the link). The run loop never adjusts the PC itself and `await`s each
-   instruction result (only `wfi` is async today — a new async instruction just returns a
-   `Promise`). Decode memoizes thunks by instruction word in a bounded LRU cache, so thunks
+   the length for the link). The run loop never adjusts the PC itself and `await`s every
+   instruction. Decode memoizes thunks by instruction word in a bounded LRU cache, so thunks
    must be pure in what they close over. `instructionByteLength` is always required (no
    default) — unit tests pass `FOUR_BYTES` when calling instructions directly. Unused
    parameters are prefixed with `_`.
@@ -75,8 +74,8 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    tree (`src/fdt.ts`). Change all of them together.
 6. **Reservation monitor invalidation.** A host-only LR/SC reservation monitor (per-hart
    slots, line granule) sits in the SAB after PLIC; `storeBytes` and atomic RMWs must
-   invalidate overlapping reservations (`invalidateOverlappingReservationsLocked` /
-   `withMonitorLock`). Never write guest RAM around this protocol.
+   invalidate overlapping reservations under the reservation lock (`withSharedLocks` and
+   `invalidateOverlappingReservationsLocked`). Never write guest RAM around this protocol.
 7. **Host components are Promise-like awaitable handles with `start` / `stop`.** `Emulator`,
    `Cpu`, `Timer`, `Terminal`, and the TUI each implement a `Promise.withResolvers` lifetime
    with `then`/`catch`/`finally` plus idempotent `stop`. The pattern is: create → start →
@@ -159,8 +158,12 @@ Enforced by ESLint and Prettier (single quotes, semicolons, 100 columns, 2-space
 
 - **Arrow functions only** — no `function` expressions or declarations, and no
   `export default function`.
+- Preserve existing names when refactoring implementation details; rename only when the
+  purpose changes or a rename is otherwise necessary.
 - Modules with a single export use `export default`; otherwise list named exports in one
-  block at the bottom of the file, with `export type { … }` after it.
+  block at the bottom of the file, with `export type { … }` after it. A default-exported
+  function's name matches its module name (for example, `with-shared-locks.ts` exports
+  `withSharedLocks`).
 - **Export only what production code needs.** Do not export helpers, types, or constants
   solely so tests can import them (tests may deep-import private modules, or share fixtures
   via `test/`). No unused exports.

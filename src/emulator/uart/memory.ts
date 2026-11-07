@@ -20,6 +20,7 @@
 
 import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
+import { plicGatewayLockIndex } from '#emulator/plic';
 import { loadUartRegister, storeUartRegister } from '#emulator/uart/registers';
 import { UART_GUEST_BYTE_LENGTH } from '#emulator/uart/region';
 
@@ -66,4 +67,7 @@ const storeBytesToUart = ({
   }
 };
 
-export { loadBytesFromUart, storeBytesToUart };
+/** UART MMIO updates the shared interrupt gateway as part of the access. */
+const uartMemoryLockIndexes = (memory: Memory): readonly number[] => [plicGatewayLockIndex(memory)];
+
+export { loadBytesFromUart, storeBytesToUart, uartMemoryLockIndexes };

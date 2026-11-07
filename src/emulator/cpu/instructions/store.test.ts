@@ -36,12 +36,12 @@ import { CAUSE_STORE_AMO_ACCESS_FAULT } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 describe('store', () => {
-  it('sb stores the low byte', () => {
+  it('sb stores the low byte', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 0xab, 32));
     writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(new Uint8Array(8), 20, 32));
-    sb(
+    await sb(
       registers,
       guest,
       {
@@ -55,7 +55,7 @@ describe('store', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('sw stores a word', () => {
+  it('sw stores a word', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(new Uint8Array(8), 20, 32));
@@ -64,7 +64,7 @@ describe('store', () => {
       5,
       signedNumberToBytes(new Uint8Array(8), 0x44332211, 32)
     );
-    sw(
+    await sw(
       registers,
       guest,
       {
@@ -78,7 +78,7 @@ describe('store', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('sb to an unmapped address below RAM-sized low memory traps with cause 7', () => {
+  it('sb to an unmapped address below RAM-sized low memory traps with cause 7', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -90,7 +90,7 @@ describe('store', () => {
     writeGeneralPurposeRegister(registers, 4, signedNumberToBytes(new Uint8Array(8), 0x800, 32));
     writeGeneralPurposeRegister(registers, 3, signedNumberToBytes(new Uint8Array(8), 0xab, 32));
 
-    sb(
+    await sb(
       registers,
       guest,
       {
@@ -116,7 +116,7 @@ describe('store', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
   });
 
-  it('sd past the end of DRAM traps with cause 7 and leaves memory unchanged', () => {
+  it('sd past the end of DRAM traps with cause 7 and leaves memory unchanged', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -132,7 +132,7 @@ describe('store', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0xdead_beef_cafe_f00dn)
     );
 
-    sd(
+    await sd(
       registers,
       guest,
       {
@@ -156,7 +156,7 @@ describe('store', () => {
     assert.ok(guest.bytes.subarray(0, 256).every((byte) => byte === 0));
   });
 
-  it('sd to mapped CLINT mtimecmp MMIO stores and advances pc', () => {
+  it('sd to mapped CLINT mtimecmp MMIO stores and advances pc', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     // mtimecmp sits at CLINT base + 0x4000.
@@ -167,7 +167,7 @@ describe('store', () => {
     );
     writeGeneralPurposeRegister(registers, 5, signedNumberToBytes(new Uint8Array(8), 0x1234, 32));
 
-    sd(
+    await sd(
       registers,
       guest,
       {
@@ -184,7 +184,7 @@ describe('store', () => {
 
     // The stored value actually landed in mtimecmp (x5 = 0x1234, little-endian).
     const mtimecmp = new Uint8Array(8);
-    loadBytes({
+    await loadBytes({
       destination: mtimecmp,
       memory: guest,
       address: signedNumberToBytes(new Uint8Array(8), 0x0200_4000, 32),

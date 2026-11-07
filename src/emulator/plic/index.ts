@@ -31,8 +31,12 @@ export {
   PLIC_REGION_ID,
   PLIC_SOURCE_UART,
 } from '#emulator/plic/layout';
-export { loadBytesFromPlic, storeBytesToPlic } from '#emulator/plic/memory';
-export { setPlicSourcePending } from '#emulator/plic/gateway';
+export { loadBytesFromPlic, plicMemoryLockIndexes, storeBytesToPlic } from '#emulator/plic/memory';
+export {
+  plicGatewayLockIndex,
+  setPlicSourcePending,
+  withPlicGatewayLock,
+} from '#emulator/plic/gateway';
 export {
   isPlicMachineExternalPending,
   isPlicSupervisorExternalPending,

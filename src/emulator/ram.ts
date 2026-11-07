@@ -29,7 +29,7 @@ import {
 } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 import { bigIntAsNumber } from '#utils/int';
-import { invalidateOverlappingReservationsLocked, withMonitorLock } from '#emulator/reservation';
+import { invalidateOverlappingReservationsLocked } from '#emulator/reservation';
 import type { Memory } from '#emulator/memory';
 
 /** Packed-region id for DRAM (`createMemory` / `regions.get`). */
@@ -210,7 +210,7 @@ const atomicRamLoad = ({
 /**
  * Atomic store of a naturally aligned 32-bit or 64-bit RAM location from `source`.
  * Returns `false` when outside RAM or misaligned. Invalidates overlapping reservations
- * in the same critical section as the write.
+ * in the same critical section as the write. Caller holds the reservation monitor.
  */
 const atomicRamStore = ({
   memory,
@@ -227,22 +227,20 @@ const atomicRamStore = ({
   if (hostIndex === null) {
     return false;
   }
-  withMonitorLock(memory, () => {
-    if (byteLength === 4) {
-      Atomics.store(
-        bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex)),
-        0,
-        bytesToNumber(source) | 0
-      );
-    } else {
-      Atomics.store(
-        bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex)),
-        0,
-        signedBytesToBigInt(source)
-      );
-    }
-    invalidateOverlappingReservationsLocked(memory, address, byteLength);
-  });
+  if (byteLength === 4) {
+    Atomics.store(
+      bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex)),
+      0,
+      bytesToNumber(source) | 0
+    );
+  } else {
+    Atomics.store(
+      bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex)),
+      0,
+      signedBytesToBigInt(source)
+    );
+  }
+  invalidateOverlappingReservationsLocked(memory, address, byteLength);
   return true;
 };
 
@@ -252,6 +250,7 @@ const atomicRamStore = ({
  * swap succeeded (`destination` matched `expected`). Invalidates overlapping reservations
  * in the same critical section as a successful write.
  * Returns `false` (without writing `destination`) when outside RAM or misaligned.
+ * Caller holds the reservation monitor.
  */
 const atomicRamCompareExchange = ({
   destination,
@@ -272,29 +271,27 @@ const atomicRamCompareExchange = ({
   if (hostIndex === null) {
     return false;
   }
-  return withMonitorLock(memory, () => {
-    destination.fill(0);
-    if (byteLength === 4) {
-      const view = bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex));
-      const expectedBits = bytesToNumber(expected) | 0;
-      const previous = Atomics.compareExchange(view, 0, expectedBits, bytesToNumber(desired) | 0);
-      signedNumberToBytes(destination, previous, 32);
-      if (previous !== expectedBits) {
-        return false;
-      }
-      invalidateOverlappingReservationsLocked(memory, address, byteLength);
-      return true;
-    }
-    const view = bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex));
-    const expectedBits = signedBytesToBigInt(expected);
-    const previous = Atomics.compareExchange(view, 0, expectedBits, signedBytesToBigInt(desired));
-    unsignedBigIntToBytes(destination, BigInt.asUintN(64, previous));
+  destination.fill(0);
+  if (byteLength === 4) {
+    const view = bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex));
+    const expectedBits = bytesToNumber(expected) | 0;
+    const previous = Atomics.compareExchange(view, 0, expectedBits, bytesToNumber(desired) | 0);
+    signedNumberToBytes(destination, previous, 32);
     if (previous !== expectedBits) {
       return false;
     }
     invalidateOverlappingReservationsLocked(memory, address, byteLength);
     return true;
-  });
+  }
+  const view = bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex));
+  const expectedBits = signedBytesToBigInt(expected);
+  const previous = Atomics.compareExchange(view, 0, expectedBits, signedBytesToBigInt(desired));
+  unsignedBigIntToBytes(destination, BigInt.asUintN(64, previous));
+  if (previous !== expectedBits) {
+    return false;
+  }
+  invalidateOverlappingReservationsLocked(memory, address, byteLength);
+  return true;
 };
 
 export {

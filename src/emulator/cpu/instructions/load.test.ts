@@ -36,13 +36,13 @@ import { CAUSE_LOAD_ACCESS_FAULT } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 
 describe('load', () => {
-  it('lb sign-extends and lbu zero-extends', () => {
+  it('lb sign-extends and lbu zero-extends', async () => {
     const guest = testMemory(256n);
     guest.bytes[10] = 0x80;
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 10, 32));
 
-    lb(
+    await lb(
       registers,
       guest,
       {
@@ -58,7 +58,7 @@ describe('load', () => {
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
 
-    lbu(
+    await lbu(
       registers,
       guest,
       {
@@ -75,7 +75,7 @@ describe('load', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 8);
   });
 
-  it('lw loads a word', () => {
+  it('lw loads a word', async () => {
     const guest = testMemory(256n);
     guest.bytes[8] = 0x78;
     guest.bytes[9] = 0x56;
@@ -84,7 +84,7 @@ describe('load', () => {
     const registers = createRegisters();
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 8, 32));
 
-    lw(
+    await lw(
       registers,
       guest,
       {
@@ -101,7 +101,7 @@ describe('load', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('lb from an unmapped address below RAM-sized low memory traps with cause 5', () => {
+  it('lb from an unmapped address below RAM-sized low memory traps with cause 5', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -114,7 +114,7 @@ describe('load', () => {
     // syscon window at 0x10_0000.
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x800, 32));
 
-    lb(
+    await lb(
       registers,
       guest,
       {
@@ -142,7 +142,7 @@ describe('load', () => {
     assert.deepEqual(readGeneralPurposeRegister(registers, 1), new Uint8Array(8));
   });
 
-  it('ld past the end of DRAM traps with cause 5 and does not advance pc', () => {
+  it('ld past the end of DRAM traps with cause 5 and does not advance pc', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     writeControlAndStatusRegister(
@@ -154,7 +154,7 @@ describe('load', () => {
     // Aligned, but the last byte falls past the 256-byte RAM window.
     writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x100, 32));
 
-    ld(
+    await ld(
       registers,
       guest,
       {
@@ -177,7 +177,7 @@ describe('load', () => {
     assert.deepEqual(readGeneralPurposeRegister(registers, 1), new Uint8Array(8));
   });
 
-  it('lb does not wrap a 2^32+offset address into low memory', () => {
+  it('lb does not wrap a 2^32+offset address into low memory', async () => {
     const guest = testMemory(256n);
     guest.bytes[16] = 0x42;
     const registers = createRegisters();
@@ -188,7 +188,7 @@ describe('load', () => {
     );
     writeGeneralPurposeRegister(registers, 2, new Uint8Array([0x10, 0, 0, 0, 1, 0, 0, 0]));
 
-    lb(
+    await lb(
       registers,
       guest,
       {
@@ -212,7 +212,7 @@ describe('load', () => {
     assert.equal(guest.bytes[16], 0x42);
   });
 
-  it('ld from mapped CLINT mtimecmp MMIO loads the reset value and advances pc', () => {
+  it('ld from mapped CLINT mtimecmp MMIO loads the reset value and advances pc', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
     // mtimecmp sits at CLINT base + 0x4000; initializeClint resets it to all-ones.
@@ -222,7 +222,7 @@ describe('load', () => {
       signedNumberToBytes(new Uint8Array(8), 0x0200_4000, 32)
     );
 
-    ld(
+    await ld(
       registers,
       guest,
       {
@@ -240,7 +240,7 @@ describe('load', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
   });
 
-  it('lwu zero-extends while lw sign-extends the same word; lh/lhu pin halfword width', () => {
+  it('lwu zero-extends while lw sign-extends the same word; lh/lhu pin halfword width', async () => {
     const guest = testMemory(256n);
     // 0xffff_ffff at offset 8; 0x8000 at offset 16.
     guest.bytes[8] = 0xff;
@@ -251,7 +251,7 @@ describe('load', () => {
     guest.bytes[17] = 0x80;
     const registers = createRegisters();
 
-    lw(
+    await lw(
       registers,
       guest,
       {
@@ -266,7 +266,7 @@ describe('load', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
     );
 
-    lwu(
+    await lwu(
       registers,
       guest,
       {
@@ -281,7 +281,7 @@ describe('load', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0x0000_0000_ffff_ffffn)
     );
 
-    lh(
+    await lh(
       registers,
       guest,
       {
@@ -296,7 +296,7 @@ describe('load', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_8000n)
     );
 
-    lhu(
+    await lhu(
       registers,
       guest,
       {

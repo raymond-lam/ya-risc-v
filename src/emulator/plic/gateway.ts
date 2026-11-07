@@ -17,7 +17,7 @@
 /**
  * PLIC claim gateway — pending/claimed bitfields, lock, claim/complete, wire refresh.
  *
- * Gateway mutations (`setPlicSourcePending` / claim / complete) and wire refresh run under
+ * Gateway mutations (device input / claim / complete) and wire refresh run under
  * `gatewayLock` so UART pending refresh cannot race hart claim/complete.
  */
 
@@ -38,10 +38,8 @@ import {
 import { setPlicContextWire } from '#emulator/plic/wires';
 import type { Memory } from '#emulator/memory';
 import { atomicLoad32, atomicLoadBit, atomicUpdateBit } from '#utils/atomics';
+import withSharedLocks from '#emulator/with-shared-locks';
 import { bytesToInt32Array } from '#utils/bytes';
-
-/** Per-worker reentry depth for the PLIC gateway lock. */
-let plicGatewayLockDepth = 0;
 
 /** Absolute `memory.bytes` index of the byte holding `source`'s bit in the bitfield at `hostOffset`. */
 const plicHostIndexForSourceBit = (memory: Memory, hostOffset: number, source: number): number =>
@@ -72,49 +70,15 @@ const isSourceClaimed = (memory: Memory, source: number): boolean =>
   isSourceBitSet(memory, PLIC_HOST_CLAIMED_BY_M, source) ||
   isSourceBitSet(memory, PLIC_HOST_CLAIMED_BY_S, source);
 
-const plicGatewayLockInt32 = (memory: Memory): Int32Array =>
-  bytesToInt32Array(memory.bytes, plicHostIndex(memory, PLIC_HOST_GATEWAY_LOCK));
+const plicGatewayLockIndex = (memory: Memory): number =>
+  plicHostIndex(memory, PLIC_HOST_GATEWAY_LOCK);
 
-const acquirePlicGatewayLock = (memory: Memory): void => {
-  if (plicGatewayLockDepth > 0) {
-    plicGatewayLockDepth += 1;
-    return;
-  }
-  const lock = plicGatewayLockInt32(memory);
-  for (;;) {
-    if (Atomics.compareExchange(lock, 0, 0, 1) === 0) {
-      plicGatewayLockDepth = 1;
-      return;
-    }
-    Atomics.wait(lock, 0, 1);
-  }
-};
-
-const releasePlicGatewayLock = (memory: Memory): void => {
-  if (plicGatewayLockDepth <= 0) {
-    return;
-  }
-  plicGatewayLockDepth -= 1;
-  if (plicGatewayLockDepth > 0) {
-    return;
-  }
-  const lock = plicGatewayLockInt32(memory);
-  Atomics.store(lock, 0, 0);
-  Atomics.notify(lock, 0, 1);
-};
-
-const withPlicGatewayLock = <T>(memory: Memory, run: () => T): T => {
-  acquirePlicGatewayLock(memory);
-  try {
-    return run();
-  } finally {
-    releasePlicGatewayLock(memory);
-  }
-};
+const withPlicGatewayLock = (memory: Memory, run: () => void): Promise<void> =>
+  withSharedLocks(memory.bytes, [plicGatewayLockIndex(memory)], run);
 
 /** Reset the gateway monitor word (host init). */
 const resetPlicGatewayLock = (memory: Memory): void => {
-  Atomics.store(plicGatewayLockInt32(memory), 0, 0);
+  Atomics.store(bytesToInt32Array(memory.bytes, plicGatewayLockIndex(memory)), 0, 0);
 };
 
 /**
@@ -167,58 +131,55 @@ const refreshAllContextWires = (memory: Memory): void => {
 
 /**
  * Device-driven input level for `source` (1..31). Updates guest-visible pending
- * through the claim gateway, then refreshes M/S context wires.
+ * through the claim gateway, then refreshes M/S context wires. Caller holds the gateway lock.
  */
 const setPlicSourcePending = (memory: Memory, source: number, pending: boolean): void => {
   if (!isValidSource(source)) {
     return;
   }
-  withPlicGatewayLock(memory, () => {
-    updateSourceBit(memory, PLIC_HOST_INPUT_LEVEL, source, pending);
-    if (!pending) {
-      updateSourceBit(memory, PLIC_HOST_PENDING, source, false);
-    } else if (!isSourceClaimed(memory, source)) {
-      updateSourceBit(memory, PLIC_HOST_PENDING, source, true);
-    }
-    refreshAllContextWires(memory);
-  });
+  updateSourceBit(memory, PLIC_HOST_INPUT_LEVEL, source, pending);
+  if (!pending) {
+    updateSourceBit(memory, PLIC_HOST_PENDING, source, false);
+  } else if (!isSourceClaimed(memory, source)) {
+    updateSourceBit(memory, PLIC_HOST_PENDING, source, true);
+  }
+  refreshAllContextWires(memory);
 };
 
-/** Claim: return id and clear global pending; mark gateway claimed by `context`. */
-const claimPlicSource = (memory: Memory, context: PlicContext): number =>
-  withPlicGatewayLock(memory, () => {
-    const source = selectClaimableSource(memory, context);
-    if (source !== 0) {
-      updateSourceBit(memory, PLIC_HOST_PENDING, source, false);
-      updateSourceBit(memory, claimedByHostOffset(context), source, true);
-    }
-    refreshAllContextWires(memory);
-    return source;
-  });
+/** Claim under the gateway lock: clear pending and mark claimed by `context`. */
+const claimPlicSource = (memory: Memory, context: PlicContext): number => {
+  const source = selectClaimableSource(memory, context);
+  if (source !== 0) {
+    updateSourceBit(memory, PLIC_HOST_PENDING, source, false);
+    updateSourceBit(memory, claimedByHostOffset(context), source, true);
+  }
+  refreshAllContextWires(memory);
+  return source;
+};
 
 /**
  * Complete: release gateway for a source claimed by `context` only (SiFive: wrong-context
  * complete is ignored). Re-pending when the device input level is still high.
+ * Caller holds the gateway lock.
  */
 const completePlicSource = (memory: Memory, context: PlicContext, source: number): void => {
   if (!isValidSource(source)) {
     return;
   }
-  withPlicGatewayLock(memory, () => {
-    if (!isSourceBitSet(memory, claimedByHostOffset(context), source)) {
-      return;
-    }
-    updateSourceBit(memory, claimedByHostOffset(context), source, false);
-    if (isSourceBitSet(memory, PLIC_HOST_INPUT_LEVEL, source)) {
-      updateSourceBit(memory, PLIC_HOST_PENDING, source, true);
-    }
-    refreshAllContextWires(memory);
-  });
+  if (!isSourceBitSet(memory, claimedByHostOffset(context), source)) {
+    return;
+  }
+  updateSourceBit(memory, claimedByHostOffset(context), source, false);
+  if (isSourceBitSet(memory, PLIC_HOST_INPUT_LEVEL, source)) {
+    updateSourceBit(memory, PLIC_HOST_PENDING, source, true);
+  }
+  refreshAllContextWires(memory);
 };
 
 export {
   claimPlicSource,
   completePlicSource,
+  plicGatewayLockIndex,
   refreshAllContextWires,
   refreshContextWire,
   resetPlicGatewayLock,

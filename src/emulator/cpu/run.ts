@@ -37,11 +37,6 @@ import type { CpuWorkerData, Registers } from '#emulator/cpu/types';
 import type { ReadonlyUint8Array } from '#types';
 import { guestAccessIsMapped, loadBytes, type Memory } from '#emulator/memory';
 
-const isThenable = (value: unknown): value is PromiseLike<void> =>
-  typeof value === 'object' &&
-  value !== null &&
-  typeof (value as PromiseLike<void>).then === 'function';
-
 /** Fault (instruction access fault at the fetch address) when the range is unmapped. */
 const trapIfFetchUnmapped = (
   registers: Registers,
@@ -56,38 +51,22 @@ const trapIfFetchUnmapped = (
   return true;
 };
 
-/** Fetch the instruction at the PC. */
-const fetchInstruction = (
+/** Fetch and validate the instruction at the PC. */
+const fetchInstruction = async (
   registers: Registers,
   memory: Memory,
   instructionBytes: Uint8Array
-): boolean => {
+): Promise<boolean> => {
   const pc = readProgramCounter(registers);
-  // Load all four bytes speculatively before any checks. This is safe because loadBytes is
-  // a raw host-side read that cannot fault or mutate state: unmapped/past-end bytes arrive
-  // as 0, and a PMP-denied byte read into this scratch buffer is unobservable — the
-  // width-checked trap below discards the buffer before decode consumes it.
-  loadBytes({
-    destination: instructionBytes,
-    memory,
-    address: pc,
-    byteLength: 4,
-  });
-  // Derive the instruction length from byte 0 before any width checks. A 16-bit instruction
-  // at the end of the RAM window must not fault on bytes it does not fetch, so the
-  // mapping/permission check uses this length (2) and the speculative trailing zeros never
-  // matter. A 32-bit instruction is one architectural access: the lowest matching PMP
-  // entry must cover the whole 4 bytes, and an instruction straddling the end of the
-  // window/mapping faults — even when its first 2 bytes are mapped and its last 2 are not.
+  await loadBytes({ destination: instructionBytes, memory, address: pc, byteLength: 4 });
+  // A compressed instruction at the end of a window only needs two mapped bytes;
+  // a 32-bit instruction must fit and pass PMP as a single four-byte access.
   const length = (instructionBytes[0]! & ENCODING_LENGTH_MASK) === ENCODING_LENGTH_32_BIT ? 4 : 2;
   if (physicalMemoryAccessDenied({ registers, address: pc, byteLength: length, access: 'fetch' })) {
     enterTrap(registers, CAUSE_INSTRUCTION_ACCESS_FAULT, copyBytes(new Uint8Array(8), pc));
     return false;
   }
-  if (trapIfFetchUnmapped(registers, memory, pc, length)) {
-    return false;
-  }
-  return true;
+  return !trapIfFetchUnmapped(registers, memory, pc, length);
 };
 
 const main = async (): Promise<void> => {
@@ -115,17 +94,12 @@ const main = async (): Promise<void> => {
     if (trapIfInstructionAddressMisaligned(registers)) {
       continue;
     }
-    if (!fetchInstruction(registers, memory, instructionBytes)) {
+    if (!(await fetchInstruction(registers, memory, instructionBytes))) {
       continue;
     }
     beginInstructionRetire(registers);
     const [execute, instructionByteLength] = decode(instructionBytes);
-    // Only await async instructions (today: wfi). Sync thunks return void and must
-    // not force a microtask per instruction on the hot path.
-    const result = execute(registers, memory, instructionByteLength);
-    if (isThenable(result)) {
-      await result;
-    }
+    await execute(registers, memory, instructionByteLength);
     commitInstructionRetire(registers);
   }
 };

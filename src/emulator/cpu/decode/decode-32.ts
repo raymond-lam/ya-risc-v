@@ -17,6 +17,8 @@
 /* eslint-disable complexity, sonarjs/cognitive-complexity, max-lines --
    intentional nested switch/case decode; RISC-V encoding is dense by nature. */
 
+/* eslint-disable @typescript-eslint/require-await -- all decoded instruction thunks return promises */
+
 import { signedNumberToBytes } from '#utils/bytes';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
@@ -89,7 +91,7 @@ type ExecuteThunk = (
   registers: Registers,
   memory: Memory,
   instructionByteLength: ReadonlyUint8Array
-) => void | Promise<void>;
+) => Promise<void>;
 
 const OPCODE_LOAD = 0x03; // loads: lb/lh/lw/ld/lbu/lhu/lwu
 const OPCODE_MISC_MEM = 0x0f; // fence, fence.i
@@ -281,33 +283,33 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
     case OPCODE_LUI: {
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const immediate = decodeUTypeImmediate(encodedInstructionWord);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         lui(registers, memory, { destinationRegister, immediate }, instructionByteLength);
     }
 
     case OPCODE_AUIPC: {
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const immediate = decodeUTypeImmediate(encodedInstructionWord);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         auipc(registers, memory, { destinationRegister, immediate }, instructionByteLength);
     }
 
     case OPCODE_JAL: {
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const immediate = decodeJTypeImmediate(encodedInstructionWord);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         jal(registers, memory, { destinationRegister, immediate }, instructionByteLength);
     }
 
     case OPCODE_JALR: {
       if (function3Of(encodedInstructionWord) !== 0) {
-        return (registers, _memory, _instructionByteLength) =>
+        return async (registers, _memory, _instructionByteLength) =>
           illegalInstruction(registers, encodedInstructionWord);
       }
       const destinationRegister = destinationRegisterOf(encodedInstructionWord);
       const sourceRegister1 = sourceRegister1Of(encodedInstructionWord);
       const immediate = decodeITypeImmediate(encodedInstructionWord);
-      return (registers, memory, instructionByteLength) =>
+      return async (registers, memory, instructionByteLength) =>
         jalr(
           registers,
           memory,
@@ -322,7 +324,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
       const immediate = decodeBTypeImmediate(encodedInstructionWord);
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_BEQ:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             beq(
               registers,
               memory,
@@ -330,7 +332,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_BNE:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             bne(
               registers,
               memory,
@@ -338,7 +340,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_BLT:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             blt(
               registers,
               memory,
@@ -346,7 +348,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_BGE:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             bge(
               registers,
               memory,
@@ -354,7 +356,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_BLTU:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             bltu(
               registers,
               memory,
@@ -362,7 +364,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_BGEU:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             bgeu(
               registers,
               memory,
@@ -370,7 +372,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
@@ -381,7 +383,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
       const immediate = decodeITypeImmediate(encodedInstructionWord);
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_LB:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             lb(
               registers,
               memory,
@@ -389,7 +391,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_LH:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             lh(
               registers,
               memory,
@@ -397,7 +399,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_LW:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             lw(
               registers,
               memory,
@@ -405,7 +407,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_LD:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             ld(
               registers,
               memory,
@@ -413,7 +415,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_LBU:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             lbu(
               registers,
               memory,
@@ -421,7 +423,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_LHU:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             lhu(
               registers,
               memory,
@@ -429,7 +431,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_LWU:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             lwu(
               registers,
               memory,
@@ -437,7 +439,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
@@ -448,7 +450,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
       const immediate = decodeSTypeImmediate(encodedInstructionWord);
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_SB:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sb(
               registers,
               memory,
@@ -456,7 +458,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_SH:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sh(
               registers,
               memory,
@@ -464,7 +466,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_SW:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sw(
               registers,
               memory,
@@ -472,7 +474,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_SD:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sd(
               registers,
               memory,
@@ -480,7 +482,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
@@ -496,90 +498,90 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
           switch (function5) {
             case FUNCT5_LR:
               if (sourceRegister2 !== 0) {
-                return (registers, _memory, _instructionByteLength) =>
+                return async (registers, _memory, _instructionByteLength) =>
                   illegalInstruction(registers, encodedInstructionWord);
               }
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 lrW(registers, memory, args, instructionByteLength);
             case FUNCT5_SC:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 scW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOSWAP:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoswapW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOADD:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoaddW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOXOR:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoxorW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOOR:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoorW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOAND:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoandW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOMIN:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amominW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOMAX:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amomaxW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOMINU:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amominuW(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOMAXU:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amomaxuW(registers, memory, args, instructionByteLength);
             default:
-              return (registers, _memory, _instructionByteLength) =>
+              return async (registers, _memory, _instructionByteLength) =>
                 illegalInstruction(registers, encodedInstructionWord);
           }
         case FUNCT3_AMO_D:
           switch (function5) {
             case FUNCT5_LR:
               if (sourceRegister2 !== 0) {
-                return (registers, _memory, _instructionByteLength) =>
+                return async (registers, _memory, _instructionByteLength) =>
                   illegalInstruction(registers, encodedInstructionWord);
               }
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 lrD(registers, memory, args, instructionByteLength);
             case FUNCT5_SC:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 scD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOSWAP:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoswapD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOADD:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoaddD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOXOR:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoxorD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOOR:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoorD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOAND:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amoandD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOMIN:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amominD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOMAX:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amomaxD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOMINU:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amominuD(registers, memory, args, instructionByteLength);
             case FUNCT5_AMOMAXU:
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 amomaxuD(registers, memory, args, instructionByteLength);
             default:
-              return (registers, _memory, _instructionByteLength) =>
+              return async (registers, _memory, _instructionByteLength) =>
                 illegalInstruction(registers, encodedInstructionWord);
           }
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
@@ -590,7 +592,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_ADD_SUB: {
           const immediate = decodeITypeImmediate(encodedInstructionWord);
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             addi(
               registers,
               memory,
@@ -600,7 +602,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
         }
         case FUNCT3_SLT: {
           const immediate = decodeITypeImmediate(encodedInstructionWord);
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             slti(
               registers,
               memory,
@@ -610,7 +612,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
         }
         case FUNCT3_SLTU: {
           const immediate = decodeITypeImmediate(encodedInstructionWord);
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sltiu(
               registers,
               memory,
@@ -620,7 +622,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
         }
         case FUNCT3_XOR: {
           const immediate = decodeITypeImmediate(encodedInstructionWord);
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             xori(
               registers,
               memory,
@@ -630,7 +632,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
         }
         case FUNCT3_OR: {
           const immediate = decodeITypeImmediate(encodedInstructionWord);
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             ori(
               registers,
               memory,
@@ -640,7 +642,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
         }
         case FUNCT3_AND: {
           const immediate = decodeITypeImmediate(encodedInstructionWord);
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             andi(
               registers,
               memory,
@@ -650,11 +652,11 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
         }
         case FUNCT3_SLL: {
           if (((encodedInstructionWord >>> 26) & 0x3f) !== 0) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
           const shiftAmount = (encodedInstructionWord >>> 20) & 0x3f;
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             slli(
               registers,
               memory,
@@ -666,7 +668,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
           const bits31_26 = (encodedInstructionWord >>> 26) & 0x3f;
           const shiftAmount = (encodedInstructionWord >>> 20) & 0x3f;
           if (bits31_26 === 0b000000) {
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               srli(
                 registers,
                 memory,
@@ -675,7 +677,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               );
           }
           if (bits31_26 === 0b010000) {
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               srai(
                 registers,
                 memory,
@@ -683,11 +685,11 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           }
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
         }
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
@@ -700,7 +702,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
       if (function7 === FUNCT7_MUL_DIV) {
         switch (function3Of(encodedInstructionWord)) {
           case FUNCT3_ADD_SUB:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               mul(
                 registers,
                 memory,
@@ -708,7 +710,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_SLL:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               mulh(
                 registers,
                 memory,
@@ -716,7 +718,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_SLT:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               mulhsu(
                 registers,
                 memory,
@@ -724,7 +726,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_SLTU:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               mulhu(
                 registers,
                 memory,
@@ -732,7 +734,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_XOR:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               div(
                 registers,
                 memory,
@@ -740,7 +742,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_SRL_SRA:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               divu(
                 registers,
                 memory,
@@ -748,7 +750,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_OR:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               rem(
                 registers,
                 memory,
@@ -756,7 +758,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_AND:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               remu(
                 registers,
                 memory,
@@ -764,18 +766,18 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           default:
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
         }
       }
       if (function7 !== FUNCT7_NORMAL && function7 !== FUNCT7_SUB_SRA) {
-        return (registers, _memory, _instructionByteLength) =>
+        return async (registers, _memory, _instructionByteLength) =>
           illegalInstruction(registers, encodedInstructionWord);
       }
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_ADD_SUB:
           if (function7 === FUNCT7_NORMAL) {
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               add(
                 registers,
                 memory,
@@ -783,7 +785,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sub(
               registers,
               memory,
@@ -792,10 +794,10 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_SLL:
           if (function7 !== FUNCT7_NORMAL) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sll(
               registers,
               memory,
@@ -804,10 +806,10 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_SLT:
           if (function7 !== FUNCT7_NORMAL) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             slt(
               registers,
               memory,
@@ -816,10 +818,10 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_SLTU:
           if (function7 !== FUNCT7_NORMAL) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sltu(
               registers,
               memory,
@@ -828,10 +830,10 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_XOR:
           if (function7 !== FUNCT7_NORMAL) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             xor(
               registers,
               memory,
@@ -840,7 +842,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_SRL_SRA:
           if (function7 === FUNCT7_NORMAL) {
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               srl(
                 registers,
                 memory,
@@ -848,7 +850,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sra(
               registers,
               memory,
@@ -857,10 +859,10 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_OR:
           if (function7 !== FUNCT7_NORMAL) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             or(
               registers,
               memory,
@@ -869,10 +871,10 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_AND:
           if (function7 !== FUNCT7_NORMAL) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             and(
               registers,
               memory,
@@ -880,7 +882,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
@@ -891,7 +893,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_ADD_SUB: {
           const immediate = decodeITypeImmediate(encodedInstructionWord);
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             addiw(
               registers,
               memory,
@@ -901,11 +903,11 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
         }
         case FUNCT3_SLL: {
           if (function7Of(encodedInstructionWord) !== FUNCT7_NORMAL) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
           const shiftAmount = (encodedInstructionWord >>> 20) & 0x1f;
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             slliw(
               registers,
               memory,
@@ -917,7 +919,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
           const function7 = function7Of(encodedInstructionWord);
           const shiftAmount = (encodedInstructionWord >>> 20) & 0x1f;
           if (function7 === FUNCT7_NORMAL) {
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               srliw(
                 registers,
                 memory,
@@ -926,7 +928,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               );
           }
           if (function7 === FUNCT7_SUB_SRA) {
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               sraiw(
                 registers,
                 memory,
@@ -934,11 +936,11 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           }
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
         }
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
@@ -951,7 +953,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
       if (function7 === FUNCT7_MUL_DIV) {
         switch (function3Of(encodedInstructionWord)) {
           case FUNCT3_ADD_SUB:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               mulw(
                 registers,
                 memory,
@@ -959,7 +961,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_XOR:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               divw(
                 registers,
                 memory,
@@ -967,7 +969,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_SRL_SRA:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               divuw(
                 registers,
                 memory,
@@ -975,7 +977,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_OR:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               remw(
                 registers,
                 memory,
@@ -983,7 +985,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           case FUNCT3_AND:
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               remuw(
                 registers,
                 memory,
@@ -991,18 +993,18 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           default:
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
         }
       }
       if (function7 !== FUNCT7_NORMAL && function7 !== FUNCT7_SUB_SRA) {
-        return (registers, _memory, _instructionByteLength) =>
+        return async (registers, _memory, _instructionByteLength) =>
           illegalInstruction(registers, encodedInstructionWord);
       }
       switch (function3Of(encodedInstructionWord)) {
         case FUNCT3_ADD_SUB:
           if (function7 === FUNCT7_NORMAL) {
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               addw(
                 registers,
                 memory,
@@ -1010,7 +1012,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             subw(
               registers,
               memory,
@@ -1019,10 +1021,10 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_SLL:
           if (function7 !== FUNCT7_NORMAL) {
-            return (registers, _memory, _instructionByteLength) =>
+            return async (registers, _memory, _instructionByteLength) =>
               illegalInstruction(registers, encodedInstructionWord);
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sllw(
               registers,
               memory,
@@ -1031,7 +1033,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
             );
         case FUNCT3_SRL_SRA:
           if (function7 === FUNCT7_NORMAL) {
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               srlw(
                 registers,
                 memory,
@@ -1039,7 +1041,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
                 instructionByteLength
               );
           }
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             sraw(
               registers,
               memory,
@@ -1047,7 +1049,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
@@ -1055,14 +1057,14 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
     case OPCODE_MISC_MEM: {
       const function3 = function3Of(encodedInstructionWord);
       if (function3 === FUNCT3_FENCE) {
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           fence(registers, memory, instructionByteLength);
       }
       if (function3 === FUNCT3_FENCE_I) {
-        return (registers, memory, instructionByteLength) =>
+        return async (registers, memory, instructionByteLength) =>
           fenceI(registers, memory, instructionByteLength);
       }
-      return (registers, _memory, _instructionByteLength) =>
+      return async (registers, _memory, _instructionByteLength) =>
         illegalInstruction(registers, encodedInstructionWord);
     }
 
@@ -1074,10 +1076,10 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
         case FUNCT3_SYSTEM:
           if (function7Of(encodedInstructionWord) === FUNCT7_SFENCE_VMA) {
             if (destinationRegister !== 0) {
-              return (registers, _memory, _instructionByteLength) =>
+              return async (registers, _memory, _instructionByteLength) =>
                 illegalInstruction(registers, encodedInstructionWord);
             }
-            return (registers, memory, instructionByteLength) =>
+            return async (registers, memory, instructionByteLength) =>
               sfenceVma(
                 registers,
                 memory,
@@ -1088,45 +1090,45 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
           switch (controlAndStatusRegister) {
             case FUNCT12_ECALL:
               if (destinationRegister !== 0 || sourceRegister1 !== 0) {
-                return (registers, _memory, _instructionByteLength) =>
+                return async (registers, _memory, _instructionByteLength) =>
                   illegalInstruction(registers, encodedInstructionWord);
               }
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 ecall(registers, memory, instructionByteLength);
             case FUNCT12_EBREAK:
               if (destinationRegister !== 0 || sourceRegister1 !== 0) {
-                return (registers, _memory, _instructionByteLength) =>
+                return async (registers, _memory, _instructionByteLength) =>
                   illegalInstruction(registers, encodedInstructionWord);
               }
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 ebreak(registers, memory, instructionByteLength);
             case FUNCT12_SRET:
               if (destinationRegister !== 0 || sourceRegister1 !== 0) {
-                return (registers, _memory, _instructionByteLength) =>
+                return async (registers, _memory, _instructionByteLength) =>
                   illegalInstruction(registers, encodedInstructionWord);
               }
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 sret(registers, memory, instructionByteLength);
             case FUNCT12_WFI:
               if (destinationRegister !== 0 || sourceRegister1 !== 0) {
-                return (registers, _memory, _instructionByteLength) =>
+                return async (registers, _memory, _instructionByteLength) =>
                   illegalInstruction(registers, encodedInstructionWord);
               }
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 wfi(registers, memory, instructionByteLength);
             case FUNCT12_MRET:
               if (destinationRegister !== 0 || sourceRegister1 !== 0) {
-                return (registers, _memory, _instructionByteLength) =>
+                return async (registers, _memory, _instructionByteLength) =>
                   illegalInstruction(registers, encodedInstructionWord);
               }
-              return (registers, memory, instructionByteLength) =>
+              return async (registers, memory, instructionByteLength) =>
                 mret(registers, memory, instructionByteLength);
             default:
-              return (registers, _memory, _instructionByteLength) =>
+              return async (registers, _memory, _instructionByteLength) =>
                 illegalInstruction(registers, encodedInstructionWord);
           }
         case FUNCT3_CSRRW:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             csrrw(
               registers,
               memory,
@@ -1139,7 +1141,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_CSRRS:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             csrrs(
               registers,
               memory,
@@ -1152,7 +1154,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_CSRRC:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             csrrc(
               registers,
               memory,
@@ -1165,7 +1167,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_CSRRWI:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             csrrwi(
               registers,
               memory,
@@ -1178,7 +1180,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_CSRRSI:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             csrrsi(
               registers,
               memory,
@@ -1191,7 +1193,7 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         case FUNCT3_CSRRCI:
-          return (registers, memory, instructionByteLength) =>
+          return async (registers, memory, instructionByteLength) =>
             csrrci(
               registers,
               memory,
@@ -1204,13 +1206,13 @@ const decode32 = (encodedInstructionWord: number): ExecuteThunk => {
               instructionByteLength
             );
         default:
-          return (registers, _memory, _instructionByteLength) =>
+          return async (registers, _memory, _instructionByteLength) =>
             illegalInstruction(registers, encodedInstructionWord);
       }
     }
 
     default:
-      return (registers, _memory, _instructionByteLength) =>
+      return async (registers, _memory, _instructionByteLength) =>
         illegalInstruction(registers, encodedInstructionWord);
   }
 };

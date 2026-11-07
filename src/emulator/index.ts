@@ -193,7 +193,7 @@ class Emulator implements EmulatorHandle {
     } catch (error) {
       this.#cpu.stop();
       this.#timer.stop();
-      this.#terminal.stop();
+      void this.#cpu.then(this.#terminal.stop, this.#terminal.stop);
       this.#stopped = true;
       throw error;
     }
@@ -210,7 +210,8 @@ class Emulator implements EmulatorHandle {
     cancelSysconWatch(this.#memory);
     this.#cpu.stop();
     this.#timer.stop();
-    this.#terminal.stop();
+    // Stop the producer first so the terminal can drain all remaining output.
+    void this.#cpu.then(this.#terminal.stop, this.#terminal.stop);
   };
 
   #watchSyscon = async (): Promise<void> => {

@@ -155,13 +155,13 @@ const ramMemory = (
 };
 
 /** Store the tree and read the blob back from the guest address `storeDeviceTreeToRam` returns. */
-const storedBlob = (
+const storedBlob = async (
   regions: Map<string, { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }>,
   timebaseHz: bigint,
   imageByteLength = 0,
   memory = ramMemory(regions),
   deviceTreeAddress: Exclude<DeviceTreeAddress, null> = 'end'
-): { address: ReadonlyUint8Array; blob: Uint8Array } => {
+): Promise<{ address: ReadonlyUint8Array; blob: Uint8Array }> => {
   const address = storeDeviceTreeToRam(
     memory,
     regions,
@@ -169,7 +169,7 @@ const storedBlob = (
     timebaseHz,
     deviceTreeAddress
   );
-  const header = loadBytes({
+  const header = await loadBytes({
     destination: new Uint8Array(8),
     memory,
     address,
@@ -178,7 +178,7 @@ const storedBlob = (
   const totalSize = readU32(header, 4);
   return {
     address,
-    blob: loadBytes({
+    blob: await loadBytes({
       destination: new Uint8Array(totalSize),
       memory,
       address,
@@ -253,8 +253,8 @@ const virt = regionsFor({
 });
 
 describe('storeDeviceTreeToRam', () => {
-  it('describes the virt-like map with OpenSBI compatible strings', () => {
-    const root = decode(storedBlob(virt, 10_000_000n).blob);
+  it('describes the virt-like map with OpenSBI compatible strings', async () => {
+    const root = decode((await storedBlob(virt, 10_000_000n)).blob);
     const memory = child(root, 'memory@80000000');
     assert.equal(text(memory, 'device_type'), 'memory');
     assert.deepEqual(reg(memory), { address: 0x8000_0000n, size: 0x1000_0000n });
@@ -298,17 +298,19 @@ describe('storeDeviceTreeToRam', () => {
     assert.equal(text(child(root, 'chosen'), 'stdout-path'), '/soc/uart@10000000');
   });
 
-  it('follows a shifted guest map', () => {
+  it('follows a shifted guest map', async () => {
     const root = decode(
-      storedBlob(
-        regionsFor({
-          ramBase: 0x9000_0000n,
-          ramSize: 0x2000n,
-          uartBase: 0x4000_0000n,
-          clintBase: 0x5000_0000n,
-          plicBase: 0x6000_0000n,
-        }),
-        1_000_000n
+      (
+        await storedBlob(
+          regionsFor({
+            ramBase: 0x9000_0000n,
+            ramSize: 0x2000n,
+            uartBase: 0x4000_0000n,
+            clintBase: 0x5000_0000n,
+            plicBase: 0x6000_0000n,
+          }),
+          1_000_000n
+        )
       ).blob
     );
     assert.deepEqual(reg(child(root, 'memory@90000000')), {
@@ -320,7 +322,7 @@ describe('storeDeviceTreeToRam', () => {
     assert.equal(cells(child(root, 'cpus'), 'timebase-frequency')[0], 1_000_000);
   });
 
-  it('includes only the regions present in the map', () => {
+  it('includes only the regions present in the map', async () => {
     const ramAndUart = new Map([
       [RAM_REGION_ID, { guestAddress: guest(0x8000_0000n), guestByteLength: 0x1_0000n }],
       [
@@ -328,7 +330,7 @@ describe('storeDeviceTreeToRam', () => {
         { guestAddress: guest(0x1000_0000n), guestByteLength: UART_GUEST_BYTE_LENGTH },
       ],
     ]);
-    const root = decode(storedBlob(ramAndUart, 10_000_000n).blob);
+    const root = decode((await storedBlob(ramAndUart, 10_000_000n)).blob);
     const soc = child(root, 'soc');
     assert.deepEqual(
       soc.children.map((node) => node.name),
@@ -342,14 +344,14 @@ describe('storeDeviceTreeToRam', () => {
     const ramOnly = new Map([
       [RAM_REGION_ID, { guestAddress: guest(0x8000_0000n), guestByteLength: 0x1_0000n }],
     ]);
-    const bare = decode(storedBlob(ramOnly, 10_000_000n).blob);
+    const bare = decode((await storedBlob(ramOnly, 10_000_000n)).blob);
     assert.deepEqual(
       bare.children.map((node) => node.name),
       ['cpus', 'memory@80000000']
     );
   });
 
-  it('copies the blob to the top of RAM above the image', () => {
+  it('copies the blob to the top of RAM above the image', async () => {
     const ramSize = 0x1_0000n;
     const regions = regionsFor({
       ramBase: 0x8000_0000n,
@@ -370,7 +372,7 @@ describe('storeDeviceTreeToRam', () => {
     const image = Uint8Array.of(0x73, 0x00, 0x50, 0x10);
     memory.bytes.set(image, 0);
 
-    const { address, blob } = storedBlob(regions, 10_000_000n, image.byteLength, memory);
+    const { address, blob } = await storedBlob(regions, 10_000_000n, image.byteLength, memory);
     const addressValue = bytesToBigInt(address);
     assert.equal(addressValue % 8n, 0n);
     assert.ok(addressValue >= 0x8000_0000n + BigInt(image.byteLength));
@@ -402,7 +404,7 @@ describe('storeDeviceTreeToRam', () => {
     });
   });
 
-  it('stores the blob at a caller-supplied address', () => {
+  it('stores the blob at a caller-supplied address', async () => {
     const regions = regionsFor({
       ramBase: 0x8000_0000n,
       ramSize: 0x1_0000n,
@@ -411,7 +413,7 @@ describe('storeDeviceTreeToRam', () => {
       plicBase: 0x0c00_0000n,
     });
     const address = guest(0x8000_1000n);
-    const stored = storedBlob(regions, 10_000_000n, 0, ramMemory(regions), address);
+    const stored = await storedBlob(regions, 10_000_000n, 0, ramMemory(regions), address);
     assert.deepEqual(stored.address, address);
     assert.equal(readU32(stored.blob, 0), 0xd00dfeed);
   });

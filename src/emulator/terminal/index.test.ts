@@ -19,6 +19,7 @@ import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadBytes, storeBytes } from '#emulator/memory';
+import { plicGatewayLockIndex } from '#emulator/plic';
 import { create } from '#emulator/terminal';
 import { create as createTimer } from '#emulator/timer';
 import createTestMemory from '#test/guest-memory';
@@ -71,7 +72,7 @@ describe('terminal worker', () => {
         });
       });
 
-      storeBytes({
+      await storeBytes({
         memory,
         address: UART_BASE,
         source: new Uint8Array([0x21]),
@@ -84,7 +85,7 @@ describe('terminal worker', () => {
       let rx = 0;
       for (let attempt = 0; attempt < 50; attempt += 1) {
         await delay(10);
-        loadBytes({
+        await loadBytes({
           destination: rbr,
           memory,
           address: UART_BASE,
@@ -96,6 +97,52 @@ describe('terminal worker', () => {
         }
       }
       assert.equal(rx, 0x41);
+    } finally {
+      terminal.stop();
+      await terminal;
+    }
+  });
+
+  it('drains sustained TX output in order', { timeout: 15_000 }, async () => {
+    const memory = createTestMemory(256n);
+    const stdout = new PassThrough();
+    const chunks: Buffer[] = [];
+    stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const terminal = create({ memory, stdin: new PassThrough(), stdout });
+    const lsrAddress = unsignedBigIntToBytes(new Uint8Array(8), 0x1000_0005n);
+    const expected = Buffer.alloc(1024);
+    for (let index = 0; index < expected.length; index += 1) {
+      expected[index] = index & 0xff;
+    }
+    terminal.start();
+    try {
+      const deadline = Date.now() + 10_000;
+      const status = new Uint8Array(1);
+      for (const byte of expected) {
+        for (;;) {
+          await loadBytes({ destination: status, memory, address: lsrAddress, byteLength: 1 });
+          if ((status[0]! & 0x20) !== 0) {
+            break;
+          }
+          if (Date.now() > deadline) {
+            assert.fail('timed out waiting for UART TX space');
+          }
+          await delay(1);
+        }
+        await storeBytes({
+          memory,
+          address: UART_BASE,
+          source: new Uint8Array([byte]),
+          byteLength: 1,
+        });
+      }
+      while (Buffer.concat(chunks).length < expected.length) {
+        if (Date.now() > deadline) {
+          assert.fail('timed out waiting for UART output');
+        }
+        await delay(1);
+      }
+      assert.deepEqual(Buffer.concat(chunks), expected);
     } finally {
       terminal.stop();
       await terminal;
@@ -131,6 +178,68 @@ describe('terminal worker', () => {
     await Promise.all([timer, terminal]);
   });
 
+  it('stop drains TX after a contended gateway lock is released', { timeout: 4000 }, async () => {
+    const memory = createTestMemory(256n);
+    await storeBytes({ memory, address: UART_BASE, source: new Uint8Array([0x41]), byteLength: 1 });
+    const lock = new Int32Array(memory.bytes.buffer, plicGatewayLockIndex(memory), 1);
+    Atomics.store(lock, 0, 1);
+    const stdout = new PassThrough();
+    const received: Buffer[] = [];
+    stdout.on('data', (chunk: Buffer) => received.push(chunk));
+    const terminal = create({ memory, stdin: new PassThrough(), stdout });
+    terminal.start();
+    try {
+      let notified = 0;
+      for (let attempt = 0; attempt < 200 && notified === 0; attempt += 1) {
+        await delay(5);
+        notified = Atomics.notify(lock, 0, 1);
+      }
+      assert.equal(notified, 1, 'terminal did not park on the gateway');
+      terminal.stop();
+      Atomics.store(lock, 0, 0);
+      Atomics.notify(lock, 0);
+      await terminal;
+      assert.deepEqual(Buffer.concat(received), Buffer.from([0x41]));
+    } finally {
+      Atomics.store(lock, 0, 0);
+      Atomics.notify(lock, 0);
+      terminal.stop();
+      await terminal;
+    }
+  });
+
+  it('stop drains even when the gateway lock is orphaned', { timeout: 3000 }, async () => {
+    const memory = createTestMemory(256n);
+    await storeBytes({ memory, address: UART_BASE, source: new Uint8Array([0x42]), byteLength: 1 });
+    const lock = new Int32Array(memory.bytes.buffer, plicGatewayLockIndex(memory), 1);
+    Atomics.store(lock, 0, 1);
+    const stdout = new PassThrough();
+    const received: Buffer[] = [];
+    stdout.on('data', (chunk: Buffer) => received.push(chunk));
+    const terminal = create({ memory, stdin: new PassThrough(), stdout });
+    terminal.start();
+    try {
+      let parked = 0;
+      for (let attempt = 0; attempt < 200 && parked === 0; attempt += 1) {
+        await delay(5);
+        parked = Atomics.notify(lock, 0, 1);
+      }
+      assert.equal(parked, 1);
+      terminal.stop();
+      await terminal;
+      assert.equal(Atomics.load(lock, 0), 1);
+      for (let attempt = 0; attempt < 100 && received.length === 0; attempt += 1) {
+        await delay(5);
+      }
+      assert.deepEqual(Buffer.concat(received), Buffer.from([0x42]));
+    } finally {
+      Atomics.store(lock, 0, 0);
+      Atomics.notify(lock, 0);
+      terminal.stop();
+      await terminal;
+    }
+  });
+
   it(
     'stop flushes TX bytes already queued in the UART ring to stdout',
     { timeout: 20_000 },
@@ -141,7 +250,7 @@ describe('terminal worker', () => {
       // letting the isolate exit and destroy the buffered writes.
       const queued = Uint8Array.of(0x64, 0x72, 0x61, 0x69, 0x6e);
       for (const byte of queued) {
-        storeBytes({
+        await storeBytes({
           memory,
           address: UART_BASE,
           source: new Uint8Array([byte]),

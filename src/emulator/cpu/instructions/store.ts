@@ -58,17 +58,17 @@ const denyStore = (
 };
 
 /** sb: mem[rs1+imm] = rs2[7:0]. */
-const sb = (
+const sb = async (
   registers: Registers,
   memory: Memory,
   args: StoreArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = storeEffectiveAddress(registers, args);
   if (denyStore(registers, memory, address, 1)) {
     return;
   }
-  storeBytes({
+  await storeBytes({
     memory,
     address,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
@@ -78,17 +78,17 @@ const sb = (
 };
 
 /** sh: mem[rs1+imm] = rs2[15:0]. */
-const sh = (
+const sh = async (
   registers: Registers,
   memory: Memory,
   args: StoreArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = storeEffectiveAddress(registers, args);
   if (denyStore(registers, memory, address, 2)) {
     return;
   }
-  storeBytes({
+  await storeBytes({
     memory,
     address,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
@@ -98,17 +98,17 @@ const sh = (
 };
 
 /** sw: mem[rs1+imm] = rs2[31:0]. */
-const sw = (
+const sw = async (
   registers: Registers,
   memory: Memory,
   args: StoreArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = storeEffectiveAddress(registers, args);
   if (denyStore(registers, memory, address, 4)) {
     return;
   }
-  storeBytes({
+  await storeBytes({
     memory,
     address,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
@@ -118,17 +118,17 @@ const sw = (
 };
 
 /** sd: mem[rs1+imm] = rs2. */
-const sd = (
+const sd = async (
   registers: Registers,
   memory: Memory,
   args: StoreArgs,
   instructionByteLength: ReadonlyUint8Array
-): void => {
+): Promise<void> => {
   const address = storeEffectiveAddress(registers, args);
   if (denyStore(registers, memory, address, 8)) {
     return;
   }
-  storeBytes({
+  await storeBytes({
     memory,
     address,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),

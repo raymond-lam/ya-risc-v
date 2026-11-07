@@ -18,43 +18,41 @@ import { once } from 'node:events';
 import { Readable, Writable } from 'node:stream';
 import { parentPort, workerData } from 'node:worker_threads';
 import type { TerminalWorkerData } from '#emulator/terminal/types';
-import { popUartTransmit, pushUartReceive, waitUartTransmit } from '#emulator/uart';
+import {
+  dequeueTransmit,
+  popUartTransmit,
+  pushUartReceive,
+  waitUartTransmit,
+} from '#emulator/uart';
 
-/**
- * Pump UART TX bytes to stdout until the ring is idle, stop is requested, or the
- * stream dies. Returns `true` when stop was requested with the ring drained, `false`
- * when the stream died mid-drain (the consumer is gone; nothing more can flush).
- *
- * `stopPromise` is the graceful-shutdown signal from the host. The idle wait is
- * raced against it so a stop request is never stuck behind an indefinite wait
- * for bytes that will never arrive; when the stop wins, one final drain pass
- * empties the ring before the pump returns. No `delay` / `setTimeout` anywhere in
- * this path — shutdown completes on events, not time.
- */
+/** Pump output while running. A pending dequeue must not consume bytes after stop. */
 const pumpTransmit = async (
   memory: TerminalWorkerData['memory'],
   stdout: Writable,
-  stopPromise: Promise<void>,
-  isStopRequested: () => boolean
+  stopSignal: AbortSignal
 ): Promise<boolean> => {
-  for (;;) {
-    if (!(await drainTransmitRing(memory, stdout))) {
-      return false;
-    }
-    await Promise.race([waitUartTransmit(memory), stopPromise]);
-    if (isStopRequested()) {
-      // Stop won the race while the pump was parked: the ring can hold bytes pushed
-      // since the last pass, so drain once more before ending the stream. This pass
-      // pops until the ring is empty; because the CPU worker is torn down around the
-      // same moment as the stop (the syscon power cut stops the worker), it is bounded
-      // by the ring capacity in practice. Bytes the guest enqueues after this pass —
-      // or while it runs, if the worker has not been torn down yet — are dropped: a
-      // host-initiated stop guarantees the bytes already in the ring, not an
-      // unbounded live producer.
-      if (!(await drainTransmitRing(memory, stdout))) {
+  while (!stopSignal.aborted) {
+    const value = await popUartTransmit(memory, () => stopSignal.aborted);
+    if (value !== null) {
+      if (!stdout.write(Buffer.from([value])) && !(await drainOrClosed(stdout))) {
         return false;
       }
+    } else if (!stopSignal.aborted) {
+      await waitUartTransmit(memory);
+    }
+  }
+  return true;
+};
+
+/** On stop, drain the TX queue without waiting on the gateway or refreshing IRQs. */
+const drainTransmitRing = async (memory: TerminalWorkerData['memory'], stdout: Writable) => {
+  for (;;) {
+    const entry = dequeueTransmit(memory);
+    if (entry === null) {
       return true;
+    }
+    if (!stdout.write(Buffer.from([entry.value])) && !(await drainOrClosed(stdout))) {
+      return false;
     }
   }
 };
@@ -72,37 +70,18 @@ const pumpTransmit = async (
  * spinning on events that can never fire.
  */
 const drainOrClosed = async (stdout: Writable): Promise<boolean> => {
+  const controller = new AbortController();
   try {
     return await Promise.race([
-      once(stdout, 'drain').then((): true => true),
-      once(stdout, 'close').then((): false => false),
+      once(stdout, 'drain', { signal: controller.signal }).then((): true => true),
+      once(stdout, 'close', { signal: controller.signal }).then((): false => false),
     ]);
   } catch {
     // `once` rejects when the emitter emits `error`: the stream is dead.
     return false;
+  } finally {
+    controller.abort();
   }
-};
-
-/**
- * Pop TX bytes and write them to `stdout` until the ring is empty. Each iteration
- * pops exactly one byte, so the loop terminates when the ring drains; it returns
- * `false` if the stream dies mid-drain (remaining ring bytes are unreachable).
- */
-const drainTransmitRing = async (
-  memory: TerminalWorkerData['memory'],
-  stdout: Writable
-): Promise<boolean> => {
-  let value = popUartTransmit(memory);
-  while (value !== null) {
-    // `write` returns false under backpressure; wait for `drain` before the next byte.
-    if (!stdout.write(Buffer.from([value]))) {
-      if (!(await drainOrClosed(stdout))) {
-        return false;
-      }
-    }
-    value = popUartTransmit(memory);
-  }
-  return true;
 };
 
 const main = async (): Promise<void> => {
@@ -110,29 +89,51 @@ const main = async (): Promise<void> => {
   const stdin = Readable.fromWeb(stdinWeb);
   const stdout = Writable.fromWeb(stdoutWeb);
 
+  let receiveQueue = Promise.resolve();
+  let stdinStopped = false;
   const onStdinData = (chunk: Buffer): void => {
-    for (const byte of chunk) {
-      pushUartReceive(memory, byte);
-    }
+    stdin.pause();
+    receiveQueue = receiveQueue.then(async () => {
+      for (const byte of chunk) {
+        if (stdinStopped) {
+          break;
+        }
+        await pushUartReceive(memory, byte);
+      }
+      if (!stdinStopped) {
+        stdin.resume();
+      }
+    });
   };
   stdin.on('data', onStdinData);
   const stopStdin = (): void => {
+    stdinStopped = true;
     stdin.off('data', onStdinData);
+    stdin.pause();
   };
   stdin.once('close', stopStdin);
   parentPort?.once('close', stopStdin);
 
-  let stopRequested = false;
-  const stopPromise = new Promise<void>((resolve) => {
-    parentPort?.once('message', () => {
-      stopRequested = true;
-      resolve();
-    });
+  const stopController = new AbortController();
+  const stopRequested = Promise.withResolvers<boolean>();
+  parentPort?.once('message', () => {
+    stopStdin();
+    stopController.abort();
+    stopRequested.resolve(true);
   });
 
-  const stopped = await pumpTransmit(memory, stdout, stopPromise, () => stopRequested);
+  // Race once for the worker's lifetime, not once per transmitted byte.
+  const stopped = await Promise.race([
+    pumpTransmit(memory, stdout, stopController.signal),
+    stopRequested.promise,
+  ]);
+  stopStdin();
+  // A pending RX operation may be parked on an orphaned gateway; discard it on stop.
+  if (!stopped) {
+    await receiveQueue;
+  }
 
-  if (stopped) {
+  if (stopped && (await drainTransmitRing(memory, stdout))) {
     // Drain handshake tail: end the stream so every buffered byte is flushed to
     // the host, and await `finish` so the writes have actually completed before
     // the isolate goes away. `process.exit` terminates immediately and would

@@ -51,7 +51,13 @@
  */
 
 import { CLINT_REGION_ID, loadBytesFromClint, storeBytesToClint } from '#emulator/clint';
-import { loadBytesFromPlic, PLIC_REGION_ID, storeBytesToPlic } from '#emulator/plic';
+import {
+  loadBytesFromPlic,
+  plicMemoryLockIndexes,
+  PLIC_REGION_ID,
+  storeBytesToPlic,
+} from '#emulator/plic';
+import withSharedLocks from '#emulator/with-shared-locks';
 import {
   atomicRamCompareExchange,
   atomicRamLoad,
@@ -62,11 +68,17 @@ import {
 } from '#emulator/ram';
 import {
   invalidateOverlappingReservationsLocked,
-  releaseScMonitorIfHeld,
-  withMonitorLock,
+  reservationLockIndex,
+  setReservationLocked,
+  tryTakeReservation,
 } from '#emulator/reservation';
 import { loadBytesFromSyscon, storeBytesToSyscon, SYSCON_REGION_ID } from '#emulator/syscon';
-import { loadBytesFromUart, storeBytesToUart, UART_REGION_ID } from '#emulator/uart';
+import {
+  loadBytesFromUart,
+  storeBytesToUart,
+  uartMemoryLockIndexes,
+  UART_REGION_ID,
+} from '#emulator/uart';
 import type { ReadonlyUint8Array } from '#types';
 import { alignUp } from '#utils/alignment';
 import findLastIndex from '#utils/binary-search';
@@ -304,20 +316,32 @@ const loadBytesFromUnmapped: RegionLoadBytes = (_args) => {};
 /** Stores to an unmapped guest address are ignored. */
 const storeBytesToUnmapped: RegionStoreBytes = (_args) => {};
 
-const UNMAPPED_LOAD_STORE = [loadBytesFromUnmapped, storeBytesToUnmapped] as const;
+type RegionMemoryAccess = {
+  readonly load: RegionLoadBytes;
+  readonly store: RegionStoreBytes;
+  /** Locks needed for a complete device access, in addition to the store monitor. */
+  readonly lockIndexes?: (memory: Memory) => readonly number[];
+};
 
-/**
- * regionId → `[loadBytesFromRegion, storeBytesToRegion]`.
- * Missing ids (and unmapped guest addresses) use `UNMAPPED_LOAD_STORE`.
- */
-const REGION_LOAD_STORE: ReadonlyMap<string, readonly [RegionLoadBytes, RegionStoreBytes]> =
-  new Map([
-    [RAM_REGION_ID, [loadBytesFromRam, storeBytesToRam]],
-    [UART_REGION_ID, [loadBytesFromUart, storeBytesToUart]],
-    [CLINT_REGION_ID, [loadBytesFromClint, storeBytesToClint]],
-    [PLIC_REGION_ID, [loadBytesFromPlic, storeBytesToPlic]],
-    [SYSCON_REGION_ID, [loadBytesFromSyscon, storeBytesToSyscon]],
-  ]);
+const UNMAPPED_LOAD_STORE: RegionMemoryAccess = {
+  load: loadBytesFromUnmapped,
+  store: storeBytesToUnmapped,
+};
+
+/** Region handlers declare their own lock requirements. */
+const REGION_LOAD_STORE = new Map<string, RegionMemoryAccess>([
+  [RAM_REGION_ID, { load: loadBytesFromRam, store: storeBytesToRam }],
+  [
+    UART_REGION_ID,
+    { load: loadBytesFromUart, store: storeBytesToUart, lockIndexes: uartMemoryLockIndexes },
+  ],
+  [CLINT_REGION_ID, { load: loadBytesFromClint, store: storeBytesToClint }],
+  [
+    PLIC_REGION_ID,
+    { load: loadBytesFromPlic, store: storeBytesToPlic, lockIndexes: plicMemoryLockIndexes },
+  ],
+  [SYSCON_REGION_ID, { load: loadBytesFromSyscon, store: storeBytesToSyscon }],
+]);
 
 /** Atomic ops on non-RAM (or unmapped) regions fail — callers trap. */
 const atomicLoadBytesNoop: RegionAtomicLoadBytes = (_args) => false;
@@ -346,7 +370,7 @@ const REGION_ATOMIC_LOAD_STORE: ReadonlyMap<
 ]);
 
 /** Copy `byteLength` bytes from `memory` at guest `address` into `destination` (high bytes cleared). */
-const loadBytes = ({
+const loadBytes = async ({
   destination,
   memory,
   address,
@@ -356,15 +380,22 @@ const loadBytes = ({
   memory: Memory;
   address: ReadonlyUint8Array;
   byteLength: number;
-}): Uint8Array => {
+}): Promise<Uint8Array> => {
   destination.fill(0);
   const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
   if (resolved === null) {
     return destination;
   }
   const { regionId, offset } = resolved;
-  const [loadBytesFromRegion] = REGION_LOAD_STORE.get(regionId) ?? UNMAPPED_LOAD_STORE;
-  loadBytesFromRegion({ destination, memory, address, offset, byteLength });
+  const region = REGION_LOAD_STORE.get(regionId) ?? UNMAPPED_LOAD_STORE;
+  const locks = region.lockIndexes?.(memory) ?? [];
+  if (locks.length > 0) {
+    await withSharedLocks(memory.bytes, locks, () => {
+      region.load({ destination, memory, address, offset, byteLength });
+    });
+  } else {
+    region.load({ destination, memory, address, offset, byteLength });
+  }
   return destination;
 };
 
@@ -379,23 +410,19 @@ const storeBytes = ({
   address: ReadonlyUint8Array;
   source: ReadonlyUint8Array;
   byteLength: number;
-}): void => {
-  try {
-    // Hold the LR/SC monitor across invalidate and the write so a remote hart
-    // cannot arm a reservation in the gap (same critical section SC uses).
-    withMonitorLock(memory, () => {
-      invalidateOverlappingReservationsLocked(memory, address, byteLength);
-      const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
-      if (resolved === null) {
-        return;
-      }
-      const { regionId, offset } = resolved;
-      const [, storeBytesToRegion] = REGION_LOAD_STORE.get(regionId) ?? UNMAPPED_LOAD_STORE;
-      storeBytesToRegion({ memory, address, offset, source, byteLength });
-    });
-  } finally {
-    releaseScMonitorIfHeld(memory);
-  }
+}): Promise<void> => {
+  const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+  const region =
+    resolved === null
+      ? UNMAPPED_LOAD_STORE
+      : (REGION_LOAD_STORE.get(resolved.regionId) ?? UNMAPPED_LOAD_STORE);
+  const locks = [reservationLockIndex(memory), ...(region.lockIndexes?.(memory) ?? [])];
+  return withSharedLocks(memory.bytes, locks, () => {
+    invalidateOverlappingReservationsLocked(memory, address, byteLength);
+    if (resolved !== null) {
+      region.store({ memory, address, offset: resolved.offset, source, byteLength });
+    }
+  });
 };
 
 /**
@@ -422,11 +449,22 @@ const atomicLoadBytes = ({
   return atomicLoadBytesFromRegion({ destination, memory, address, byteLength });
 };
 
-/**
- * Atomic store of a naturally aligned 32-bit or 64-bit location from `source`.
- * Returns `false` when unmapped, non-RAM, or misaligned.
- * Always releases an SC-held monitor lock on every exit path.
- */
+/** Load and arm the reservation atomically with respect to stores and other harts. */
+const atomicLoadReservedBytes = async ({
+  hartId,
+  ...args
+}: Parameters<typeof atomicLoadBytes>[0] & { hartId: number }): Promise<boolean> => {
+  let loaded = false;
+  await withSharedLocks(args.memory.bytes, [reservationLockIndex(args.memory)], () => {
+    loaded = atomicLoadBytes(args);
+    if (loaded) {
+      setReservationLocked(args.memory, hartId, args.address, args.byteLength);
+    }
+  });
+  return loaded;
+};
+
+/** Atomic store while the caller holds the reservation monitor. */
 const atomicStoreBytes = ({
   memory,
   address,
@@ -438,17 +476,27 @@ const atomicStoreBytes = ({
   source: ReadonlyUint8Array;
   byteLength: 4 | 8;
 }): boolean => {
-  try {
-    const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
-    if (resolved === null) {
-      return false;
-    }
-    const [, atomicStoreBytesToRegion] =
-      REGION_ATOMIC_LOAD_STORE.get(resolved.regionId) ?? ATOMIC_NOOP_LOAD_STORE;
-    return atomicStoreBytesToRegion({ memory, address, source, byteLength });
-  } finally {
-    releaseScMonitorIfHeld(memory);
+  const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
+  if (resolved === null) {
+    return false;
   }
+  const [, atomicStoreBytesToRegion] =
+    REGION_ATOMIC_LOAD_STORE.get(resolved.regionId) ?? ATOMIC_NOOP_LOAD_STORE;
+  return atomicStoreBytesToRegion({ memory, address, source, byteLength });
+};
+
+/** Check the reservation and perform the SC store in one critical section. */
+const atomicStoreConditionalBytes = async ({
+  hartId,
+  ...args
+}: Parameters<typeof atomicStoreBytes>[0] & { hartId: number }): Promise<boolean> => {
+  let stored = false;
+  await withSharedLocks(args.memory.bytes, [reservationLockIndex(args.memory)], () => {
+    if (tryTakeReservation(args.memory, hartId, args.address, args.byteLength)) {
+      stored = atomicStoreBytes(args);
+    }
+  });
+  return stored;
 };
 
 /**
@@ -469,27 +517,31 @@ const atomicCompareExchangeBytes = ({
   byteLength: 4 | 8;
   expected: ReadonlyUint8Array;
   desired: ReadonlyUint8Array;
-}): boolean => {
+}): Promise<boolean> => {
   const resolved = resolveGuestAddressToRegionAndOffset(memory, address);
   if (resolved === null) {
-    return false;
+    return Promise.resolve(false);
   }
   const [, , atomicCompareExchangeBytesInRegion] =
     REGION_ATOMIC_LOAD_STORE.get(resolved.regionId) ?? ATOMIC_NOOP_LOAD_STORE;
-  return atomicCompareExchangeBytesInRegion({
-    destination,
-    memory,
-    address,
-    byteLength,
-    expected,
-    desired,
-  });
+  let exchanged = false;
+  return withSharedLocks(memory.bytes, [reservationLockIndex(memory)], () => {
+    exchanged = atomicCompareExchangeBytesInRegion({
+      destination,
+      memory,
+      address,
+      byteLength,
+      expected,
+      desired,
+    });
+  }).then(() => exchanged);
 };
 
 export {
   atomicCompareExchangeBytes,
   atomicLoadBytes,
-  atomicStoreBytes,
+  atomicLoadReservedBytes,
+  atomicStoreConditionalBytes,
   createMemory,
   guestAccessIsMapped,
   loadBytes,

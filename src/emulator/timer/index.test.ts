@@ -36,7 +36,7 @@ const clintAddress = (offset: bigint): ReadonlyUint8Array =>
 describe('timer worker', () => {
   it('advances mtime and asserts the timer wire when past mtimecmp', async () => {
     const memory = createTestMemory(256n);
-    storeBytes({
+    await storeBytes({
       memory,
       address: clintAddress(CLINT_MTIMECMP_OFFSET),
       source: unsignedBigIntToBytes(new Uint8Array(8), 1n),
@@ -58,7 +58,7 @@ describe('timer worker', () => {
       assert.equal(pending, true);
 
       const mtime = new Uint8Array(8);
-      loadBytes({
+      await loadBytes({
         destination: mtime,
         memory,
         address: clintAddress(CLINT_MTIME_OFFSET),
