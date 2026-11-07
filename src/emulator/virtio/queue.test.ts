@@ -325,6 +325,115 @@ describe('virtio queue engine', () => {
     });
   });
 
+  it('keeps pending read destinations independent across devices', async () => {
+    const first = createTestMemory(512n);
+    const second = createTestMemory(512n);
+    configureQueue(first);
+    configureQueue(second);
+    await withDiskWorker(first, async () => {
+      await withDiskWorker(second, async () => {
+        for (const [memory, destination] of [
+          [first, DATA1],
+          [second, DATA2],
+        ] as const) {
+          storeGuest(memory, DATA1, new Uint8Array(16).fill(0xee));
+          storeGuest(memory, DATA2, new Uint8Array(16).fill(0xdd));
+          storeGuest(memory, STATUS1, new Uint8Array([0xff]));
+          queueChain(memory, {
+            head: 0,
+            dataSlot: 1,
+            statusSlot: 2,
+            headerAddress: HEADER1,
+            dataAddress: destination,
+            statusAddress: STATUS1,
+            dataLength: 16,
+            type: 0,
+            sector: 1n,
+          });
+          writeU16(memory, AVAIL_BASE + 2n, 1);
+          writeU16(memory, AVAIL_BASE + 4n, 0);
+          writeVirtioRegister(memory, 0x050n, 0);
+        }
+
+        // The submitted request owns a snapshot; subsequent guest descriptor changes
+        // must not redirect the completed DMA.
+        writeDescriptor(first, 1, {
+          address: DATA2,
+          length: 16,
+          flags: VRING_DESC_F_WRITE | VRING_DESC_F_NEXT,
+          next: 2,
+        });
+        await serviceVirtioDiskQueueUntil(first, () => usedIdx(first) === 1);
+        await serviceVirtioDiskQueueUntil(second, () => usedIdx(second) === 1);
+        assert.equal(usedIdx(first), 1);
+        assert.equal(usedIdx(second), 1);
+        assert.equal(loadGuest(first, STATUS1, 1)[0], 0);
+        assert.equal(loadGuest(second, STATUS1, 1)[0], 0);
+        assert.deepEqual(loadGuest(first, DATA1, 16), SECTOR_HEAD);
+        assert.deepEqual(loadGuest(first, DATA2, 16), new Uint8Array(16).fill(0xdd));
+        assert.deepEqual(loadGuest(second, DATA1, 16), new Uint8Array(16).fill(0xee));
+        assert.deepEqual(loadGuest(second, DATA2, 16), SECTOR_HEAD);
+      });
+    });
+  });
+
+  it('discards a pending read on reset and accepts a new destination', async () => {
+    const memory = createTestMemory(512n);
+    configureQueue(memory);
+    await withDiskWorker(memory, async () => {
+      storeGuest(memory, DATA1, new Uint8Array(16).fill(0xee));
+      storeGuest(memory, DATA2, new Uint8Array(16).fill(0xdd));
+      storeGuest(memory, STATUS1, new Uint8Array([0xff]));
+      queueChain(memory, {
+        head: 0,
+        dataSlot: 1,
+        statusSlot: 2,
+        headerAddress: HEADER1,
+        dataAddress: DATA1,
+        statusAddress: STATUS1,
+        dataLength: 16,
+        type: 0,
+        sector: 1n,
+      });
+      writeU16(memory, AVAIL_BASE + 2n, 1);
+      writeU16(memory, AVAIL_BASE + 4n, 0);
+      writeVirtioRegister(memory, 0x050n, 0);
+      assert.equal(loadVirtioShadowU32(memory, VIRTIO_HOST_REQUEST_SEQ), 1);
+      writeVirtioRegister(memory, 0x070n, 0); // reset before servicing the completion
+      for (
+        let attempt = 0;
+        attempt < 1000 && loadVirtioDiskCompletionSeq(memory) !== 1;
+        attempt += 1
+      ) {
+        await delay(1);
+      }
+      assert.equal(loadVirtioDiskCompletionSeq(memory), 1);
+      serviceVirtioDiskQueue(memory);
+      assert.equal(usedIdx(memory), 0);
+      assert.equal(loadGuest(memory, STATUS1, 1)[0], 0xff);
+      assert.deepEqual(loadGuest(memory, DATA1, 16), new Uint8Array(16).fill(0xee));
+
+      configureQueue(memory);
+      queueChain(memory, {
+        head: 0,
+        dataSlot: 1,
+        statusSlot: 2,
+        headerAddress: HEADER1,
+        dataAddress: DATA2,
+        statusAddress: STATUS1,
+        dataLength: 16,
+        type: 0,
+        sector: 1n,
+      });
+      writeVirtioRegister(memory, 0x050n, 0);
+      await serviceVirtioDiskQueueUntil(memory, () => usedIdx(memory) === 1);
+      assert.equal(usedIdx(memory), 1);
+      assert.equal(loadGuest(memory, STATUS1, 1)[0], 0);
+      assert.deepEqual(loadGuest(memory, DATA1, 16), new Uint8Array(16).fill(0xee));
+      assert.deepEqual(loadGuest(memory, DATA2, 16), SECTOR_HEAD);
+    });
+  });
+
   it('InterruptACK bit 0 clears the interrupt and deasserts PLIC source 1', async () => {
     const memory = createTestMemory(512n);
     configureQueue(memory);

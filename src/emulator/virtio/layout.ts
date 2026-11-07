@@ -29,6 +29,7 @@
  * Atomics, staging window), and the worker-published capacity. initializeVirtio runs on
  * the host before any worker starts; afterwards the CPU worker owns offsets 0–63/96–128,
  * the disk worker owns the capacity words, and the channel words follow the seq protocol.
+ * The pending segment table after the staging window is also CPU-worker-owned.
  */
 
 import type { Memory } from '#emulator/memory';
@@ -40,15 +41,19 @@ const VIRTIO_REGION_ID = 'virtio';
 /** Guest-visible MMIO window (sparse; holes read 0 / ignore stores). Always packed — even
  *  diskless, so a probe reads 0x00000000 instead of taking a load access fault. */
 const VIRTIO_GUEST_BYTE_LENGTH = 0x1000n;
-/** Packed host slab: register shadows + engine state + disk channel + staging window,
- *  plus the appended config-generation / queue-notify / disk-ready words after it. */
-const VIRTIO_HOST_BYTE_LENGTH = 4252n;
 /** Maximum split-virtqueue depth this device supports (xv6's NUM). */
 const VIRTIO_QUEUE_NUM_MAX = 8;
 /** Staging window size — the device's maximum single-request data length. */
 const VIRTIO_DISK_STAGING_BYTES = 4096;
 /** Upper bound on descriptor-chain hops while walking NEXT (cycle guard). */
 const VIRTIO_MAX_CHAIN_DESCRIPTORS = 256;
+/** Pending segments: u64 guest address + u32 length, packed little-endian. */
+const VIRTIO_HOST_PENDING_SEGMENTS = 4252;
+const VIRTIO_HOST_PENDING_SEGMENT_BYTES = 12;
+/** Packed host slab including the bounded CPU-owned pending-segment table. */
+const VIRTIO_HOST_BYTE_LENGTH = BigInt(
+  VIRTIO_HOST_PENDING_SEGMENTS + VIRTIO_MAX_CHAIN_DESCRIPTORS * VIRTIO_HOST_PENDING_SEGMENT_BYTES
+);
 
 const VIRTIO_MMIO_MAGIC = 0x000n; // MagicValue (RO)
 const VIRTIO_MMIO_VERSION = 0x004n; // Version (RO)
@@ -140,8 +145,8 @@ const VIRTIO_HOST_REQUEST_SECTOR_HIGH = 88;
 const VIRTIO_HOST_DRAINED_SEQ = 96;
 const VIRTIO_HOST_PENDING_HEAD = 100;
 const VIRTIO_HOST_PENDING_STATUS_ADDRESS = 104;
-// Bytes 112..119 are an unused hole: the descriptor data address never crosses the channel
-// (the disk worker only touches the staging window; the segments stay CPU-worker-local).
+const VIRTIO_HOST_PENDING_SEGMENT_COUNT = 112;
+// Bytes 116..119 are unused.
 const VIRTIO_HOST_PENDING_DATA_LENGTH = 120;
 const VIRTIO_HOST_PENDING_USED_LEN = 124;
 const VIRTIO_HOST_DEVICE_PRESENT = 128;
@@ -358,6 +363,9 @@ export {
   VIRTIO_HOST_LAST_AVAIL_IDX,
   VIRTIO_HOST_PENDING_DATA_LENGTH,
   VIRTIO_HOST_PENDING_HEAD,
+  VIRTIO_HOST_PENDING_SEGMENT_BYTES,
+  VIRTIO_HOST_PENDING_SEGMENT_COUNT,
+  VIRTIO_HOST_PENDING_SEGMENTS,
   VIRTIO_HOST_PENDING_STATUS_ADDRESS,
   VIRTIO_HOST_PENDING_USED_LEN,
   VIRTIO_HOST_QUEUE_DESC_HIGH,

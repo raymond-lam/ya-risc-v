@@ -54,6 +54,9 @@ import {
   VIRTIO_HOST_LAST_AVAIL_IDX,
   VIRTIO_HOST_PENDING_DATA_LENGTH,
   VIRTIO_HOST_PENDING_HEAD,
+  VIRTIO_HOST_PENDING_SEGMENT_BYTES,
+  VIRTIO_HOST_PENDING_SEGMENT_COUNT,
+  VIRTIO_HOST_PENDING_SEGMENTS,
   VIRTIO_HOST_PENDING_STATUS_ADDRESS,
   VIRTIO_HOST_PENDING_USED_LEN,
   VIRTIO_HOST_QUEUE_DESC_HIGH,
@@ -131,14 +134,6 @@ type VirtioSlotResult = 'published' | 'submitted' | 'skip';
 const VIRTIO_SLOT_PUBLISHED: VirtioSlotResult = 'published';
 const VIRTIO_SLOT_SUBMITTED: VirtioSlotResult = 'submitted';
 const VIRTIO_SLOT_SKIP: VirtioSlotResult = 'skip';
-
-/**
- * Data segments of the in-flight request (CPU-worker-local, not the disk channel): the
- * staging window holds one contiguous transfer, and this list remembers where to scatter
- * it (IN) or gather it from (OUT) across the guest's data descriptors. Single-flight means
- * one request is in flight at a time, so a single module binding is sufficient.
- */
-let pendingDataSegments: readonly DataSegment[] = [];
 
 const virtioGuestAddress = (address: bigint): ReadonlyUint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), address) as ReadonlyUint8Array;
@@ -494,6 +489,31 @@ const storeStagingData = (
   return true;
 };
 
+/** Snapshot read destinations in this device's CPU-owned host slab until completion. */
+const savePendingDataSegments = (memory: Memory, segments: readonly DataSegment[]): void => {
+  for (const [index, segment] of segments.entries()) {
+    const offset = VIRTIO_HOST_PENDING_SEGMENTS + index * VIRTIO_HOST_PENDING_SEGMENT_BYTES;
+    storeVirtioShadowU32(memory, offset, Number(segment.address & 0xffff_ffffn));
+    storeVirtioShadowU32(memory, offset + 4, Number((segment.address >> 32n) & 0xffff_ffffn));
+    storeVirtioShadowU32(memory, offset + 8, segment.length);
+  }
+  storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_SEGMENT_COUNT, segments.length);
+};
+
+/** Recover the submission-time snapshot, not the guest's potentially modified descriptors. */
+const loadPendingDataSegments = (memory: Memory): DataSegment[] => {
+  const count = loadVirtioShadowU32(memory, VIRTIO_HOST_PENDING_SEGMENT_COUNT);
+  const segments: DataSegment[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const offset = VIRTIO_HOST_PENDING_SEGMENTS + index * VIRTIO_HOST_PENDING_SEGMENT_BYTES;
+    const address =
+      (BigInt(loadVirtioShadowU32(memory, offset + 4)) << 32n) |
+      BigInt(loadVirtioShadowU32(memory, offset));
+    segments.push({ address, length: loadVirtioShadowU32(memory, offset + 8) });
+  }
+  return segments;
+};
+
 /** Fill the channel words and wake the disk worker for one read/write request. */
 const submitVirtioRequest = (
   memory: Memory,
@@ -503,7 +523,7 @@ const submitVirtioRequest = (
 ): void => {
   storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_HEAD, head);
   virtioHostBigUint64(memory, VIRTIO_HOST_PENDING_STATUS_ADDRESS)[0] = statusAddress;
-  pendingDataSegments = plan.dataSegments;
+  savePendingDataSegments(memory, plan.kind === 'read' ? plan.dataSegments : []);
   storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_DATA_LENGTH, plan.dataLength);
   storeVirtioShadowU32(
     memory,
@@ -590,6 +610,7 @@ const drainCompletedVirtioRequest = (memory: Memory): boolean => {
   if (config === null) {
     // Reset happened and gates fell — swallow without publishing.
     storeVirtioShadowU32(memory, VIRTIO_HOST_DRAINED_SEQ, completionSeq);
+    storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_SEGMENT_COUNT, 0);
     return false;
   }
   const ioError = Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_REQUEST_IO_ERROR), 0) >>> 0;
@@ -602,7 +623,7 @@ const drainCompletedVirtioRequest = (memory: Memory): boolean => {
   if (ioError === 0 && direction === VIRTIO_BLK_T_IN) {
     const stagingBase = virtioHostIndex(memory, VIRTIO_HOST_STAGING);
     const staging = memory.bytes.subarray(stagingBase, stagingBase + dataLength);
-    if (!storeStagingData(memory, pendingDataSegments, staging)) {
+    if (!storeStagingData(memory, loadPendingDataSegments(memory), staging)) {
       statusByte = VIRTIO_BLK_S_IOERR;
       usedLen = 1;
     }
@@ -616,6 +637,7 @@ const drainCompletedVirtioRequest = (memory: Memory): boolean => {
     usedLen
   );
   storeVirtioShadowU32(memory, VIRTIO_HOST_DRAINED_SEQ, completionSeq);
+  storeVirtioShadowU32(memory, VIRTIO_HOST_PENDING_SEGMENT_COUNT, 0);
   return published;
 };
 
