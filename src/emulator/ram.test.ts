@@ -33,6 +33,8 @@ import createTestMemory from '#test/guest-memory';
 const guest = (offset: bigint): ReadonlyUint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), offset) as ReadonlyUint8Array;
 
+const VIRTIO_BASE = 0x1000_1000n;
+
 /** Arm a reservation under the monitor lock (mirrors production LR path). */
 const setReservation = async (
   memory: Memory,
@@ -138,6 +140,15 @@ describe('guest RAM DMA', () => {
   it('storeGuestRamBytes rejects non-RAM targets without touching RAM', async () => {
     const memory = createTestMemory(256n);
     await storeBytes({ memory, address: guest(0n), source: new Uint8Array([0x5a]), byteLength: 1 });
+    assert.equal(
+      await storeGuestRamBytes({
+        memory,
+        address: guest(VIRTIO_BASE),
+        source: new Uint8Array([0x99]),
+        byteLength: 1,
+      }),
+      false
+    );
     assert.equal(
       await storeGuestRamBytes({
         memory,

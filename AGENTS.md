@@ -63,7 +63,7 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    `hostByteLength`, optional `guestAddress` / `guestByteLength`) packed contiguously with
    8-byte-aligned hostIndexes. `loadBytes`/`storeBytes` resolve a guestAddress to
    `{ regionId, offset }` and call the region's load/store pair; guest RAM/UART windows are
-   dense, CLINT/PLIC are sparse MMIO over host slabs. Transfer widths are `number`.
+   dense, CLINT/PLIC/virtio are sparse MMIO over host slabs. Transfer widths are `number`.
    RV64A AMO/LR/SC use the same aligned 64-bit RAM words under the reservation lock; host-only
    packing (UART queue meta, CLINT time/wires, PLIC shadows, irq-level / TX-wake words)
    uses `Atomics` on bytes, except `BigUint64Array` for CLINT time and `Int32Array` where
@@ -71,12 +71,14 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    the instruction handlers and the fetch loop enforce them (see below).
 5. **Guest-region IDs and pack order are a cross-file contract.** Region IDs and pack order
    are defined once in `src/emulator/index.ts` (`GUEST_REGION_IDS`: ram → uart → clint →
-   plic → syscon → reservation → irqLevel, host-only regions last). The CLI defaults in
+   plic → syscon → virtio → reservation → irqLevel, host-only regions last). The CLI defaults in
    `src/index.ts` and the test fixture `machineRegionSpecs` in `test/guest-memory.ts` must
    stay in sync with it, and any new guest-mapped device must also appear in the device
-   tree (`src/fdt.ts`). Change all of them together.
+   tree (`src/fdt.ts`). Change all of them together. The virtio window is one deliberate
+   exception: it is always packed (a probe reads 0 rather than taking a load access fault)
+   but its `virtio_mmio` node is emitted only when a disk is attached.
 6. **Reservation monitor invalidation.** A host-only LR/SC reservation monitor (per-hart
-   slots, line granule) sits in the SAB after PLIC; every guest RAM write and atomic RMW must
+   slots, line granule) sits in the SAB after virtio; every guest RAM write and atomic RMW must
    invalidate overlapping reservations under the reservation lock (`withSharedLocks` and
    `invalidateOverlappingReservationsLocked`). That invalidation lives in
    `storeBytesToRam`/`atomicRamStore`/`atomicRamCompareExchange`, not at the call sites, so
