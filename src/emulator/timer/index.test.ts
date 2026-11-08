@@ -45,7 +45,7 @@ describe('timer worker', () => {
     assert.equal(isClintMachineTimerPending(memory), false);
 
     const timer = create({ memory });
-    timer.start();
+    await timer.start();
     try {
       let pending = false;
       for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -66,7 +66,7 @@ describe('timer worker', () => {
       });
       assert.ok(mtime.some((byte) => byte !== 0));
     } finally {
-      timer.stop();
+      await timer.stop();
       await timer;
     }
   });
@@ -77,10 +77,10 @@ describe('timer worker', () => {
     const stdout = new PassThrough();
     const timer = create({ memory });
     const terminal = createTerminal({ memory, stdin, stdout });
-    timer.stop();
-    terminal.stop();
-    timer.stop();
-    terminal.stop();
+    await timer.stop();
+    await terminal.stop();
+    await timer.stop();
+    await terminal.stop();
     await Promise.all([timer, terminal]);
   });
 });

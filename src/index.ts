@@ -168,7 +168,7 @@ const main = async (imagePath: string, options: CliOptions): Promise<void> => {
     stdout,
     onShutdown: () => {
       try {
-        emulator.stop();
+        void emulator.stop().catch(() => {});
       } catch {
         // Already stopped / never started / peer already torn down.
       }
@@ -177,7 +177,7 @@ const main = async (imagePath: string, options: CliOptions): Promise<void> => {
 
   const shutdown = (): void => {
     try {
-      emulator.stop();
+      void emulator.stop().catch(() => {});
     } catch {
       // Already stopped / never started / peer already torn down.
     }
@@ -187,8 +187,8 @@ const main = async (imagePath: string, options: CliOptions): Promise<void> => {
   process.once('SIGINT', shutdown);
 
   tui.start();
-  emulator.start();
   try {
+    await emulator.start();
     await emulator;
   } finally {
     try {

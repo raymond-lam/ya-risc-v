@@ -88,7 +88,7 @@ describe('emulator integration (TX-ring drain, real machine, no mocks)', () => {
     await expectFullBurst(async ({ emulator }) => {
       // Give the guest time to run, then request host shutdown.
       await delay(250);
-      emulator.stop();
+      await emulator.stop();
       await settleEmulator(emulator);
     });
   });

@@ -24,10 +24,12 @@ const TIMER_TICK_PERIOD_MS = 1;
 
 const main = async (): Promise<void> => {
   const { memory } = workerData as TimerWorkerData;
+  tickClint(memory);
+  parentPort?.postMessage('ready');
   // Independent clock domain: keep ticking until the host terminates us.
   for (;;) {
-    tickClint(memory);
     await delay(TIMER_TICK_PERIOD_MS);
+    tickClint(memory);
   }
 };
 

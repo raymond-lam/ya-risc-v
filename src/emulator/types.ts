@@ -63,10 +63,10 @@ type EmulatorCreateOptions = {
 };
 
 type EmulatorHandle = Promise<void> & {
-  /** Start the CPU, CLINT, and UART terminal workers. Throws if already started or already stopped. */
-  start: () => void;
-  /** Stop all workers. Throws if not started; idempotent after the first stop. */
-  stop: () => void;
+  /** Await device readiness, then start the CPU. Throws if already started or already stopped. */
+  start: () => Promise<void>;
+  /** Stop all workers. Waits for startup, then joins shutdown; safe before start and idempotent. */
+  stop: () => Promise<void>;
 };
 
 export type { EmulatorCreateOptions, EmulatorHandle, GuestRegionWindow };

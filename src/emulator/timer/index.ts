@@ -19,86 +19,27 @@
  * Device API (MMIO, samples): `#emulator/clint`.
  */
 
-import { Worker } from 'node:worker_threads';
-import workerExecArgv from '#utils/worker-exec-argv';
+import type { WorkerOptions } from 'node:worker_threads';
+import Worker from '#emulator/Worker';
 import type { TimerCreateOptions, TimerHandle, TimerWorkerData } from '#emulator/timer/types';
 
-/* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
-class Timer implements TimerHandle {
-  readonly [Symbol.toStringTag] = 'Promise';
+const STARTUP_TIMEOUT_MS = 5_000;
 
-  readonly #lifetime = Promise.withResolvers<void>();
-
+/* eslint-disable no-restricted-syntax -- Worker host needs a constructor */
+class Timer extends Worker implements TimerHandle {
   readonly #options: TimerCreateOptions;
 
-  #worker: Worker | undefined;
-
-  #started = false;
-
-  #stopped = false;
-
   constructor(options: TimerCreateOptions) {
+    super('Timer', new URL(import.meta.resolve('#emulator/timer/run')), STARTUP_TIMEOUT_MS);
     this.#options = options;
   }
 
-  start = (): void => {
-    if (this.#stopped) {
-      throw new Error('Already stopped.');
-    }
-    if (this.#started) {
-      throw new Error('Already started.');
-    }
+  protected createWorkerOptions = (): Pick<WorkerOptions, 'workerData' | 'transferList'> => {
     const workerData = {
       memory: this.#options.memory,
     } satisfies TimerWorkerData;
-    // Assign worker before marking started so a constructor throw leaves state untouched.
-    const worker = new Worker(new URL(import.meta.resolve('#emulator/timer/run')), {
-      execArgv: workerExecArgv(),
-      workerData,
-    });
-    this.#worker = worker;
-    this.#started = true;
-    worker.once('error', (error) => {
-      this.#lifetime.reject(error);
-    });
-    worker.once('exit', (code) => {
-      if (this.#stopped || code === 0) {
-        this.#lifetime.resolve();
-        return;
-      }
-      this.#lifetime.reject(new Error(`Timer worker exited with code ${code}`));
-    });
+    return { workerData };
   };
-
-  stop = (): void => {
-    if (this.#stopped) {
-      return;
-    }
-    this.#stopped = true;
-    if (this.#worker !== undefined) {
-      void this.#worker.terminate();
-      return;
-    }
-    // Never started (or start failed before worker assignment): unblock awaiters.
-    this.#lifetime.resolve();
-  };
-
-  then<TResult1 = void, TResult2 = never>(
-    onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null | undefined,
-    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined
-  ): Promise<TResult1 | TResult2> {
-    return this.#lifetime.promise.then(onfulfilled, onrejected);
-  }
-
-  catch<TResult = never>(
-    onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null | undefined
-  ): Promise<void | TResult> {
-    return this.#lifetime.promise.catch(onrejected);
-  }
-
-  finally(onfinally?: (() => void) | null | undefined): Promise<void> {
-    return this.#lifetime.promise.finally(onfinally);
-  }
 }
 
 const create = (options: TimerCreateOptions): TimerHandle => new Timer(options);

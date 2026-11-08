@@ -91,6 +91,10 @@ class Emulator implements EmulatorHandle {
 
   #stopped = false;
 
+  #startup: Promise<void> | undefined;
+
+  #shutdown: Promise<void> | undefined;
+
   constructor({
     image,
     stdin,
@@ -169,49 +173,73 @@ class Emulator implements EmulatorHandle {
     this.#timer = timer;
     this.#terminal = terminal;
     this.#done = (async () => {
+      const workers: Promise<void>[] = [cpu, timer, terminal];
       try {
-        await Promise.all([cpu, timer, terminal]);
-      } finally {
-        this.stop();
+        await Promise.all(workers);
+      } catch (error) {
+        await this.stop().catch(() => {});
+        throw error;
       }
+      await this.stop();
     })();
+    void this.#done.catch(() => {});
   }
 
-  start = (): void => {
+  start = (): Promise<void> => {
     if (this.#stopped) {
       throw new Error('Already stopped.');
     }
     if (this.#started) {
       throw new Error('Already started.');
     }
-    // Start children; only mark started once all succeed. On failure, stop any
-    // that already started (child stop is idempotent for never-started siblings).
-    try {
-      this.#timer.start();
-      this.#cpu.start();
-      this.#terminal.start();
-    } catch (error) {
-      this.#cpu.stop();
-      this.#timer.stop();
-      void this.#cpu.then(this.#terminal.stop, this.#terminal.stop);
-      this.#stopped = true;
-      throw error;
-    }
     this.#started = true;
-    void this.#watchSyscon();
+    // Keep the raw startup phase separate from its failure cleanup: stop waits only for this phase.
+    this.#startup = this.#start();
+    const ready = this.#startup.catch(async (error: unknown) => {
+      await this.stop().catch(() => {});
+      throw error;
+    });
+    void ready.catch(() => {});
+    return ready;
   };
 
-  stop = (): void => {
-    if (this.#stopped) {
-      return;
+  #start = async (): Promise<void> => {
+    await this.#timer.start();
+    await this.#terminal.start();
+    await this.#cpu.start();
+    void this.#watchSyscon().catch(() => {});
+  };
+
+  stop = (): Promise<void> => {
+    if (this.#shutdown !== undefined) {
+      return this.#shutdown;
     }
-    // Idempotent: safe before start, after partial-start rollback, and after stop.
     this.#stopped = true;
+    this.#shutdown = this.#stop();
+    return this.#shutdown;
+  };
+
+  #stop = async (): Promise<void> => {
+    let startupFailed = false;
+    let startupError: unknown;
+    if (this.#startup !== undefined) {
+      await this.#startup.catch((error: unknown) => {
+        startupFailed = true;
+        startupError = error;
+      });
+    }
     cancelSysconWatch(this.#memory);
-    this.#cpu.stop();
-    this.#timer.stop();
-    // Stop the producer first so the terminal can drain all remaining output.
-    void this.#cpu.then(this.#terminal.stop, this.#terminal.stop);
+    const producers = await Promise.allSettled([this.#cpu.stop(), this.#timer.stop()]);
+    // Join the producer before requesting terminal drain, including on failure.
+    const terminal = await Promise.allSettled([this.#terminal.stop()]);
+    if (startupFailed) {
+      throw startupError;
+    }
+    for (const result of [...producers, ...terminal]) {
+      if (result.status === 'rejected') {
+        throw result.reason;
+      }
+    }
   };
 
   #watchSyscon = async (): Promise<void> => {
@@ -219,7 +247,7 @@ class Emulator implements EmulatorHandle {
     if (this.#stopped || request === 'idle') {
       return;
     }
-    this.stop();
+    await this.stop();
   };
 
   then<TResult1 = void, TResult2 = never>(

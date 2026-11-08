@@ -122,6 +122,8 @@ const main = async (): Promise<void> => {
     stopRequested.resolve(true);
   });
 
+  parentPort?.postMessage('ready');
+
   // Race once for the worker's lifetime, not once per transmitted byte.
   const stopped = await Promise.race([
     pumpTransmit(memory, stdout, stopController.signal),

@@ -15,13 +15,15 @@
  */
 
 import { Readable, Writable } from 'node:stream';
-import { Worker } from 'node:worker_threads';
-import workerExecArgv from '#utils/worker-exec-argv';
+import type { Worker as NodeWorker, WorkerOptions } from 'node:worker_threads';
+import Worker from '#emulator/Worker';
 import type {
   TerminalCreateOptions,
   TerminalHandle,
   TerminalWorkerData,
 } from '#emulator/terminal/types';
+
+const STARTUP_TIMEOUT_MS = 5_000;
 
 /**
  * Bounded safety net: how long the host waits for a drain-requested worker to
@@ -34,33 +36,18 @@ import type {
  */
 const TERMINATE_FALLBACK_MS = 5_000;
 
-/* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
-class Terminal implements TerminalHandle {
-  readonly [Symbol.toStringTag] = 'Promise';
-
-  readonly #lifetime = Promise.withResolvers<void>();
-
+/* eslint-disable no-restricted-syntax -- Worker host needs a constructor */
+class Terminal extends Worker implements TerminalHandle {
   readonly #options: TerminalCreateOptions;
-
-  #worker: Worker | undefined;
 
   #exited = false;
 
-  #started = false;
-
-  #stopped = false;
-
   constructor(options: TerminalCreateOptions) {
+    super('Terminal', new URL(import.meta.resolve('#emulator/terminal/run')), STARTUP_TIMEOUT_MS);
     this.#options = options;
   }
 
-  start = (): void => {
-    if (this.#stopped) {
-      throw new Error('Already stopped.');
-    }
-    if (this.#started) {
-      throw new Error('Already started.');
-    }
+  protected createWorkerOptions = (): Pick<WorkerOptions, 'workerData' | 'transferList'> => {
     const stdinWeb = Readable.toWeb(this.#options.stdin);
     const stdoutWeb = Writable.toWeb(this.#options.stdout);
     const workerData = {
@@ -68,80 +55,39 @@ class Terminal implements TerminalHandle {
       stdin: stdinWeb,
       stdout: stdoutWeb,
     } satisfies TerminalWorkerData;
-    // Assign worker before marking started so a constructor throw leaves state untouched.
-    const worker = new Worker(new URL(import.meta.resolve('#emulator/terminal/run')), {
-      execArgv: workerExecArgv(),
-      workerData,
-      transferList: [stdinWeb, stdoutWeb],
-    });
-    this.#worker = worker;
-    this.#started = true;
-    worker.once('error', (error) => {
-      this.#lifetime.reject(error);
-    });
-    worker.once('exit', (code) => {
-      this.#exited = true;
-      if (this.#stopped || code === 0) {
-        this.#lifetime.resolve();
-        return;
-      }
-      this.#lifetime.reject(new Error(`Terminal worker exited with code ${code}`));
-    });
+    return { workerData, transferList: [stdinWeb, stdoutWeb] };
   };
 
-  stop = (): void => {
-    if (this.#stopped) {
-      return;
-    }
-    this.#stopped = true;
-    if (this.#worker !== undefined) {
-      const worker = this.#worker;
-      // Bounded force-terminate fallback against a wedged worker: if the drain
-      // request is somehow lost or the isolate hangs, terminate so the lifetime
-      // cannot hang forever. Unreachable when the consumer keeps draining (the
-      // `exit` listener clears the timer first); reachable when stdout stalls,
-      // where termination after the bound is bounded and lossy by design. Skipped
-      // when the worker has already exited (for example a clean guest poweroff
-      // self-exited before stop): its `exit` event fired before this call, so no
-      // timer is set and none lingers.
-      if (!this.#exited) {
-        const fallbackTimer = setTimeout(() => {
-          void worker.terminate();
-        }, TERMINATE_FALLBACK_MS);
-        // `unref` so the fallback cannot keep the host process alive on its own.
-        fallbackTimer.unref();
-        worker.once('exit', () => clearTimeout(fallbackTimer));
-      }
-      // Signal the worker to drain the TX ring to stdout, flush, and exit. The
-      // lifetime resolves on the worker's `exit` event (see start), never on
-      // elapsed time. A dead worker (crashed or already exited) makes the send
-      // fail; the exit listener has already settled the lifetime either way.
-      try {
-        worker.postMessage('stop');
-      } catch {
-        // Worker is gone; the lifetime is settled through the exit listener.
-      }
-      return;
-    }
-    // Never started (or start failed before worker assignment): unblock awaiters.
-    this.#lifetime.resolve();
+  protected override onExit = (): void => {
+    this.#exited = true;
   };
 
-  then<TResult1 = void, TResult2 = never>(
-    onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null | undefined,
-    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined
-  ): Promise<TResult1 | TResult2> {
-    return this.#lifetime.promise.then(onfulfilled, onrejected);
-  }
-
-  catch<TResult = never>(
-    onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null | undefined
-  ): Promise<void | TResult> {
-    return this.#lifetime.promise.catch(onrejected);
-  }
-
-  finally(onfinally?: (() => void) | null | undefined): Promise<void> {
-    return this.#lifetime.promise.finally(onfinally);
+  protected override stopWorker(worker: NodeWorker): void {
+    // Bounded force-terminate fallback against a wedged worker: if the drain
+    // request is somehow lost or the isolate hangs, terminate so the lifetime
+    // cannot hang forever. Unreachable when the consumer keeps draining (the
+    // `exit` listener clears the timer first); reachable when stdout stalls,
+    // where termination after the bound is bounded and lossy by design. Skipped
+    // when the worker has already exited (for example a clean guest poweroff
+    // self-exited before stop): its `exit` event fired before this call, so no
+    // timer is set and none lingers.
+    if (!this.#exited) {
+      const fallbackTimer = setTimeout(() => {
+        super.stopWorker(worker);
+      }, TERMINATE_FALLBACK_MS);
+      // `unref` so the fallback cannot keep the host process alive on its own.
+      fallbackTimer.unref();
+      worker.once('exit', () => clearTimeout(fallbackTimer));
+    }
+    // Signal the worker to drain the TX ring to stdout, flush, and exit. The
+    // lifetime resolves on the worker's `exit` event (see Worker), never on
+    // elapsed time. A dead worker (crashed or already exited) makes the send
+    // fail; the exit listener has already settled the lifetime either way.
+    try {
+      worker.postMessage('stop');
+    } catch {
+      // Worker is gone; the lifetime is settled through the exit listener.
+    }
   }
 }
 

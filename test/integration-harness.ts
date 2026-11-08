@@ -50,7 +50,7 @@
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
-import { create, type EmulatorHandle } from '#emulator';
+import { create } from '#emulator';
 import { CLINT_GUEST_BYTE_LENGTH, CLINT_REGION_ID } from '#emulator/clint';
 import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
@@ -58,6 +58,8 @@ import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
+
+type EmulatorHandle = ReturnType<typeof create>;
 
 export const RAM_BASE = 0x8000_0000n;
 const RAM_BYTE_LENGTH = 0x100_000n;
@@ -176,10 +178,10 @@ const runGuest = async (
     deviceTreeAddress: 'end',
   });
   try {
-    emulator.start();
+    await emulator.start();
     await body({ stdin, output, emulator });
   } finally {
-    emulator.stop();
+    await emulator.stop();
     await settleEmulator(emulator);
   }
 };
