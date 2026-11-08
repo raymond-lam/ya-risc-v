@@ -63,7 +63,7 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    `hostByteLength`, optional `guestAddress` / `guestByteLength`) packed contiguously with
    8-byte-aligned hostIndexes. `loadBytes`/`storeBytes` resolve a guestAddress to
    `{ regionId, offset }` and call the region's load/store pair; guest RAM/UART windows are
-   dense, CLINT/PLIC are sparse MMIO over host slabs. Transfer widths are `number`.
+   dense, CLINT/PLIC/virtio are sparse MMIO over host slabs. Transfer widths are `number`.
    RV64A AMO/LR/SC use the same aligned 64-bit RAM words under the reservation lock; host-only
    packing (UART queue meta, CLINT time/wires, PLIC shadows, irq-level / TX-wake words)
    uses `Atomics` on bytes, except `BigUint64Array` for CLINT time and `Int32Array` where
@@ -71,25 +71,29 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    the instruction handlers and the fetch loop enforce them (see below).
 5. **Guest-region IDs and pack order are a cross-file contract.** Region IDs and pack order
    are defined once in `src/emulator/index.ts` (`GUEST_REGION_IDS`: ram → uart → clint →
-   plic → syscon → reservation → irqLevel, host-only regions last). The CLI defaults in
+   plic → syscon → virtio → reservation → irqLevel, host-only regions last). The CLI defaults in
    `src/index.ts` and the test fixture `machineRegionSpecs` in `test/guest-memory.ts` must
    stay in sync with it, and any new guest-mapped device must also appear in the device
    tree (`src/fdt.ts`). Change all of them together.
 6. **Reservation monitor invalidation.** A host-only LR/SC reservation monitor (per-hart
-   slots, line granule) sits in the SAB after PLIC; every guest RAM write and atomic RMW must
+   slots, line granule) sits in the SAB after virtio; every guest RAM write and atomic RMW must
    invalidate overlapping reservations under the reservation lock (`withSharedLocks` and
    `invalidateOverlappingReservationsLocked`). That invalidation lives in
    `storeBytesToRam`/`atomicRamStore`/`atomicRamCompareExchange`, not at the call sites, so
    hart stores (`memory.storeBytes`), device DMA (`storeBytesToRam` after a `guestRamOffset`
    gate) and AMOs all funnel through it — a new RAM write path that bypasses those primitives
-   is a reservation-model bug.
+   is a reservation-model bug. Virtio worker claims and publishes under reservation and PLIC/control locks; MMIO notify
+   only signals its kick word. Reset/deactivation increment an epoch under the same locks,
+   revoking old guest DMA/publication. File I/O runs outside locks; never reacquire inside them.
 7. **Host components are Promise-like awaitable handles with `start` / `stop`.** `Emulator`,
-   `Cpu`, `Timer`, `Terminal`, and the TUI each implement a `Promise.withResolvers` lifetime
+   `Cpu`, `Timer`, `Terminal`, `VirtioDisk`, and the TUI each implement a `Promise.withResolvers` lifetime
    with `then`/`catch`/`finally` plus idempotent `stop`. Worker handles and the emulator
    return `Promise<void>` from `start` (ready) and `stop` (shutdown joined), separate from
-   their awaitable lifetime. The pattern
+   their awaitable lifetime. Disk startup opens the image and presents the device before the
+   emulator starts the CPU; shutdown joins the CPU before draining the terminal. The pattern
    is: create → await start() → await lifetime; `stop` is safe before or after `start`,
-   and awaiting joins the handle's lifetime.
+   and awaiting joins the handle's lifetime. Disk stop settles issued I/O and closes cooperatively with a bounded terminate fallback;
+   fallback discards the machine SAB (no safe hot-unplug/reuse or fsync guarantee).
    A stop requested during startup waits for startup
    to settle before stopping the workers; readiness is not cancelled.
    New host-side components should follow the same pattern. The CLI (`src/index.ts`) starts
@@ -102,14 +106,14 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    outside a directory you import only from the package root. Public subpaths: worker
    entries `#emulator/*/run`. Leaf modules (`#emulator/memory`, `#emulator/ram`,
    `#emulator/reservation`, `#emulator/wake`, `#emulator/irq-level`) are their own public
-   API. Inside `emulator/`, packages import each other via roots only (hart samples CLINT
-   via `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
+   API. Inside `emulator/`, packages import each other via roots only (hart
+   samples CLINT via `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
    `#emulator/timer` / `#emulator/terminal`). `eslint.config.mjs` is the authoritative
    statement of all of this — including the worker-bundle ban on `#emulator/timer`,
    `#emulator/terminal`, and `Worker` from `node:worker_threads` under every device package
    (`src/emulator/cpu/**`, `uart/**`, `clint/**`, `plic/**`, `syscon/**`, `timer/**`,
-   `terminal/**` — worker files never spawn; only the three device hosts `cpu/index.ts`,
-   `timer/index.ts`, and `terminal/index.ts` import `Worker`), which preserves tree-shaking
+   `terminal/**`, `virtio/**` — worker files never spawn; only device hosts `cpu/index.ts`,
+   `timer/index.ts`, `terminal/index.ts`, and `virtio/index.ts` import `Worker`), which preserves tree-shaking
    (`sideEffects: false` — so also avoid top-level side effects in shared modules).
 
 ## Privileged architecture summary
@@ -120,8 +124,8 @@ the enable stacks (`MPIE`/`MIE`/`MPP` or `SPIE`/`SIE`/`SPP`), delegate per `mede
 (`mideleg` for interrupt causes), and set the PC from `xtvec` in **Direct or Vectored
 mode** (exceptions always use BASE). `mret`/`sret` restore the stack and return to `xepc`.
 The run loop samples CLINT (`MSIP`/`MTIP`/`STIP`) and PLIC (`MEIP`/`SEIP`) wires into `mip`
-before each fetch (`sampleDevicePending`), then calls `takeInterruptIfAny`. `wfi` advances
-the PC, retires, and parks on the shared `irqLevel` word (via `Atomics.waitAsync`) until
+before each fetch (`sampleDevicePending`), then calls
+`takeInterruptIfAny`. `wfi` advances the PC, retires, and waits only on the shared `irqLevel` (via `Atomics.waitAsync`) until
 `mip ∧ mie` is nonzero — wake ignores global `mstatus.MIE`/`SIE`; `mstatus.TW` makes
 `wfi` below M illegal; `mstatus.TVM` gates S-mode `satp` access and `sfence.vma`.
 

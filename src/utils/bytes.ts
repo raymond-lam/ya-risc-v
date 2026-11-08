@@ -228,6 +228,14 @@ const signedBytesToBigInt = (bytes: ReadonlyUint8Array): bigint => {
 /** `bytes[0] & mask` as a number. */
 const byte0ToNumber = (bytes: ReadonlyUint8Array, mask: number): number => (bytes[0] ?? 0) & mask;
 
+/** Byte `byteOffset` (0 = least significant) of an unsigned 32-bit value, as a number. */
+const byteOfU32 = (value: number, byteOffset: number): number =>
+  (value >>> (byteOffset * 8)) & 0xff;
+
+/** Byte `byteOffset` (0 = least significant) of an unsigned 64-bit value, as a number. */
+const byteOfU64 = (value: bigint, byteOffset: number): number =>
+  Number((value >> BigInt(byteOffset * 8)) & 0xffn);
+
 /**
  * Sign-extend a `bitWidth`-bit number into `destination` (8-byte little-endian).
  * `bitWidth` must be ≤ 32. For full XLEN values use byte arithmetic or
@@ -377,6 +385,8 @@ export {
   bytesToBigInt,
   signedBytesToBigInt,
   byte0ToNumber,
+  byteOfU32,
+  byteOfU64,
   signedNumberToBytes,
   unsignedNumberToBytes,
   unsignedBigIntToBytes,

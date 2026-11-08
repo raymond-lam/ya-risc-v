@@ -16,7 +16,8 @@
  * limitations under the License.
  */
 
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { create as createEmulator } from '#emulator';
@@ -25,6 +26,7 @@ import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import type { DeviceTreeAddress } from '#fdt';
 import { create as createTui } from '#tui';
 import type { ReadonlyUint8Array } from '#types';
@@ -42,6 +44,7 @@ const DEFAULT_UART_BASE_ADDRESS = 0x1000_0000n;
 const DEFAULT_CLINT_BASE_ADDRESS = 0x0200_0000n;
 const DEFAULT_PLIC_BASE_ADDRESS = 0x0c00_0000n;
 const DEFAULT_SYSCON_BASE_ADDRESS = 0x0010_0000n;
+const DEFAULT_VIRTIO_BASE_ADDRESS = 0x1000_1000n;
 const DEFAULT_TIMEBASE_HZ = 10_000_000n;
 const TIMEBASE_HZ_MAX = 0xffff_ffffn;
 
@@ -111,7 +114,10 @@ type CliOptions = {
   clintBase: bigint;
   plicBase: bigint;
   sysconBase: bigint;
+  virtioBase: bigint;
   timebaseFrequency: bigint;
+  /** Path to a raw disk image opened read-write by the virtio block device. */
+  diskImage?: string;
   /** Set by `--no-device-tree`. Commander defaults this to true. */
   deviceTree: boolean;
   dtbAddress?: bigint;
@@ -138,6 +144,7 @@ const guestRegions = (options: CliOptions): ReadonlyMap<string, GuestWindow> =>
     [CLINT_REGION_ID, guestWindow(options.clintBase, CLINT_GUEST_BYTE_LENGTH)],
     [PLIC_REGION_ID, guestWindow(options.plicBase, PLIC_GUEST_BYTE_LENGTH)],
     [SYSCON_REGION_ID, guestWindow(options.sysconBase, SYSCON_GUEST_BYTE_LENGTH)],
+    [VIRTIO_REGION_ID, guestWindow(options.virtioBase, VIRTIO_GUEST_BYTE_LENGTH)],
   ]);
 
 const guestBaseOption = (
@@ -149,8 +156,40 @@ const guestBaseOption = (
 ): Option =>
   new Option(flags, description).default(address, shown).argParser(parseGuestAddress(label));
 
+/**
+ * Open the `--disk-image` path read-write so a missing or unwritable file fails before the
+ * emulator starts. The disk worker reopens the path itself later (a descriptor cannot cross
+ * the worker boundary), so only the check result is kept, not the handle.
+ */
+const openDiskImage = async (path: string): Promise<FileHandle> => {
+  try {
+    return await open(path, 'r+');
+  } catch (error) {
+    throw new Error(
+      `--disk-image '${path}' must be an existing file openable for read-write access.`,
+      { cause: error }
+    );
+  }
+};
+
+/** Reject a `--disk-image` path that exists but is not a regular file (raw image). */
+const validateDiskImage = async (path: string): Promise<void> => {
+  const handle = await openDiskImage(path);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw new Error(`--disk-image '${path}' must be a regular file.`);
+    }
+  } finally {
+    await handle.close();
+  }
+};
+
 const main = async (imagePath: string, options: CliOptions): Promise<void> => {
   const image = await readFile(imagePath);
+  if (options.diskImage !== undefined) {
+    await validateDiskImage(options.diskImage);
+  }
   const stdin = new PassThrough();
   const stdout = new PassThrough();
 
@@ -162,6 +201,7 @@ const main = async (imagePath: string, options: CliOptions): Promise<void> => {
     timebaseHz: options.timebaseFrequency,
     deviceTreeAddress: deviceTreeAddress(options),
     resetPc: guestAddressBytes(options.resetPc ?? options.ramBase),
+    diskImagePath: options.diskImage ?? null,
   });
   const tui = createTui({
     stdin,
@@ -267,6 +307,19 @@ program
       DEFAULT_SYSCON_BASE_ADDRESS,
       '0x00100000'
     )
+  )
+  .addOption(
+    guestBaseOption(
+      '--virtio-base <address>',
+      'guest virtio MMIO base address (decimal or 0x… hex)',
+      'virtio base',
+      DEFAULT_VIRTIO_BASE_ADDRESS,
+      '0x10001000'
+    )
+  )
+  .option(
+    '--disk-image <path>',
+    'path to a raw disk image opened read-write by the virtio block device'
   )
   .addOption(
     new Option('--timebase-frequency <hz>', 'CLINT mtime frequency in hertz (decimal or 0x… hex)')

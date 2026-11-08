@@ -40,12 +40,12 @@
  *   - **Dense** (RAM, UART register window): guest offset `o` maps to
  *     `hostIndex + o` for `o < guestByteLength` (a prefix of the host slab; the rest
  *     of the slab is host-only).
- *   - **Sparse** (CLINT, PLIC): `guestByteLength` is the architectural window size;
+ *   - **Sparse** (CLINT, PLIC, virtio): `guestByteLength` is the architectural window size;
  *     only decoded offsets inside that window are live, and they map to fixed
  *     offsets inside the packed host slab (not a linear prefix).
  *
  * Callers supply region specs to `createMemory` and initialize device shadows
- * (`initializeClint` / `initializePlic`). Devices look up by key
+ * (`initializeClint` / `initializePlic` / `initializeVirtio`). Devices look up by key
  * (`regions.get(UART_REGION_ID)`); guest decode binary-searches
  * `regionsByBaseGuestAddress`, then dispatches by id.
  */
@@ -78,6 +78,12 @@ import {
   uartMemoryLockIndexes,
   UART_REGION_ID,
 } from '#emulator/uart';
+import {
+  loadBytesFromVirtio,
+  storeBytesToVirtio,
+  virtioMemoryLockIndexes,
+  VIRTIO_REGION_ID,
+} from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { alignUp } from '#utils/alignment';
 import findLastIndex from '#utils/binary-search';
@@ -358,6 +364,10 @@ const REGION_LOAD_STORE = new Map<string, RegionMemoryAccess>([
     { load: loadBytesFromPlic, store: storeBytesToPlic, lockIndexes: plicMemoryLockIndexes },
   ],
   [SYSCON_REGION_ID, { load: loadBytesFromSyscon, store: storeBytesToSyscon }],
+  [
+    VIRTIO_REGION_ID,
+    { load: loadBytesFromVirtio, store: storeBytesToVirtio, lockIndexes: virtioMemoryLockIndexes },
+  ],
 ]);
 
 /** Atomic ops on non-RAM (or unmapped) regions fail — callers trap. */
@@ -384,6 +394,7 @@ const REGION_ATOMIC_LOAD_STORE: ReadonlyMap<
   [CLINT_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
   [PLIC_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
   [SYSCON_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
+  [VIRTIO_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
 ]);
 
 /** Copy `byteLength` bytes from `memory` at guest `address` into `destination` (high bytes cleared). */

@@ -15,8 +15,11 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
-import { describe, it, type TestContext } from 'node:test';
+import { after, describe, it, type TestContext } from 'node:test';
 import { Worker } from 'node:worker_threads';
 import SharedWorker from '#emulator/Worker';
 import type { Memory } from '#emulator/memory';
@@ -30,6 +33,7 @@ import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID, createVirtioDisk } from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -74,6 +78,7 @@ const virtRegions = (
     [CLINT_REGION_ID, window(0x0200_0000n, CLINT_GUEST_BYTE_LENGTH)],
     [PLIC_REGION_ID, window(0x0c00_0000n, PLIC_GUEST_BYTE_LENGTH)],
     [SYSCON_REGION_ID, window(0x0010_0000n, SYSCON_GUEST_BYTE_LENGTH)],
+    [VIRTIO_REGION_ID, window(0x1000_1000n, VIRTIO_GUEST_BYTE_LENGTH)],
   ]);
 
 describe('emulator create', () => {
@@ -160,6 +165,9 @@ describe('emulator create', () => {
     'stop waits for emulator startup and joins every child started by it',
     { timeout: 5_000 },
     async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ya-risc-v-startup-'));
+      const diskImagePath = join(dir, 'disk.img');
+      writeFileSync(diskImagePath, new Uint8Array(512));
       const emulator = create({
         image: new Uint8Array([0x73, 0x00, 0x50, 0x10]),
         stdin: new PassThrough(),
@@ -168,6 +176,7 @@ describe('emulator create', () => {
         timebaseHz: 10_000_000n,
         deviceTreeAddress: 'end',
         resetPc: guest(0x8000_0000n),
+        diskImagePath,
       });
       try {
         const startup = emulator.start();
@@ -180,6 +189,7 @@ describe('emulator create', () => {
         await emulator;
       } finally {
         await emulator.stop();
+        rmSync(dir, { recursive: true, force: true });
       }
     }
   );
@@ -344,6 +354,11 @@ const observeStartup = (
   return { worker, handle, startup };
 };
 
+const eventDiskDirectory = mkdtempSync(join(tmpdir(), 'ya-risc-v-event-'));
+const eventDiskPath = join(eventDiskDirectory, 'disk.img');
+writeFileSync(eventDiskPath, new Uint8Array(512));
+after(() => rmSync(eventDiskDirectory, { recursive: true, force: true }));
+
 const workerHosts = [
   {
     name: 'CPU',
@@ -355,6 +370,10 @@ const workerHosts = [
     name: 'Terminal',
     createHandle: (memory: Memory) =>
       createTerminal({ memory, stdin: new PassThrough(), stdout: new PassThrough() }),
+  },
+  {
+    name: 'Virtio disk',
+    createHandle: (memory: Memory) => createVirtioDisk({ memory, diskImagePath: eventDiskPath }),
   },
 ];
 

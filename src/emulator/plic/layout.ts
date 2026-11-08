@@ -69,6 +69,9 @@ const PLIC_HOST_BYTE_LENGTH = BigInt(PLIC_HOST_GATEWAY_LOCK + 4);
 /** UART external interrupt identity (source 10). */
 const PLIC_SOURCE_UART = 10;
 
+/** virtio-mmio block-device completion interrupt (source 1; asserted by the virtio device). */
+const PLIC_SOURCE_VIRTIO = 1;
+
 type PlicContext = 'machine' | 'supervisor';
 
 type PlicLocation =
@@ -178,6 +181,7 @@ export {
   PLIC_MAX_SOURCE,
   PLIC_REGION_ID,
   PLIC_SOURCE_UART,
+  PLIC_SOURCE_VIRTIO,
   claimedByHostOffset,
   contextWireOffset,
   enableHostOffset,

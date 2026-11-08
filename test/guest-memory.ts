@@ -36,6 +36,12 @@ import {
   SYSCON_REGION_ID,
 } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import {
+  initializeVirtio,
+  VIRTIO_GUEST_BYTE_LENGTH,
+  VIRTIO_HOST_BYTE_LENGTH,
+  VIRTIO_REGION_ID,
+} from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -57,8 +63,12 @@ const SYSCON_BASE_ADDRESS = unsignedBigIntToBytes(
   new Uint8Array(8),
   0x0010_0000n
 ) as ReadonlyUint8Array;
+const VIRTIO_BASE_ADDRESS = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  0x1000_1000n
+) as ReadonlyUint8Array;
 
-/** Standard machine region list (pack order: ram → uart → clint → plic → syscon → reservation → irqLevel). */
+/** Standard machine region list (pack order: ram → uart → clint → plic → syscon → virtio → reservation → irqLevel). */
 const machineRegionSpecs = ({
   ramBaseAddress,
   ramSize,
@@ -66,6 +76,7 @@ const machineRegionSpecs = ({
   clintBaseAddress,
   plicBaseAddress,
   sysconBaseAddress = SYSCON_BASE_ADDRESS,
+  virtioBaseAddress = VIRTIO_BASE_ADDRESS,
 }: {
   ramBaseAddress: ReadonlyUint8Array;
   ramSize: bigint;
@@ -73,6 +84,7 @@ const machineRegionSpecs = ({
   clintBaseAddress: ReadonlyUint8Array;
   plicBaseAddress: ReadonlyUint8Array;
   sysconBaseAddress?: ReadonlyUint8Array;
+  virtioBaseAddress?: ReadonlyUint8Array;
 }): Parameters<typeof createMemory>[0] => {
   if (ramSize < 0n) {
     throw new RangeError('ramSize must be non-negative.');
@@ -109,6 +121,12 @@ const machineRegionSpecs = ({
       guestByteLength: SYSCON_GUEST_BYTE_LENGTH,
     },
     {
+      id: VIRTIO_REGION_ID,
+      hostByteLength: VIRTIO_HOST_BYTE_LENGTH,
+      guestAddress: virtioBaseAddress,
+      guestByteLength: VIRTIO_GUEST_BYTE_LENGTH,
+    },
+    {
       id: RESERVATION_REGION_ID,
       hostByteLength: RESERVATION_HOST_BYTE_LENGTH,
       guestAddress: null,
@@ -136,6 +154,7 @@ const createTestMemory = (ramSize: bigint): Memory => {
   );
   initializeClint(memory, 10_000_000n);
   initializePlic(memory);
+  initializeVirtio(memory, true);
   return memory;
 };
 
