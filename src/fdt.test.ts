@@ -23,6 +23,7 @@ import {
   PLIC_MAX_SOURCE,
   PLIC_REGION_ID,
   PLIC_SOURCE_UART,
+  PLIC_SOURCE_VIRTIO,
 } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import {
@@ -34,6 +35,7 @@ import {
   SYSCON_REGION_ID,
 } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import { storeDeviceTreeToRam, type DeviceTreeAddress } from '#fdt';
 import { machineRegionSpecs } from '#test/guest-memory';
 import type { ReadonlyUint8Array } from '#types';
@@ -60,6 +62,7 @@ const regionsFor = ({
   clintBase,
   plicBase,
   sysconBase,
+  virtioBase,
 }: {
   ramBase: bigint;
   ramSize: bigint;
@@ -67,6 +70,7 @@ const regionsFor = ({
   clintBase: bigint;
   plicBase: bigint;
   sysconBase?: bigint;
+  virtioBase?: bigint;
 }): Map<string, { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }> => {
   const regions = new Map<string, { guestAddress: ReadonlyUint8Array; guestByteLength: bigint }>([
     [RAM_REGION_ID, { guestAddress: guest(ramBase), guestByteLength: ramSize }],
@@ -78,6 +82,12 @@ const regionsFor = ({
     regions.set(SYSCON_REGION_ID, {
       guestAddress: guest(sysconBase),
       guestByteLength: SYSCON_GUEST_BYTE_LENGTH,
+    });
+  }
+  if (virtioBase !== undefined) {
+    regions.set(VIRTIO_REGION_ID, {
+      guestAddress: guest(virtioBase),
+      guestByteLength: VIRTIO_GUEST_BYTE_LENGTH,
     });
   }
   return regions;
@@ -250,6 +260,7 @@ const virt = regionsFor({
   clintBase: 0x0200_0000n,
   plicBase: 0x0c00_0000n,
   sysconBase: 0x0010_0000n,
+  virtioBase: 0x1000_1000n,
 });
 
 describe('storeDeviceTreeToRam', () => {
@@ -264,6 +275,10 @@ describe('storeDeviceTreeToRam', () => {
     assert.equal(cells(child(root, 'cpus'), 'timebase-frequency')[0], 10_000_000);
 
     const soc = child(root, 'soc');
+    assert.deepEqual(
+      soc.children.map((node) => node.name),
+      ['clint@2000000', 'plic@c000000', 'uart@10000000', 'syscon@100000', 'virtio_mmio@10001000']
+    );
     const clint = child(soc, 'clint@2000000');
     assert.ok(stringList(clint, 'compatible').includes('riscv,clint0'));
     assert.deepEqual(reg(clint), { address: 0x0200_0000n, size: CLINT_GUEST_BYTE_LENGTH });
@@ -294,6 +309,13 @@ describe('storeDeviceTreeToRam', () => {
     assert.ok(stringList(reboot, 'compatible').includes('syscon-reboot'));
     assert.equal(cells(reboot, 'offset')[0], SYSCON_REBOOT_OFFSET);
     assert.equal(cells(reboot, 'value')[0], SYSCON_REBOOT_VALUE);
+
+    const virtio = child(soc, 'virtio_mmio@10001000');
+    assert.ok(stringList(virtio, 'compatible').includes('virtio,mmio'));
+    assert.deepEqual(stringList(virtio, 'compatible'), ['virtio,mmio']);
+    assert.deepEqual(reg(virtio), { address: 0x1000_1000n, size: VIRTIO_GUEST_BYTE_LENGTH });
+    assert.equal(cells(virtio, 'interrupt-parent')[0], 2);
+    assert.deepEqual(cells(virtio, 'interrupts'), [PLIC_SOURCE_VIRTIO]);
 
     assert.equal(text(child(root, 'chosen'), 'stdout-path'), '/soc/uart@10000000');
   });
@@ -340,6 +362,23 @@ describe('storeDeviceTreeToRam', () => {
     assert.equal(uart.properties.has('interrupt-parent'), false);
     assert.equal(uart.properties.has('interrupts'), false);
     assert.equal(text(child(root, 'chosen'), 'stdout-path'), '/soc/uart@10000000');
+
+    const ramUartVirtio = new Map([
+      [RAM_REGION_ID, { guestAddress: guest(0x8000_0000n), guestByteLength: 0x1_0000n }],
+      [
+        UART_REGION_ID,
+        { guestAddress: guest(0x1000_0000n), guestByteLength: UART_GUEST_BYTE_LENGTH },
+      ],
+      [
+        VIRTIO_REGION_ID,
+        { guestAddress: guest(0x1000_1000n), guestByteLength: VIRTIO_GUEST_BYTE_LENGTH },
+      ],
+    ]);
+    const withVirtioNoPlic = decode((await storedBlob(ramUartVirtio, 10_000_000n)).blob);
+    const virtioNoPlic = child(child(withVirtioNoPlic, 'soc'), 'virtio_mmio@10001000');
+    assert.equal(virtioNoPlic.properties.has('interrupt-parent'), false);
+    assert.equal(virtioNoPlic.properties.has('interrupts'), false);
+    assert.deepEqual(reg(virtioNoPlic), { address: 0x1000_1000n, size: VIRTIO_GUEST_BYTE_LENGTH });
 
     const ramOnly = new Map([
       [RAM_REGION_ID, { guestAddress: guest(0x8000_0000n), guestByteLength: 0x1_0000n }],
