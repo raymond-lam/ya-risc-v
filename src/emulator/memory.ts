@@ -67,7 +67,6 @@ import {
   storeBytesToRam,
 } from '#emulator/ram';
 import {
-  invalidateOverlappingReservationsLocked,
   reservationLockIndex,
   setReservationLocked,
   tryTakeReservation,
@@ -141,6 +140,21 @@ const REGION_HOST_ALIGN = 8n;
  * pad between regions is only for alignment. Guest-mapped specs carry a window;
  * host-only use `guestAddress: null` / `guestByteLength: 0n`.
  */
+const validateRamLayout = (
+  id: string,
+  address: ReadonlyUint8Array | null,
+  hostByteLength: bigint,
+  guestByteLength: bigint
+): void => {
+  if (id !== RAM_REGION_ID) return;
+  if (address !== null && bytesToBigInt(address) % 8n !== 0n) {
+    throw new RangeError('RAM guest base must be 8-byte aligned.');
+  }
+  if (hostByteLength < guestByteLength) {
+    throw new RangeError('RAM host allocation must cover its guest-visible extent before padding.');
+  }
+};
+
 const createMemory = (
   regionSpecs: readonly ({
     id: string;
@@ -186,22 +200,25 @@ const createMemory = (
     if (regions.has(spec.id)) {
       throw new RangeError(`Duplicate memory region ID '${spec.id}'.`);
     }
+    validateRamLayout(spec.id, spec.guestAddress, spec.hostByteLength, spec.guestByteLength);
+    const hostByteLength =
+      spec.id === RAM_REGION_ID ? alignUp(spec.hostByteLength, 8n) : spec.hostByteLength;
     const hostIndex = alignUp(packedByteLength, REGION_HOST_ALIGN);
     const region = spec.guestAddress
       ? {
           hostIndex,
-          hostByteLength: spec.hostByteLength,
+          hostByteLength,
           guestAddress: spec.guestAddress,
           guestByteLength: spec.guestByteLength,
         }
       : {
           hostIndex,
-          hostByteLength: spec.hostByteLength,
+          hostByteLength,
           guestAddress: null,
           guestByteLength: 0n as const,
         };
     regions.set(spec.id, region);
-    packedByteLength = hostIndex + spec.hostByteLength;
+    packedByteLength = hostIndex + hostByteLength;
     if (spec.guestAddress !== null) {
       regionsByBaseGuestAddress.push([spec.guestAddress, spec.id]);
     }
@@ -416,9 +433,10 @@ const storeBytes = ({
     resolved === null
       ? UNMAPPED_LOAD_STORE
       : (REGION_LOAD_STORE.get(resolved.regionId) ?? UNMAPPED_LOAD_STORE);
+  // The reservation lock is held across the dispatch: `storeBytesToRam` invalidates overlapping
+  // LR/SC reservations before writing, and the device regions' lock indexes follow it.
   const locks = [reservationLockIndex(memory), ...(region.lockIndexes?.(memory) ?? [])];
   return withSharedLocks(memory.bytes, locks, () => {
-    invalidateOverlappingReservationsLocked(memory, address, byteLength);
     if (resolved !== null) {
       region.store({ memory, address, offset: resolved.offset, source, byteLength });
     }

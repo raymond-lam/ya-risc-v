@@ -361,7 +361,8 @@ describe('memory', () => {
     assert.ok(ram);
     assert.ok(uart);
     assert.ok(clint);
-    assert.equal(ram.hostByteLength, 1n);
+    assert.equal(ram.hostByteLength, 8n);
+    assert.equal(ram.guestByteLength, 1n);
     assert.equal(uart.hostIndex, 8n);
     assert.equal(clint.hostIndex % 8n, 0n);
     assert.ok(clint.hostIndex > uart.hostIndex);
@@ -1180,6 +1181,38 @@ describe('atomic load/store/cas', () => {
         hartId: 0,
       }),
       false
+    );
+  });
+});
+
+describe('RAM word alignment', () => {
+  it('padding cannot hide an undersized dense RAM allocation', () => {
+    assert.throws(
+      () =>
+        createMemory([
+          {
+            id: RAM_REGION_ID,
+            hostByteLength: 1n,
+            guestAddress: new Uint8Array(8),
+            guestByteLength: 2n,
+          },
+        ]),
+      /before padding/
+    );
+  });
+
+  it('rejects guest RAM bases that cannot share host 64-bit word alignment', () => {
+    assert.throws(
+      () =>
+        createMemory([
+          {
+            id: RAM_REGION_ID,
+            hostByteLength: 16n,
+            guestAddress: unsignedBigIntToBytes(new Uint8Array(8), 1n),
+            guestByteLength: 16n,
+          },
+        ]),
+      /RAM guest base must be 8-byte aligned/
     );
   });
 });

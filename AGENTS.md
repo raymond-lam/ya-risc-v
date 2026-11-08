@@ -40,7 +40,7 @@ assuming this summary is enough.
    architectural bytes; `signedNumberToBytes`, `unsignedNumberToBytes`,
    `unsignedBigIntToBytes`, and `low32Bytes` pack values into a caller-allocated buffer.
 2. **Decode returns a curried thunk: `(registers, memory, instructionByteLength) =>
-   Promise<void>`.** Decode closes over instruction args — the thunk itself takes no args
+Promise<void>`.** Decode closes over instruction args — the thunk itself takes no args
    type. The thunk **owns the PC**: call `advanceProgramCounter(registers, instructionByteLength)`
    on the fall-through path, or `setProgramCounter` when jumping/branching (`jal`/`jalr` use
    the length for the link). The run loop never adjusts the PC itself and `await`s every
@@ -53,15 +53,18 @@ assuming this summary is enough.
    `ReadonlyUint8Array` and the write helper also ignores stores to those slots. Read-only
    byte buffers elsewhere use the same structural `ReadonlyUint8Array` type (plain
    `Uint8Array` remains assignable); it is a hint, not a guard — don't mutate such values.
-4. **Guest DRAM is a `SharedArrayBuffer` shared with the worker, accessed with plain byte
-   reads and writes** — the absence of `Atomics` on ordinary guest loads/stores is deliberate.
+4. **Guest DRAM is a `SharedArrayBuffer` shared with workers and accessed as aligned 64-bit
+   words through `Atomics`**. All runtime RAM accesses, including AMOs, use that same 64-bit
+   width; subword stores CAS only the requested bytes while preserving neighbors. Bulk DMA
+   spanning multiple words can be observed one word at a time. RAM bases must be 8-byte
+   aligned; owned tail padding is not mapped.
    `guestAddress` means a guest physical address (architectural bytes); `hostIndex` means a
    `bigint` byte index into `memory.bytes`. Memory is a `regions` Map (`hostIndex` /
    `hostByteLength`, optional `guestAddress` / `guestByteLength`) packed contiguously with
    8-byte-aligned hostIndexes. `loadBytes`/`storeBytes` resolve a guestAddress to
    `{ regionId, offset }` and call the region's load/store pair; guest RAM/UART windows are
    dense, CLINT/PLIC are sparse MMIO over host slabs. Transfer widths are `number`.
-   Aligned RV64A AMO/LR/SC use `Atomics` on `Int32`/`BigInt64` views; other host-only
+   RV64A AMO/LR/SC use the same aligned 64-bit RAM words under the reservation lock; host-only
    packing (UART queue meta, CLINT time/wires, PLIC shadows, irq-level / TX-wake words)
    uses `Atomics` on bytes, except `BigUint64Array` for CLINT time and `Int32Array` where
    `waitAsync`/`notify` is needed. Alignment and PMP are **not** checked in `memory.ts` —
@@ -73,9 +76,13 @@ assuming this summary is enough.
    stay in sync with it, and any new guest-mapped device must also appear in the device
    tree (`src/fdt.ts`). Change all of them together.
 6. **Reservation monitor invalidation.** A host-only LR/SC reservation monitor (per-hart
-   slots, line granule) sits in the SAB after PLIC; `storeBytes` and atomic RMWs must
+   slots, line granule) sits in the SAB after PLIC; every guest RAM write and atomic RMW must
    invalidate overlapping reservations under the reservation lock (`withSharedLocks` and
-   `invalidateOverlappingReservationsLocked`). Never write guest RAM around this protocol.
+   `invalidateOverlappingReservationsLocked`). That invalidation lives in
+   `storeBytesToRam`/`atomicRamStore`/`atomicRamCompareExchange`, not at the call sites, so
+   hart stores (`memory.storeBytes`), device DMA (`storeBytesToRam` after a `guestRamOffset`
+   gate) and AMOs all funnel through it — a new RAM write path that bypasses those primitives
+   is a reservation-model bug.
 7. **Host components are Promise-like awaitable handles with `start` / `stop`.** `Emulator`,
    `Cpu`, `Timer`, `Terminal`, and the TUI each implement a `Promise.withResolvers` lifetime
    with `then`/`catch`/`finally` plus idempotent `stop`. The pattern is: create → start →
