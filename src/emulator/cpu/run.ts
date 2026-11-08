@@ -75,6 +75,7 @@ const main = async (): Promise<void> => {
   setProgramCounter(registers, resetPc);
   applyBootHandoff(registers, deviceTreeAddress);
   const instructionBytes = new Uint8Array(4);
+  parentPort?.postMessage('ready');
 
   // The hart runs until the host tears the worker down. A syscon poweroff/reboot
   // request is modeled as a yank: the host watch sees the request and stops the

@@ -85,8 +85,13 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    is a reservation-model bug.
 7. **Host components are Promise-like awaitable handles with `start` / `stop`.** `Emulator`,
    `Cpu`, `Timer`, `Terminal`, and the TUI each implement a `Promise.withResolvers` lifetime
-   with `then`/`catch`/`finally` plus idempotent `stop`. The pattern is: create → start →
-   await; `stop` is safe before or after `start`, and awaiting joins the handle's lifetime.
+   with `then`/`catch`/`finally` plus idempotent `stop`. Worker handles and the emulator
+   return `Promise<void>` from `start` (ready) and `stop` (shutdown joined), separate from
+   their awaitable lifetime. The pattern
+   is: create → await start() → await lifetime; `stop` is safe before or after `start`,
+   and awaiting joins the handle's lifetime.
+   A stop requested during startup waits for startup
+   to settle before stopping the workers; readiness is not cancelled.
    New host-side components should follow the same pattern. The CLI (`src/index.ts`) starts
    the TUI then the emulator, awaits the emulator, then stops and awaits the TUI; signal and
    syscon poweroff/reboot paths call `emulator.stop()`.

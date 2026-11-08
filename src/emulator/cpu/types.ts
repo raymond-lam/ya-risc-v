@@ -85,10 +85,10 @@ type CpuCreateOptions = {
 type CpuWorkerData = CpuCreateOptions;
 
 type CpuHandle = Promise<void> & {
-  /** Spawn the CPU worker. Throws if already started or already stopped. */
-  start: () => void;
-  /** Stop the worker. Throws if not started; idempotent after the first stop. */
-  stop: () => void;
+  /** Spawn the CPU worker and await initialization. Throws if already started or stopped. */
+  start: () => Promise<void>;
+  /** Stop the worker. Waits for startup, then joins shutdown; safe before start and idempotent. */
+  stop: () => Promise<void>;
 };
 
 export type { Registers, CpuCreateOptions, CpuWorkerData, CpuHandle };
