@@ -94,7 +94,9 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   (`--ram-base`; size from `--ram-size`), an 8-byte **16550 UART** window at `0x10000000`
   (`--uart-base`; RBR/THR/IER/IIR/LSR; IER→PLIC source 10), a **CLINT** at `0x02000000`
   (`--clint-base`; `msip` / `mtimecmp` / `mtime`), a **PLIC** at `0x0c000000` (`--plic-base`),
-  and an 8-byte **syscon** at `0x00100000` (`--syscon-base`). A 4-byte store of `1` at the
+  an 8-byte **syscon** at `0x00100000` (`--syscon-base`), and a **virtio-mmio** window at
+  `0x10001000` (`--virtio-base`). `--disk-image` attaches a raw read/write disk image;
+  diskless probes read zero and the device tree omits the virtio node. A 4-byte store of `1` at the
   syscon base requests poweroff; the same store at base+4 requests reboot. Either request
   stops the emulator, the same way the TUI Shutdown control does: the host tears down the
   CPU worker, so the power-cut window is nondeterministic like real silicon and firmware
@@ -147,8 +149,10 @@ it is copied into guest DRAM at `--ram-base` (default `0x80000000`). `--reset-pc
 base. `--ram-size`
 is required (decimal or `0x…` hex) and must be large enough for the image. Device bases default to
 UART `0x10000000` (`--uart-base`, 8-byte 16550 window), CLINT `0x02000000` (`--clint-base`),
-PLIC `0x0c000000` (`--plic-base`), and syscon `0x00100000` (`--syscon-base`, 8-byte poweroff
-and reboot registers). `--timebase-frequency` defaults to 10000000 Hz. The device
+PLIC `0x0c000000` (`--plic-base`), syscon `0x00100000` (`--syscon-base`, 8-byte poweroff
+and reboot registers), and virtio `0x10001000` (`--virtio-base`). `--disk-image` selects a raw
+read/write disk image; without it the virtio window stays mapped but inert.
+`--timebase-frequency` defaults to 10000000 Hz. The device
 tree is stored at the top of RAM; `--dtb-address` selects another guest address and
 `--no-device-tree` skips it (`a1` stays zero). Addresses and the timebase are decimal or `0x…` hex.
 
@@ -191,8 +195,8 @@ and `tsc` over `src/`.
 src/
   index.ts                CLI: create emulator + TUI, start both, await emulator then TUI
   emulator/
-    index.ts              Host-side create(); start()/stop() forward to CPU + timer + terminal
-    types.ts              EmulatorCreateOptions (private); EmulatorHandle re-exported from index
+    index.ts              Host-side create(); async start()/stop() coordinate device readiness and shutdown
+    types.ts              Emulator options, guest-region windows, and handle types (private)
     memory.ts             createMemory, load/store (+ atomics), Memory type
     ram.ts                Dense RAM load/store + RV64A atomics
     plic/
@@ -229,6 +233,7 @@ src/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute
       decode/             Instruction decode package (index → decode-32 / decode-c)
+      wait-for-interrupt.ts IRQ-only WFI double-sample wait (private)
       trap.ts             Trap/interrupt entry and mret/sret
       registers.ts        Register file: x0–x31, the program counter, and CSRs
       types.ts            Architectural state types (re-exported from index)
@@ -283,15 +288,42 @@ atomic views. The irq-level word is an `Int32` OR of IRQ levels so `wfi`
 can `Atomics.waitAsync` / `notify` on that level. Guest THR empty→nonempty notifies a separate UART
 TX wake word so the terminal worker can `Atomics.waitAsync` instead of polling.
 
+**Worker handles and the emulator are awaitable lifetimes.** `await handle.start()` waits for
+startup, not shutdown; `await handle` joins the lifetime. Disk startup opens the image and presents
+the ready device before the emulator starts the CPU. `await handle.stop()` joins shutdown, with
+the CPU joined before terminal output is drained. Stop is safe before startup and on repeated calls;
+start still throws if already started or stopped. Failed startup rejects with the worker's error,
+and stopping during startup waits for startup to settle before shutting down all started workers.
+Each worker host specifies its startup timeout (currently five seconds for all hosts);
+worker failures remain observable through the lifetime and shutdown promises.
+
+If you are pointing a coding agent at this repository, see [AGENTS.md](AGENTS.md) for the conventions
+it should follow.
+
+### Device progress and RAM ordering
+
+The virtio disk worker independently consumes notified split queues, performs asynchronous
+file I/O, then publishes DMA, status, used entries, used index and PLIC source 1 in that order.
+The hart never services disk completions; WFI waits only on architectural IRQ changes.
+One queue (depth at most 8), one in-flight transfer (at most 4 KiB), no INDIRECT or FLUSH
+feature are implemented. Unadvertised FLUSH requests return UNSUPP. Reset and QueueReady
+clear revoke old guest publications, not backing writes already submitted to the OS.
+For invalid drivers, an available-index delta greater than queue depth stalls consumption
+without DMA, used entries or interrupts. Re-notifying the same invalid index does not recover;
+the driver must restore a valid index and notify again, or reset/reconfigure the queue.
+An invalid descriptor chain with an unwriteable status byte consumes its available slot
+without publishing a used entry. These are bounded fail-closed implementation policies for
+invalid input, not virtio-mandated error responses.
+
 All runtime RAM accesses, including scalar instructions and AMOs, use aligned 64-bit `Atomics` operations.
 ECMA-262 §29.7/29.9 guarantees tear-free equal-range atomic accesses, not mixed-width overlaps;
 subword access therefore reads/CAS-updates the same enclosing 64-bit word as a wider scalar.
 Subword writes preserve neighbors with CAS; DMA spanning multiple words is not a transfer snapshot.
 `--ram-base` must be 8-byte aligned. Host tail padding is not guest memory; the original dense RAM allocation must cover its guest extent. This deliberately
 strong host ordering does not simulate RVWMO/cache weak-memory bugs; FENCE remains a no-op.
-
-If you are pointing a coding agent at this repository, see [AGENTS.md](AGENTS.md) for the conventions
-it should follow.
+Disk stop cooperatively settles issued I/O and closes the file, with a one-second terminate
+fallback for hung I/O or abandoned locks. Fallback discards the whole machine SAB; hot-unplug
+and reusing that SAB are unsupported. Successful writes/stop do not promise fsync durability.
 
 ## License
 

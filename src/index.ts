@@ -16,7 +16,8 @@
  * limitations under the License.
  */
 
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { create as createEmulator } from '#emulator';
@@ -115,6 +116,8 @@ type CliOptions = {
   sysconBase: bigint;
   virtioBase: bigint;
   timebaseFrequency: bigint;
+  /** Path to a raw disk image opened read-write by the virtio block device. */
+  diskImage?: string;
   /** Set by `--no-device-tree`. Commander defaults this to true. */
   deviceTree: boolean;
   dtbAddress?: bigint;
@@ -153,8 +156,40 @@ const guestBaseOption = (
 ): Option =>
   new Option(flags, description).default(address, shown).argParser(parseGuestAddress(label));
 
+/**
+ * Open the `--disk-image` path read-write so a missing or unwritable file fails before the
+ * emulator starts. The disk worker reopens the path itself later (a descriptor cannot cross
+ * the worker boundary), so only the check result is kept, not the handle.
+ */
+const openDiskImage = async (path: string): Promise<FileHandle> => {
+  try {
+    return await open(path, 'r+');
+  } catch (error) {
+    throw new Error(
+      `--disk-image '${path}' must be an existing file openable for read-write access.`,
+      { cause: error }
+    );
+  }
+};
+
+/** Reject a `--disk-image` path that exists but is not a regular file (raw image). */
+const validateDiskImage = async (path: string): Promise<void> => {
+  const handle = await openDiskImage(path);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw new Error(`--disk-image '${path}' must be a regular file.`);
+    }
+  } finally {
+    await handle.close();
+  }
+};
+
 const main = async (imagePath: string, options: CliOptions): Promise<void> => {
   const image = await readFile(imagePath);
+  if (options.diskImage !== undefined) {
+    await validateDiskImage(options.diskImage);
+  }
   const stdin = new PassThrough();
   const stdout = new PassThrough();
 
@@ -166,6 +201,7 @@ const main = async (imagePath: string, options: CliOptions): Promise<void> => {
     timebaseHz: options.timebaseFrequency,
     deviceTreeAddress: deviceTreeAddress(options),
     resetPc: guestAddressBytes(options.resetPc ?? options.ramBase),
+    diskImagePath: options.diskImage ?? null,
   });
   const tui = createTui({
     stdin,
@@ -280,6 +316,10 @@ program
       DEFAULT_VIRTIO_BASE_ADDRESS,
       '0x10001000'
     )
+  )
+  .option(
+    '--disk-image <path>',
+    'path to a raw disk image opened read-write by the virtio block device'
   )
   .addOption(
     new Option('--timebase-frequency <hz>', 'CLINT mtime frequency in hertz (decimal or 0x… hex)')

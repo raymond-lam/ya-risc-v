@@ -42,9 +42,10 @@ type EmulatorCreateOptions = {
   /** Bytes out of the guest (UART TX) for the host display. */
   stdout: Writable;
   /**
-   * Guest windows keyed by region id (`ram`, `uart`, `clint`, `plic`).
-   * The `ram` window must cover `image`. Windows must not overlap.
-   * The image is copied to the `ram` base. The hart fetches from `resetPc`.
+   * Guest windows keyed by region id (`ram`, `uart`, `clint`, `plic`, `syscon`,
+   * `virtio`). Every id must be present; windows must not overlap.
+   * The `ram` window must cover `image`. The image is copied to the `ram` base.
+   * The hart fetches from `resetPc`.
    */
   guestRegions: ReadonlyMap<string, GuestRegionWindow>;
   /** Guest address of the first fetch. Must lie in the RAM window. */
@@ -60,6 +61,14 @@ type EmulatorCreateOptions = {
    * A byte buffer is that guest physical address.
    */
   deviceTreeAddress: DeviceTreeAddress;
+  /**
+   * Path to the raw disk image opened read-write by the dedicated virtio disk
+   * worker, or `null` / omitted to boot diskless (no disk worker is spawned;
+   * the virtio window is still packed and reads 0x00000000 from every register).
+   * Always read-write — there is no read-only mode. An unopenable path rejects
+   * the emulator lifetime (the disk worker crashes on the open failure).
+   */
+  diskImagePath?: string | null;
 };
 
 type EmulatorHandle = Promise<void> & {
