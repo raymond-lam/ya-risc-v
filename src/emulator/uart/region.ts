@@ -21,10 +21,11 @@
  *   guestAddress + 0..7  →  hostIndex + 0..7   (RBR/THR … SCR)
  *
  * Host-only tail (not reachable via loadBytes/storeBytes):
- *   +8   queue meta (rx/tx head/tail)
- *   +12  RX ring
- *   +28  TX ring
- *   +44  TX nonempty wake Int32
+ *   +8   queue meta (rx head, rx tail, tx head, tx tail — one byte each)
+ *   +12  RX ring (UART_QUEUE_SLOT_COUNT = 17 slots: 16 usable + 1 head/tail sentinel)
+ *   +29  TX ring (UART_QUEUE_SLOT_COUNT slots, same shape)
+ *   +46  pad to +48
+ *   +48  TX nonempty wake Int32
  */
 
 import { bigIntAsNumber } from '#utils/int';
@@ -37,8 +38,14 @@ const UART_REGION_ID = 'uart';
 /** Guest-visible 16550 register window (dense prefix of this region). */
 const UART_GUEST_BYTE_LENGTH = 8n;
 
-/** Bytes of ring storage per direction (one slot reserved: head===tail ⇒ empty). */
-const UART_QUEUE_CAPACITY = 16;
+/** Usable bytes per direction — a 16550 FIFO is 16 bytes deep. */
+const UART_QUEUE_DEPTH = 16;
+
+/**
+ * Ring storage slots per direction: one slot per usable byte plus one reserved slot, so
+ * `head === tail` can mean empty without wasting a byte of the 16-byte FIFO depth.
+ */
+const UART_QUEUE_SLOT_COUNT = UART_QUEUE_DEPTH + 1;
 
 /** Relative host offsets inside the UART region (from that region's hostIndex). */
 const UART_HOST_OFFSET = {
@@ -47,9 +54,9 @@ const UART_HOST_OFFSET = {
   /** Queue meta: rxHead, rxTail, txHead, txTail. */
   meta: 8,
   rxData: 12,
-  txData: 28,
+  txData: 29,
   /** Int32 TX nonempty level (`0`/`1`) for the terminal pump. */
-  txWake: 44,
+  txWake: 48,
 } as const;
 
 /** Contiguous host slab size (registers + meta + rings + wake). */
@@ -110,7 +117,7 @@ export {
   UART_GUEST_BYTE_LENGTH,
   UART_HOST_BYTE_LENGTH,
   UART_HOST_OFFSET,
-  UART_QUEUE_CAPACITY,
+  UART_QUEUE_SLOT_COUNT,
   UART_REGION_ID,
   metaIndex,
   registerHostIndex,
