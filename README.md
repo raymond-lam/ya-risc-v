@@ -261,13 +261,19 @@ instruction word, so a hot loop decodes each distinct encoding once.
 each instruction either advances the program counter or writes a jump or branch target, which mirrors
 how the ISA actually specifies control flow.
 
-**The CPU runs on a worker thread** over memory backed by a `SharedArrayBuffer`. Guest RAM loads and
-stores are plain byte accesses rather than `Atomics`, so an unsynchronized host racing the guest
-behaves like unsynchronized access to real memory. Host-only device packing is the exception: UART
-RX/TX queue metadata, CLINT time/epoch/wires, and PLIC shadows/wires use `Atomics` (byte views,
-plus `BigUint64Array` for CLINT time). The irq-level word is an `Int32` OR of IRQ levels so `wfi`
+**The CPU runs on a worker thread** over memory backed by a `SharedArrayBuffer`. Runtime RAM accesses use `Atomics` on aligned 64-bit
+words; bulk DMA spanning multiple words may be observed one word at a time. Subword writes preserve neighbors
+through CAS and invalidate only the logical LR/SC span. Host-only device metadata uses appropriate
+atomic views. The irq-level word is an `Int32` OR of IRQ levels so `wfi`
 can `Atomics.waitAsync` / `notify` on that level. Guest THR empty→nonempty notifies a separate UART
 TX wake word so the terminal worker can `Atomics.waitAsync` instead of polling.
+
+All runtime RAM accesses, including scalar instructions and AMOs, use aligned 64-bit `Atomics` operations.
+ECMA-262 §29.7/29.9 guarantees tear-free equal-range atomic accesses, not mixed-width overlaps;
+subword access therefore reads/CAS-updates the same enclosing 64-bit word as a wider scalar.
+Subword writes preserve neighbors with CAS; DMA spanning multiple words is not a transfer snapshot.
+`--ram-base` must be 8-byte aligned. Host tail padding is not guest memory; the original dense RAM allocation must cover its guest extent. This deliberately
+strong host ordering does not simulate RVWMO/cache weak-memory bugs; FENCE remains a no-op.
 
 If you are pointing a coding agent at this repository, see [AGENTS.md](AGENTS.md) for the conventions
 it should follow.

@@ -14,19 +14,11 @@
  * limitations under the License.
  */
 
-/**
- * RAM region — dense guestAddress ↔ hostIndex (entire slab is guest-addressable).
- */
+/** Dense RAM accessed as aligned 64-bit words. Startup copies precede all workers.
+ * Runtime subword updates CAS only requested bytes; bulk DMA spans individually visible
+ * words. All writers invalidate their logical span under the reservation monitor. */
 
-import {
-  bytesToBigInt,
-  bytesToBigInt64Array,
-  bytesToInt32Array,
-  bytesToNumber,
-  signedBytesToBigInt,
-  signedNumberToBytes,
-  unsignedBigIntToBytes,
-} from '#utils/bytes';
+import { bytesToAlignedBigUint64Array, bytesToBigInt, unsignedBigIntToBytes } from '#utils/bytes';
 import type { ReadonlyUint8Array } from '#types';
 import { bigIntAsNumber } from '#utils/int';
 import { invalidateOverlappingReservationsLocked } from '#emulator/reservation';
@@ -66,17 +58,30 @@ const denseGuestToHostIndex = (ram: RamRegion, guestOffset: bigint): bigint | nu
 };
 
 /**
+ * Whole-transfer check: the offset of `address` inside the RAM guest window, or `null`
+ * when `[address, address + byteLength)` is not wholly inside it (no tail wrap).
+ * Guest DMA passes the real transfer length; single-address callers pass `0`.
+ */
+const guestRamOffset = (
+  memory: Memory,
+  address: ReadonlyUint8Array,
+  byteLength: number
+): bigint | null => {
+  const ram = ramRegion(memory);
+  const offset = bytesToBigInt(address) - bytesToBigInt(ram.guestAddress);
+  if (offset < 0n || offset + BigInt(byteLength) > ram.guestByteLength) {
+    return null;
+  }
+  return offset;
+};
+
+/**
  * Map a guest RAM address to an absolute hostIndex, or `null` if outside the
  * RAM region's guest window.
  */
 const ramAddressToHostIndex = (memory: Memory, address: ReadonlyUint8Array): bigint | null => {
-  const ram = ramRegion(memory);
-  const guestAddress = bytesToBigInt(address);
-  const base = bytesToBigInt(ram.guestAddress);
-  if (guestAddress < base || guestAddress >= base + ram.guestByteLength) {
-    return null;
-  }
-  return denseGuestToHostIndex(ram, guestAddress - base);
+  const offset = guestRamOffset(memory, address, 0); // 0-byte span: just the address must be in-window
+  return offset === null ? null : denseGuestToHostIndex(ramRegion(memory), offset);
 };
 
 /** Store a program image at the start of the packed RAM host slab. */
@@ -101,14 +106,6 @@ const copyIntoRam = (
   memory.bytes.set(source, bigIntAsNumber(hostIndex));
 };
 
-const loadRamByte = (memory: Memory, hostIndex: bigint): number =>
-  memory.bytes[bigIntAsNumber(hostIndex)] ?? 0;
-
-const storeRamByte = (memory: Memory, hostIndex: bigint, value: number): void => {
-  memory.bytes[bigIntAsNumber(hostIndex)] = value & 0xff;
-};
-
-/** Guest load of `byteLength` bytes from the RAM region at `offset`. */
 const loadBytesFromRam = ({
   destination,
   memory,
@@ -122,15 +119,30 @@ const loadBytesFromRam = ({
   byteLength: number;
 }): void => {
   const ram = ramRegion(memory);
-  for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
-    const hostIndex = denseGuestToHostIndex(ram, offset + BigInt(byteIndex));
-    destination[byteIndex] = hostIndex === null ? 0 : loadRamByte(memory, hostIndex);
+  let copied = 0;
+  while (copied < byteLength) {
+    const position = offset + BigInt(copied);
+    if (position < 0n || position >= ram.guestByteLength) {
+      destination[copied++] = 0;
+      continue;
+    }
+    const [view, within] = bytesToAlignedBigUint64Array(
+      memory.bytes,
+      bigIntAsNumber(ram.hostIndex + position)
+    );
+    const length = Math.min(
+      8 - within,
+      byteLength - copied,
+      Number(ram.guestByteLength - position)
+    );
+    const bytes = unsignedBigIntToBytes(new Uint8Array(8), Atomics.load(view, 0));
+    destination.set(bytes.subarray(within, within + length), copied);
+    copied += length;
   }
 };
-
-/** Guest store of `byteLength` bytes into the RAM region at `offset`. */
 const storeBytesToRam = ({
   memory,
+  address,
   offset,
   source,
   byteLength,
@@ -142,11 +154,32 @@ const storeBytesToRam = ({
   byteLength: number;
 }): void => {
   const ram = ramRegion(memory);
-  for (let byteIndex = 0; byteIndex < byteLength; byteIndex += 1) {
-    const hostIndex = denseGuestToHostIndex(ram, offset + BigInt(byteIndex));
-    if (hostIndex !== null) {
-      storeRamByte(memory, hostIndex, source[byteIndex] ?? 0);
+  invalidateOverlappingReservationsLocked(memory, address, byteLength);
+  let copied = 0;
+  while (copied < byteLength) {
+    const position = offset + BigInt(copied);
+    if (position < 0n || position >= ram.guestByteLength) {
+      copied++;
+      continue;
     }
+    const [view, within] = bytesToAlignedBigUint64Array(
+      memory.bytes,
+      bigIntAsNumber(ram.hostIndex + position)
+    );
+    const length = Math.min(
+      8 - within,
+      byteLength - copied,
+      Number(ram.guestByteLength - position)
+    );
+    let previous = Atomics.load(view, 0);
+    for (;;) {
+      const bytes = unsignedBigIntToBytes(new Uint8Array(8), previous);
+      for (let i = 0; i < length; i++) bytes[within + i] = source[copied + i] ?? 0;
+      const observed = Atomics.compareExchange(view, 0, previous, bytesToBigInt(bytes));
+      if (observed === previous) break;
+      previous = observed;
+    }
+    copied += length;
   }
 };
 
@@ -160,7 +193,10 @@ const alignedRamAddressToHostIndex = (
     return null;
   }
   const ram = ramRegion(memory);
-  if (hostIndex + BigInt(byteLength) > ram.hostIndex + ram.hostByteLength) {
+  if (
+    hostIndex + BigInt(byteLength) > ram.hostIndex + ram.guestByteLength ||
+    hostIndex + BigInt(byteLength) > ram.hostIndex + ram.hostByteLength
+  ) {
     return null;
   }
   if (hostIndex % BigInt(byteLength) !== 0n) {
@@ -189,21 +225,13 @@ const atomicRamLoad = ({
     return false;
   }
   destination.fill(0);
-  if (byteLength === 4) {
-    signedNumberToBytes(
-      destination,
-      Atomics.load(bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex)), 0),
-      32
-    );
-  } else {
-    unsignedBigIntToBytes(
-      destination,
-      BigInt.asUintN(
-        64,
-        Atomics.load(bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex)), 0)
-      )
-    );
-  }
+  loadBytesFromRam({
+    destination,
+    memory,
+    address,
+    offset: hostIndex - ramRegion(memory).hostIndex,
+    byteLength,
+  });
   return true;
 };
 
@@ -227,20 +255,13 @@ const atomicRamStore = ({
   if (hostIndex === null) {
     return false;
   }
-  if (byteLength === 4) {
-    Atomics.store(
-      bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex)),
-      0,
-      bytesToNumber(source) | 0
-    );
-  } else {
-    Atomics.store(
-      bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex)),
-      0,
-      signedBytesToBigInt(source)
-    );
-  }
-  invalidateOverlappingReservationsLocked(memory, address, byteLength);
+  storeBytesToRam({
+    memory,
+    address,
+    source,
+    offset: hostIndex - ramRegion(memory).hostIndex,
+    byteLength,
+  });
   return true;
 };
 
@@ -272,25 +293,25 @@ const atomicRamCompareExchange = ({
     return false;
   }
   destination.fill(0);
-  if (byteLength === 4) {
-    const view = bytesToInt32Array(memory.bytes, bigIntAsNumber(hostIndex));
-    const expectedBits = bytesToNumber(expected) | 0;
-    const previous = Atomics.compareExchange(view, 0, expectedBits, bytesToNumber(desired) | 0);
-    signedNumberToBytes(destination, previous, 32);
-    if (previous !== expectedBits) {
-      return false;
-    }
-    invalidateOverlappingReservationsLocked(memory, address, byteLength);
-    return true;
+  loadBytesFromRam({
+    destination,
+    memory,
+    address,
+    offset: hostIndex - ramRegion(memory).hostIndex,
+    byteLength,
+  });
+  for (let i = 0; i < byteLength; i++) {
+    if (destination[i] !== (expected[i] ?? 0)) return false;
   }
-  const view = bytesToBigInt64Array(memory.bytes, bigIntAsNumber(hostIndex));
-  const expectedBits = signedBytesToBigInt(expected);
-  const previous = Atomics.compareExchange(view, 0, expectedBits, signedBytesToBigInt(desired));
-  unsignedBigIntToBytes(destination, BigInt.asUintN(64, previous));
-  if (previous !== expectedBits) {
-    return false;
-  }
-  invalidateOverlappingReservationsLocked(memory, address, byteLength);
+  // All RAM writers hold the reservation monitor; comparison and subword CAS remain
+  // one logical AMO transaction, using the same aligned 64-bit words as ordinary DMA.
+  storeBytesToRam({
+    memory,
+    address,
+    source: desired,
+    offset: hostIndex - ramRegion(memory).hostIndex,
+    byteLength,
+  });
   return true;
 };
 
@@ -301,6 +322,7 @@ export {
   atomicRamStore,
   loadBytesFromRam,
   copyIntoRam,
+  guestRamOffset,
   storeBytesToRam,
   storeImageToRam,
 };

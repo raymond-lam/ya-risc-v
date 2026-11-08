@@ -334,6 +334,31 @@ const bytesToBigUint64Array = (bytes: Uint8Array, index: number): BigUint64Array
   return new BigUint64Array(bytes.buffer, byteOffset, 1);
 };
 
+/**
+ * One-element `BigUint64Array` view of the 8-byte word encompassing byte `index` of
+ * `bytes`, aligned relative to the underlying buffer (so `bytes` itself may start at an
+ * unaligned `byteOffset`), paired with that byte's offset (0..7) inside the word.
+ * The view aliases the same storage and may extend outside the supplied slice; callers
+ * doing atomic access must own the entire 8-byte word, including any padding, and access
+ * it with a consistent width. Throws `RangeError` when `index` is not an integer inside
+ * `bytes`, or when the encompassing word does not fit in the underlying buffer.
+ */
+const bytesToAlignedBigUint64Array = (
+  bytes: Uint8Array,
+  index: number
+): [view: BigUint64Array, byteIndex: number] => {
+  if (!Number.isInteger(index) || index < 0 || index >= bytes.length) {
+    throw new RangeError('bytesToAlignedBigUint64Array index must be a byte inside bytes.');
+  }
+  const absoluteOffset = bytes.byteOffset + index;
+  const byteIndex = absoluteOffset % 8;
+  const alignedOffset = absoluteOffset - byteIndex;
+  if (alignedOffset + 8 > bytes.buffer.byteLength) {
+    throw new RangeError('bytesToAlignedBigUint64Array word must fit in the underlying buffer.');
+  }
+  return [new BigUint64Array(bytes.buffer, alignedOffset, 1), byteIndex];
+};
+
 export {
   copyBytes,
   addBytes,
@@ -360,4 +385,5 @@ export {
   bytesToInt32Array,
   bytesToBigInt64Array,
   bytesToBigUint64Array,
+  bytesToAlignedBigUint64Array,
 };

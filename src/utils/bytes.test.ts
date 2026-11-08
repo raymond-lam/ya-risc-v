@@ -23,6 +23,7 @@ import {
   bytesToBigInt,
   bytesToBigInt64Array,
   bytesToBigUint64Array,
+  bytesToAlignedBigUint64Array,
   signedBytesToBigInt,
   bytesToNumber,
   compareSignedBytes,
@@ -237,5 +238,37 @@ describe('utils/bytes', () => {
     view[0] = 0x8000_0000_0000_0001n;
     assert.deepEqual(bytes.slice(8, 16), Uint8Array.of(0x01, 0, 0, 0, 0, 0, 0, 0x80));
     assert.throws(() => bytesToBigUint64Array(bytes, 4), /8-byte aligned/);
+  });
+
+  it('bytesToAlignedBigUint64Array views the buffer-aligned word encompassing a byte', () => {
+    const buffer = new ArrayBuffer(24);
+    const slice = new Uint8Array(buffer, 3, 18); // unaligned byteOffset
+    const [view, byteIndex] = bytesToAlignedBigUint64Array(slice, 2); // absolute byte 5
+    assert.equal(view.length, 1);
+    assert.equal(view.byteOffset, 0);
+    assert.equal(view.buffer, buffer);
+    assert.equal(byteIndex, 5);
+    view[0] = 0x0807_0605_0403_0201n;
+    assert.equal(slice[2], 0x06);
+    assert.equal(slice[0], 0x04);
+    slice[2] = 0xee;
+    assert.equal(view[0], 0x0807_ee05_0403_0201n);
+
+    const [nextView, nextByteIndex] = bytesToAlignedBigUint64Array(slice, 5); // absolute byte 8
+    assert.equal(nextView.byteOffset, 8);
+    assert.equal(nextByteIndex, 0);
+    const [lastView, lastByteIndex] = bytesToAlignedBigUint64Array(slice, 4); // absolute byte 7
+    assert.equal(lastView.byteOffset, 0);
+    assert.equal(lastByteIndex, 7);
+  });
+
+  it('bytesToAlignedBigUint64Array rejects bad indexes and words past the buffer end', () => {
+    const slice = new Uint8Array(new ArrayBuffer(24), 3, 18);
+    for (const index of [-1, 18, 1.5, Number.NaN]) {
+      assert.throws(() => bytesToAlignedBigUint64Array(slice, index), /byte inside bytes/);
+    }
+    const unpadded = new Uint8Array(new ArrayBuffer(12));
+    assert.equal(bytesToAlignedBigUint64Array(unpadded, 7)[1], 7);
+    assert.throws(() => bytesToAlignedBigUint64Array(unpadded, 8), /fit in the underlying/);
   });
 });
