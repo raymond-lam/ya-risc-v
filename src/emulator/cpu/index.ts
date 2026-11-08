@@ -14,93 +14,27 @@
  * limitations under the License.
  */
 
-import { Worker } from 'node:worker_threads';
-import workerExecArgv from '#utils/worker-exec-argv';
+import type { WorkerOptions } from 'node:worker_threads';
+import Worker from '#emulator/Worker';
 import type { CpuCreateOptions, CpuHandle, CpuWorkerData } from '#emulator/cpu/types';
 
-/* eslint-disable no-restricted-syntax -- Promise wrapper needs a constructor and promise methods */
-class Cpu implements CpuHandle {
-  readonly [Symbol.toStringTag] = 'Promise';
-
-  readonly #lifetime = Promise.withResolvers<void>();
-
+/* eslint-disable no-restricted-syntax -- Worker host needs a constructor */
+class Cpu extends Worker implements CpuHandle {
   readonly #options: CpuCreateOptions;
 
-  #worker: Worker | undefined;
-
-  #started = false;
-
-  #stopped = false;
-
   constructor(options: CpuCreateOptions) {
+    super('CPU', new URL(import.meta.resolve('#emulator/cpu/run')));
     this.#options = options;
   }
 
-  start = (): void => {
-    if (this.#stopped) {
-      throw new Error('Already stopped.');
-    }
-    if (this.#started) {
-      throw new Error('Already started.');
-    }
+  protected createWorkerOptions = (): Pick<WorkerOptions, 'workerData' | 'transferList'> => {
     const workerData = {
       memory: this.#options.memory,
       resetPc: this.#options.resetPc,
       deviceTreeAddress: this.#options.deviceTreeAddress,
     } satisfies CpuWorkerData;
-    // Assign worker before marking started so a constructor throw leaves state untouched.
-    const worker = new Worker(new URL(import.meta.resolve('#emulator/cpu/run')), {
-      execArgv: workerExecArgv(),
-      workerData,
-    });
-    this.#worker = worker;
-    this.#started = true;
-    let workerError: Error | undefined;
-    worker.once('error', (error: unknown) => {
-      workerError = error instanceof Error ? error : new Error(String(error));
-    });
-    worker.once('exit', (code) => {
-      if (workerError !== undefined) {
-        this.#lifetime.reject(workerError);
-        return;
-      }
-      if (this.#stopped || code === 0) {
-        this.#lifetime.resolve();
-        return;
-      }
-      this.#lifetime.reject(new Error(`CPU worker exited with code ${code}`));
-    });
+    return { workerData };
   };
-
-  stop = (): void => {
-    if (this.#stopped) {
-      return;
-    }
-    this.#stopped = true;
-    if (this.#worker !== undefined) {
-      void this.#worker.terminate();
-      return;
-    }
-    // Never started (or start failed before worker assignment): unblock awaiters.
-    this.#lifetime.resolve();
-  };
-
-  then<TResult1 = void, TResult2 = never>(
-    onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null | undefined,
-    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined
-  ): Promise<TResult1 | TResult2> {
-    return this.#lifetime.promise.then(onfulfilled, onrejected);
-  }
-
-  catch<TResult = never>(
-    onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null | undefined
-  ): Promise<void | TResult> {
-    return this.#lifetime.promise.catch(onrejected);
-  }
-
-  finally(onfinally?: (() => void) | null | undefined): Promise<void> {
-    return this.#lifetime.promise.finally(onfinally);
-  }
 }
 
 const create = (options: CpuCreateOptions): CpuHandle => new Cpu(options);

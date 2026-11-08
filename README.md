@@ -191,7 +191,7 @@ and `tsc` over `src/`.
 src/
   index.ts                CLI: create emulator + TUI, start both, await emulator then TUI
   emulator/
-    index.ts              Host-side create(); start()/stop() forward to CPU + timer + terminal
+    index.ts              Host-side create(); async start()/stop() coordinate device readiness and shutdown
     types.ts              EmulatorCreateOptions (private); EmulatorHandle re-exported from index
     memory.ts             createMemory, load/store (+ atomics), Memory type
     ram.ts                Dense RAM load/store + RV64A atomics
@@ -214,6 +214,7 @@ src/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute
       decode/             Instruction decode package (index → decode-32 / decode-c)
+      wait-for-interrupt.ts IRQ-only WFI double-sample wait (private)
       trap.ts             Trap/interrupt entry and mret/sret
       registers.ts        Register file: x0–x31, the program counter, and CSRs
       types.ts            Architectural state types (re-exported from index)
@@ -261,16 +262,48 @@ instruction word, so a hot loop decodes each distinct encoding once.
 each instruction either advances the program counter or writes a jump or branch target, which mirrors
 how the ISA actually specifies control flow.
 
-**The CPU runs on a worker thread** over memory backed by a `SharedArrayBuffer`. Guest RAM loads and
-stores are plain byte accesses rather than `Atomics`, so an unsynchronized host racing the guest
-behaves like unsynchronized access to real memory. Host-only device packing is the exception: UART
-RX/TX queue metadata, CLINT time/epoch/wires, and PLIC shadows/wires use `Atomics` (byte views,
-plus `BigUint64Array` for CLINT time). The irq-level word is an `Int32` OR of IRQ levels so `wfi`
+**The CPU runs on a worker thread** over memory backed by a `SharedArrayBuffer`. Runtime RAM accesses use canonical aligned 64-bit
+Atomics cells; bulk DMA may be partially observed across cells. Subword writes preserve neighbors
+through CAS and invalidate only the logical LR/SC span. Host-only device metadata uses appropriate
+atomic views. The irq-level word is an `Int32` OR of IRQ levels so `wfi`
 can `Atomics.waitAsync` / `notify` on that level. Guest THR empty→nonempty notifies a separate UART
 TX wake word so the terminal worker can `Atomics.waitAsync` instead of polling.
 
+**Worker handles and the emulator are awaitable lifetimes.** `await handle.start()` waits for
+startup, not shutdown; `await handle` joins the lifetime. Disk startup opens the image and presents
+the ready device before the emulator starts the CPU. `await handle.stop()` joins shutdown, with
+the CPU joined before terminal output is drained. Stop is safe before startup and on repeated calls;
+start still throws if already started or stopped. Failed startup rejects with the worker's error,
+and stopping during startup waits for startup to settle before shutting down all started workers.
+Startup has a bounded five-second timeout; worker failures remain observable through the lifetime and shutdown promises.
+
 If you are pointing a coding agent at this repository, see [AGENTS.md](AGENTS.md) for the conventions
 it should follow.
+
+### Device progress and RAM ordering
+
+The virtio disk worker independently consumes notified split queues, performs asynchronous
+file I/O, then publishes DMA, status, used entries, used index and PLIC source 1 in that order.
+The hart never services disk completions; WFI waits only on architectural IRQ changes.
+One queue (depth at most 8), one in-flight transfer (at most 4 KiB), no INDIRECT or FLUSH
+feature are implemented. Unadvertised FLUSH requests return UNSUPP. Reset and QueueReady
+clear revoke old guest publications, not backing writes already submitted to the OS.
+For invalid drivers, an available-index delta greater than queue depth stalls consumption
+without DMA, used entries or interrupts. Re-notifying the same invalid index does not recover;
+the driver must restore a valid index and notify again, or reset/reconfigure the queue.
+An invalid descriptor chain with an unwriteable status byte consumes its available slot
+without publishing a used entry. These are bounded fail-closed implementation policies for
+invalid input, not virtio-mandated error responses.
+
+Runtime RAM uses canonical aligned 64-bit Atomics cells, including scalar and AMO access.
+ECMA-262 §29.7/29.9 guarantees tear-free equal-range atomic accesses, not mixed-width overlaps;
+subword access therefore reads/CAS-updates the same backing cell as a wider scalar.
+Subword writes preserve neighbors with CAS; multi-cell DMA is not a transfer snapshot.
+`--ram-base` must be 8-byte aligned. Host tail padding is not guest memory; the original dense RAM allocation must cover its guest extent. This deliberately
+strong host ordering does not simulate RVWMO/cache weak-memory bugs; FENCE remains a no-op.
+Disk stop cooperatively settles issued I/O and closes the file, with a one-second terminate
+fallback for hung I/O or abandoned locks. Fallback discards the whole machine SAB; hot-unplug
+and reusing that SAB are unsupported. Successful writes/stop do not promise fsync durability.
 
 ## License
 

@@ -40,12 +40,12 @@
  *   - **Dense** (RAM, UART register window): guest offset `o` maps to
  *     `hostIndex + o` for `o < guestByteLength` (a prefix of the host slab; the rest
  *     of the slab is host-only).
- *   - **Sparse** (CLINT, PLIC): `guestByteLength` is the architectural window size;
+ *   - **Sparse** (CLINT, PLIC, virtio): `guestByteLength` is the architectural window size;
  *     only decoded offsets inside that window are live, and they map to fixed
  *     offsets inside the packed host slab (not a linear prefix).
  *
  * Callers supply region specs to `createMemory` and initialize device shadows
- * (`initializeClint` / `initializePlic`). Devices look up by key
+ * (`initializeClint` / `initializePlic` / `initializeVirtio`). Devices look up by key
  * (`regions.get(UART_REGION_ID)`); guest decode binary-searches
  * `regionsByBaseGuestAddress`, then dispatches by id.
  */
@@ -67,7 +67,6 @@ import {
   storeBytesToRam,
 } from '#emulator/ram';
 import {
-  invalidateOverlappingReservationsLocked,
   reservationLockIndex,
   setReservationLocked,
   tryTakeReservation,
@@ -79,6 +78,12 @@ import {
   uartMemoryLockIndexes,
   UART_REGION_ID,
 } from '#emulator/uart';
+import {
+  loadBytesFromVirtio,
+  storeBytesToVirtio,
+  virtioMemoryLockIndexes,
+  VIRTIO_REGION_ID,
+} from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { alignUp } from '#utils/alignment';
 import findLastIndex from '#utils/binary-search';
@@ -141,6 +146,21 @@ const REGION_HOST_ALIGN = 8n;
  * pad between regions is only for alignment. Guest-mapped specs carry a window;
  * host-only use `guestAddress: null` / `guestByteLength: 0n`.
  */
+const validateRamLayout = (
+  id: string,
+  address: ReadonlyUint8Array | null,
+  hostByteLength: bigint,
+  guestByteLength: bigint
+): void => {
+  if (id !== RAM_REGION_ID) return;
+  if (address !== null && bytesToBigInt(address) % 8n !== 0n) {
+    throw new RangeError('RAM guest base must be 8-byte aligned.');
+  }
+  if (hostByteLength < guestByteLength) {
+    throw new RangeError('RAM host allocation must cover its guest-visible extent before padding.');
+  }
+};
+
 const createMemory = (
   regionSpecs: readonly ({
     id: string;
@@ -186,22 +206,25 @@ const createMemory = (
     if (regions.has(spec.id)) {
       throw new RangeError(`Duplicate memory region ID '${spec.id}'.`);
     }
+    validateRamLayout(spec.id, spec.guestAddress, spec.hostByteLength, spec.guestByteLength);
+    const hostByteLength =
+      spec.id === RAM_REGION_ID ? alignUp(spec.hostByteLength, 8n) : spec.hostByteLength;
     const hostIndex = alignUp(packedByteLength, REGION_HOST_ALIGN);
     const region = spec.guestAddress
       ? {
           hostIndex,
-          hostByteLength: spec.hostByteLength,
+          hostByteLength,
           guestAddress: spec.guestAddress,
           guestByteLength: spec.guestByteLength,
         }
       : {
           hostIndex,
-          hostByteLength: spec.hostByteLength,
+          hostByteLength,
           guestAddress: null,
           guestByteLength: 0n as const,
         };
     regions.set(spec.id, region);
-    packedByteLength = hostIndex + spec.hostByteLength;
+    packedByteLength = hostIndex + hostByteLength;
     if (spec.guestAddress !== null) {
       regionsByBaseGuestAddress.push([spec.guestAddress, spec.id]);
     }
@@ -341,6 +364,10 @@ const REGION_LOAD_STORE = new Map<string, RegionMemoryAccess>([
     { load: loadBytesFromPlic, store: storeBytesToPlic, lockIndexes: plicMemoryLockIndexes },
   ],
   [SYSCON_REGION_ID, { load: loadBytesFromSyscon, store: storeBytesToSyscon }],
+  [
+    VIRTIO_REGION_ID,
+    { load: loadBytesFromVirtio, store: storeBytesToVirtio, lockIndexes: virtioMemoryLockIndexes },
+  ],
 ]);
 
 /** Atomic ops on non-RAM (or unmapped) regions fail — callers trap. */
@@ -367,6 +394,7 @@ const REGION_ATOMIC_LOAD_STORE: ReadonlyMap<
   [CLINT_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
   [PLIC_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
   [SYSCON_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
+  [VIRTIO_REGION_ID, ATOMIC_NOOP_LOAD_STORE],
 ]);
 
 /** Copy `byteLength` bytes from `memory` at guest `address` into `destination` (high bytes cleared). */
@@ -416,9 +444,10 @@ const storeBytes = ({
     resolved === null
       ? UNMAPPED_LOAD_STORE
       : (REGION_LOAD_STORE.get(resolved.regionId) ?? UNMAPPED_LOAD_STORE);
+  // The reservation lock is held across the dispatch: `storeBytesToRam` invalidates overlapping
+  // LR/SC reservations before writing, and the device regions' lock indexes follow it.
   const locks = [reservationLockIndex(memory), ...(region.lockIndexes?.(memory) ?? [])];
   return withSharedLocks(memory.bytes, locks, () => {
-    invalidateOverlappingReservationsLocked(memory, address, byteLength);
     if (resolved !== null) {
       region.store({ memory, address, offset: resolved.offset, source, byteLength });
     }

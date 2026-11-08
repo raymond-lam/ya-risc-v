@@ -31,6 +31,8 @@ import { create as createTerminal, type TerminalHandle } from '#emulator/termina
 import { create as createTimer, type TimerHandle } from '#emulator/timer';
 import type { EmulatorCreateOptions, EmulatorHandle, GuestRegionWindow } from '#emulator/types';
 import { UART_HOST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_HOST_BYTE_LENGTH, VIRTIO_REGION_ID, initializeVirtio } from '#emulator/virtio';
+import { createVirtioDisk, type VirtioDiskHandle } from '#emulator/virtio';
 import { storeDeviceTreeToRam } from '#fdt';
 import { bytesToBigInt } from '#utils/bytes';
 
@@ -41,6 +43,7 @@ const GUEST_REGION_IDS: readonly string[] = [
   CLINT_REGION_ID,
   PLIC_REGION_ID,
   SYSCON_REGION_ID,
+  VIRTIO_REGION_ID,
 ];
 
 const hostByteLength = (id: string, guestByteLength: bigint): bigint => {
@@ -58,6 +61,9 @@ const hostByteLength = (id: string, guestByteLength: bigint): bigint => {
   }
   if (id === SYSCON_REGION_ID) {
     return SYSCON_HOST_BYTE_LENGTH;
+  }
+  if (id === VIRTIO_REGION_ID) {
+    return VIRTIO_HOST_BYTE_LENGTH;
   }
   throw new RangeError(`Unknown guest region '${id}'.`);
 };
@@ -83,6 +89,8 @@ class Emulator implements EmulatorHandle {
 
   readonly #terminal: TerminalHandle;
 
+  readonly #disk: VirtioDiskHandle | null;
+
   readonly #done: Promise<void>;
 
   readonly #memory: ReturnType<typeof createMemory>;
@@ -90,6 +98,10 @@ class Emulator implements EmulatorHandle {
   #started = false;
 
   #stopped = false;
+
+  #startup: Promise<void> | undefined;
+
+  #shutdown: Promise<void> | undefined;
 
   constructor({
     image,
@@ -99,6 +111,7 @@ class Emulator implements EmulatorHandle {
     timebaseHz,
     deviceTreeAddress,
     resetPc,
+    diskImagePath = null,
   }: EmulatorCreateOptions) {
     for (const id of guestRegions.keys()) {
       if (!GUEST_REGION_IDS.includes(id)) {
@@ -112,7 +125,7 @@ class Emulator implements EmulatorHandle {
       );
     }
 
-    // Pack order: ram → uart → clint → plic → syscon → reservation → irqLevel
+    // Pack order: ram → uart → clint → plic → syscon → virtio → reservation → irqLevel
     const memory = createMemory([
       ...GUEST_REGION_IDS.map((id) => {
         const region = guestRegion(guestRegions, id);
@@ -143,8 +156,19 @@ class Emulator implements EmulatorHandle {
     }
     initializeClint(memory, timebaseHz);
     initializePlic(memory);
+    // Device present starts 0 for every boot: the virtio disk worker host flips it to 1
+    // only once the disk worker is fully ready. Diskless stays 0 (probes read 0).
+    initializeVirtio(memory, false);
     this.#memory = memory;
+    const disk: VirtioDiskHandle | null =
+      diskImagePath === null ? null : createVirtioDisk({ memory, diskImagePath });
     storeImageToRam(memory, image);
+    // Diskless: omit the virtio window from the map the device tree sees so no
+    // `virtio_mmio` node is emitted (the device tree is derived from this map).
+    const guestRegionsForDeviceTree: ReadonlyMap<string, GuestRegionWindow> =
+      diskImagePath === null
+        ? new Map([...guestRegions].filter(([id]) => id !== VIRTIO_REGION_ID))
+        : guestRegions;
     const cpu = createCpu({
       memory,
       resetPc,
@@ -153,7 +177,7 @@ class Emulator implements EmulatorHandle {
           ? null
           : storeDeviceTreeToRam(
               memory,
-              guestRegions,
+              guestRegionsForDeviceTree,
               image.byteLength,
               timebaseHz,
               deviceTreeAddress
@@ -168,50 +192,86 @@ class Emulator implements EmulatorHandle {
     this.#cpu = cpu;
     this.#timer = timer;
     this.#terminal = terminal;
+    this.#disk = disk;
     this.#done = (async () => {
-      try {
-        await Promise.all([cpu, timer, terminal]);
-      } finally {
-        this.stop();
+      const workers: Promise<void>[] = [cpu, timer, terminal];
+      if (disk !== null) {
+        workers.push(disk);
       }
+      try {
+        await Promise.all(workers);
+      } catch (error) {
+        await this.stop().catch(() => {});
+        throw error;
+      }
+      await this.stop();
     })();
+    void this.#done.catch(() => {});
   }
 
-  start = (): void => {
+  start = (): Promise<void> => {
     if (this.#stopped) {
       throw new Error('Already stopped.');
     }
     if (this.#started) {
       throw new Error('Already started.');
     }
-    // Start children; only mark started once all succeed. On failure, stop any
-    // that already started (child stop is idempotent for never-started siblings).
-    try {
-      this.#timer.start();
-      this.#cpu.start();
-      this.#terminal.start();
-    } catch (error) {
-      this.#cpu.stop();
-      this.#timer.stop();
-      void this.#cpu.then(this.#terminal.stop, this.#terminal.stop);
-      this.#stopped = true;
-      throw error;
-    }
     this.#started = true;
-    void this.#watchSyscon();
+    // Keep the raw startup phase separate from its failure cleanup: stop waits only for this phase.
+    this.#startup = this.#start();
+    const ready = this.#startup.catch(async (error: unknown) => {
+      await this.stop().catch(() => {});
+      throw error;
+    });
+    void ready.catch(() => {});
+    return ready;
   };
 
-  stop = (): void => {
-    if (this.#stopped) {
-      return;
+  #start = async (): Promise<void> => {
+    await this.#timer.start();
+    await this.#terminal.start();
+    if (this.#disk !== null) {
+      await this.#disk.start();
     }
-    // Idempotent: safe before start, after partial-start rollback, and after stop.
+    // Disk startup presents the ready device before the hart can fetch.
+    await this.#cpu.start();
+    void this.#watchSyscon().catch(() => {});
+  };
+
+  stop = (): Promise<void> => {
+    if (this.#shutdown !== undefined) {
+      return this.#shutdown;
+    }
     this.#stopped = true;
+    this.#shutdown = this.#stop();
+    return this.#shutdown;
+  };
+
+  #stop = async (): Promise<void> => {
+    let startupFailed = false;
+    let startupError: unknown;
+    if (this.#startup !== undefined) {
+      await this.#startup.catch((error: unknown) => {
+        startupFailed = true;
+        startupError = error;
+      });
+    }
     cancelSysconWatch(this.#memory);
-    this.#cpu.stop();
-    this.#timer.stop();
-    // Stop the producer first so the terminal can drain all remaining output.
-    void this.#cpu.then(this.#terminal.stop, this.#terminal.stop);
+    const producers = await Promise.allSettled([
+      this.#cpu.stop(),
+      this.#timer.stop(),
+      ...(this.#disk === null ? [] : [this.#disk.stop()]),
+    ]);
+    // Join the producer before requesting terminal drain, including on failure.
+    const terminal = await Promise.allSettled([this.#terminal.stop()]);
+    if (startupFailed) {
+      throw startupError;
+    }
+    for (const result of [...producers, ...terminal]) {
+      if (result.status === 'rejected') {
+        throw result.reason;
+      }
+    }
   };
 
   #watchSyscon = async (): Promise<void> => {
@@ -219,7 +279,7 @@ class Emulator implements EmulatorHandle {
     if (this.#stopped || request === 'idle') {
       return;
     }
-    this.stop();
+    await this.stop();
   };
 
   then<TResult1 = void, TResult2 = never>(
@@ -242,5 +302,5 @@ class Emulator implements EmulatorHandle {
 
 const create = (options: EmulatorCreateOptions): EmulatorHandle => new Emulator(options);
 
+// eslint-disable-next-line import/prefer-default-export -- keep the emulator factory named
 export { create };
-export type { EmulatorHandle } from '#emulator/types';

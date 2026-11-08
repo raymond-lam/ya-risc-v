@@ -40,7 +40,7 @@ assuming this summary is enough.
    architectural bytes; `signedNumberToBytes`, `unsignedNumberToBytes`,
    `unsignedBigIntToBytes`, and `low32Bytes` pack values into a caller-allocated buffer.
 2. **Decode returns a curried thunk: `(registers, memory, instructionByteLength) =>
-   Promise<void>`.** Decode closes over instruction args — the thunk itself takes no args
+Promise<void>`.** Decode closes over instruction args — the thunk itself takes no args
    type. The thunk **owns the PC**: call `advanceProgramCounter(registers, instructionByteLength)`
    on the fall-through path, or `setProgramCounter` when jumping/branching (`jal`/`jalr` use
    the length for the link). The run loop never adjusts the PC itself and `await`s every
@@ -53,33 +53,48 @@ assuming this summary is enough.
    `ReadonlyUint8Array` and the write helper also ignores stores to those slots. Read-only
    byte buffers elsewhere use the same structural `ReadonlyUint8Array` type (plain
    `Uint8Array` remains assignable); it is a hint, not a guard — don't mutate such values.
-4. **Guest DRAM is a `SharedArrayBuffer` shared with the worker, accessed with plain byte
-   reads and writes** — the absence of `Atomics` on ordinary guest loads/stores is deliberate.
+4. **Guest DRAM is a `SharedArrayBuffer` shared with workers using canonical aligned
+   8-byte Atomics cells**. All runtime RAM accesses, including AMOs, use the same cell width;
+   subword stores CAS only logical bytes while preserving neighbors. Bulk DMA can be observed
+   partially across cells. RAM bases must be 8-byte aligned; owned tail padding is not mapped.
    `guestAddress` means a guest physical address (architectural bytes); `hostIndex` means a
    `bigint` byte index into `memory.bytes`. Memory is a `regions` Map (`hostIndex` /
    `hostByteLength`, optional `guestAddress` / `guestByteLength`) packed contiguously with
    8-byte-aligned hostIndexes. `loadBytes`/`storeBytes` resolve a guestAddress to
    `{ regionId, offset }` and call the region's load/store pair; guest RAM/UART windows are
-   dense, CLINT/PLIC are sparse MMIO over host slabs. Transfer widths are `number`.
-   Aligned RV64A AMO/LR/SC use `Atomics` on `Int32`/`BigInt64` views; other host-only
+   dense, CLINT/PLIC/virtio are sparse MMIO over host slabs. Transfer widths are `number`.
+   RV64A AMO/LR/SC use the same canonical RAM cells under the reservation lock; host-only
    packing (UART queue meta, CLINT time/wires, PLIC shadows, irq-level / TX-wake words)
    uses `Atomics` on bytes, except `BigUint64Array` for CLINT time and `Int32Array` where
    `waitAsync`/`notify` is needed. Alignment and PMP are **not** checked in `memory.ts` —
    the instruction handlers and the fetch loop enforce them (see below).
 5. **Guest-region IDs and pack order are a cross-file contract.** Region IDs and pack order
    are defined once in `src/emulator/index.ts` (`GUEST_REGION_IDS`: ram → uart → clint →
-   plic → syscon → reservation → irqLevel, host-only regions last). The CLI defaults in
+   plic → syscon → virtio → reservation → irqLevel, host-only regions last). The CLI defaults in
    `src/index.ts` and the test fixture `machineRegionSpecs` in `test/guest-memory.ts` must
    stay in sync with it, and any new guest-mapped device must also appear in the device
    tree (`src/fdt.ts`). Change all of them together.
 6. **Reservation monitor invalidation.** A host-only LR/SC reservation monitor (per-hart
-   slots, line granule) sits in the SAB after PLIC; `storeBytes` and atomic RMWs must
+   slots, line granule) sits in the SAB after virtio; every guest RAM write and atomic RMW must
    invalidate overlapping reservations under the reservation lock (`withSharedLocks` and
-   `invalidateOverlappingReservationsLocked`). Never write guest RAM around this protocol.
+   `invalidateOverlappingReservationsLocked`). That invalidation lives in
+   `storeBytesToRam`/`atomicRamStore`/`atomicRamCompareExchange`, not at the call sites, so
+   hart stores (`memory.storeBytes`), device DMA (`storeBytesToRam` after a `guestRamOffset`
+   gate) and AMOs all funnel through it — a new RAM write path that bypasses those primitives
+   is a reservation-model bug. Virtio worker claims and publishes under reservation and PLIC/control locks; MMIO notify
+   only signals its kick word. Reset/deactivation increment an epoch under the same locks,
+   revoking old guest DMA/publication. File I/O runs outside locks; never reacquire inside them.
 7. **Host components are Promise-like awaitable handles with `start` / `stop`.** `Emulator`,
-   `Cpu`, `Timer`, `Terminal`, and the TUI each implement a `Promise.withResolvers` lifetime
-   with `then`/`catch`/`finally` plus idempotent `stop`. The pattern is: create → start →
-   await; `stop` is safe before or after `start`, and awaiting joins the handle's lifetime.
+   `Cpu`, `Timer`, `Terminal`, `VirtioDisk`, and the TUI each implement a `Promise.withResolvers` lifetime
+   with `then`/`catch`/`finally` plus idempotent `stop`. Worker handles and the emulator
+   return `Promise<void>` from `start` (ready) and `stop` (shutdown joined), separate from
+   their awaitable lifetime. Disk startup opens the image and presents the device before the
+   emulator starts the CPU; shutdown joins the CPU before draining the terminal. The pattern
+   is: create → await start() → await lifetime; `stop` is safe before or after `start`,
+   and awaiting joins the handle's lifetime. Disk stop settles issued I/O and closes cooperatively with a bounded terminate fallback;
+   fallback discards the machine SAB (no safe hot-unplug/reuse or fsync guarantee).
+   A stop requested during startup waits for startup
+   to settle before stopping the workers; readiness is not cancelled.
    New host-side components should follow the same pattern. The CLI (`src/index.ts`) starts
    the TUI then the emulator, awaits the emulator, then stops and awaits the TUI; signal and
    syscon poweroff/reboot paths call `emulator.stop()`.
@@ -90,14 +105,14 @@ assuming this summary is enough.
    outside a directory you import only from the package root. Public subpaths: worker
    entries `#emulator/*/run`. Leaf modules (`#emulator/memory`, `#emulator/ram`,
    `#emulator/reservation`, `#emulator/wake`, `#emulator/irq-level`) are their own public
-   API. Inside `emulator/`, packages import each other via roots only (hart samples CLINT
-   via `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
+   API. Inside `emulator/`, packages import each other via roots only (hart
+   samples CLINT via `#emulator/clint`, PLIC via `#emulator/plic`, irq via `#emulator/irq-level`; never
    `#emulator/timer` / `#emulator/terminal`). `eslint.config.mjs` is the authoritative
    statement of all of this — including the worker-bundle ban on `#emulator/timer`,
    `#emulator/terminal`, and `Worker` from `node:worker_threads` under every device package
    (`src/emulator/cpu/**`, `uart/**`, `clint/**`, `plic/**`, `syscon/**`, `timer/**`,
-   `terminal/**` — worker files never spawn; only the three device hosts `cpu/index.ts`,
-   `timer/index.ts`, and `terminal/index.ts` import `Worker`), which preserves tree-shaking
+   `terminal/**`, `virtio/**` — worker files never spawn; only device hosts `cpu/index.ts`,
+   `timer/index.ts`, `terminal/index.ts`, and `virtio/index.ts` import `Worker`), which preserves tree-shaking
    (`sideEffects: false` — so also avoid top-level side effects in shared modules).
 
 ## Privileged architecture summary
@@ -108,8 +123,8 @@ the enable stacks (`MPIE`/`MIE`/`MPP` or `SPIE`/`SIE`/`SPP`), delegate per `mede
 (`mideleg` for interrupt causes), and set the PC from `xtvec` in **Direct or Vectored
 mode** (exceptions always use BASE). `mret`/`sret` restore the stack and return to `xepc`.
 The run loop samples CLINT (`MSIP`/`MTIP`/`STIP`) and PLIC (`MEIP`/`SEIP`) wires into `mip`
-before each fetch (`sampleDevicePending`), then calls `takeInterruptIfAny`. `wfi` advances
-the PC, retires, and parks on the shared `irqLevel` word (via `Atomics.waitAsync`) until
+before each fetch (`sampleDevicePending`), then calls
+`takeInterruptIfAny`. `wfi` advances the PC, retires, and waits only on the shared `irqLevel` (via `Atomics.waitAsync`) until
 `mip ∧ mie` is nonzero — wake ignores global `mstatus.MIE`/`SIE`; `mstatus.TW` makes
 `wfi` below M illegal; `mstatus.TVM` gates S-mode `satp` access and `sfence.vma`.
 
@@ -230,3 +245,10 @@ streams, real `guestRegions`, and a real `image`. Rules:
   `it(..., { timeout })`, a `Promise.race` deadline around `await emulator`, bounded
   stdout polling; teardown (`emulator.stop()` + awaited settle) in `finally`. Prove
   non-flakiness with repeated runs.
+- **The terminal lifetime settles on the writable flush, not the harness's read
+  side.** The terminal worker ends its writable stream and awaits `finish`; a
+  `PassThrough` harness delivers those bytes to its `data` listener on a later tick.
+  After `await emulator` / `settleEmulator`, wait for the output to reach the host
+  stream (`waitForByteCount`) before asserting exact text. The UART TX/RX rings hold
+  16 bytes (17 slots with one reserved so `head === tail` means empty), matching a
+  16550 FIFO — a guest may fill all 16 without polling `LSR.THRE`.

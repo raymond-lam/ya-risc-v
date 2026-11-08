@@ -15,14 +15,24 @@
  */
 
 import assert from 'node:assert/strict';
-import { PassThrough } from 'node:stream';
-import { describe, it } from 'node:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough, Readable } from 'node:stream';
+import { after, describe, it, type TestContext } from 'node:test';
+import { Worker } from 'node:worker_threads';
+import type { Memory } from '#emulator/memory';
 import { create } from '#emulator';
+import { create as createCpu } from '#emulator/cpu';
+import { create as createTimer } from '#emulator/timer';
+import { create as createTerminal } from '#emulator/terminal';
+import createTestMemory from '#test/guest-memory';
 import { CLINT_GUEST_BYTE_LENGTH, CLINT_REGION_ID } from '#emulator/clint';
 import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID, createVirtioDisk } from '#emulator/virtio';
 import type { ReadonlyUint8Array } from '#types';
 import { unsignedBigIntToBytes } from '#utils/bytes';
 
@@ -48,6 +58,7 @@ const virtRegions = (
     [CLINT_REGION_ID, window(0x0200_0000n, CLINT_GUEST_BYTE_LENGTH)],
     [PLIC_REGION_ID, window(0x0c00_0000n, PLIC_GUEST_BYTE_LENGTH)],
     [SYSCON_REGION_ID, window(0x0010_0000n, SYSCON_GUEST_BYTE_LENGTH)],
+    [VIRTIO_REGION_ID, window(0x1000_1000n, VIRTIO_GUEST_BYTE_LENGTH)],
   ]);
 
 describe('emulator create', () => {
@@ -119,10 +130,80 @@ describe('emulator create', () => {
       deviceTreeAddress: 'end',
       resetPc: guest(0x9000_0000n),
     });
-    emulator.start();
-    emulator.stop();
+    let joined = false;
+    void emulator.then(() => {
+      joined = true;
+    });
+    assert.equal(await emulator.start(), undefined);
+    assert.equal(joined, false, 'startup must not await the emulator lifetime');
+    await emulator.stop();
     await emulator;
+    assert.equal(joined, true);
   });
+
+  it(
+    'stop waits for emulator startup and joins every child started by it',
+    { timeout: 5_000 },
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ya-risc-v-startup-'));
+      const diskImagePath = join(dir, 'disk.img');
+      writeFileSync(diskImagePath, new Uint8Array(512));
+      const emulator = create({
+        image: new Uint8Array([0x73, 0x00, 0x50, 0x10]),
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        guestRegions: virtRegions(4096n),
+        timebaseHz: 10_000_000n,
+        deviceTreeAddress: 'end',
+        resetPc: guest(0x8000_0000n),
+        diskImagePath,
+      });
+      try {
+        const startup = emulator.start();
+        assert.throws(() => emulator.start(), /Already started/);
+        const shutdown = emulator.stop();
+        assert.equal(emulator.stop(), shutdown);
+        assert.throws(() => emulator.start(), /Already stopped/);
+        await startup;
+        await shutdown;
+        await emulator;
+      } finally {
+        await emulator.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it(
+    'joins partial startup rollback and preserves a synchronous startup failure',
+    { timeout: 5_000 },
+    async (context) => {
+      const error = new Error('stream conversion failed');
+      context.mock.method(Readable, 'toWeb', () => {
+        throw error;
+      });
+      const emulator = create({
+        image: new Uint8Array([0x73, 0x00, 0x50, 0x10]),
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        guestRegions: virtRegions(4096n),
+        timebaseHz: 10_000_000n,
+        deviceTreeAddress: 'end',
+        resetPc: guest(0x8000_0000n),
+      });
+      try {
+        const startup = emulator.start();
+        const shutdown = emulator.stop();
+        await assert.rejects(startup, (reason: unknown) => reason === error);
+        await assert.rejects(shutdown, (reason: unknown) => reason === error);
+        await assert.rejects(emulator, (reason: unknown) => reason === error);
+        assert.throws(() => emulator.start(), /Already stopped/);
+        assert.equal(emulator.stop(), shutdown);
+      } finally {
+        await emulator.stop().catch(() => {});
+      }
+    }
+  );
 
   it('stop before start is idempotent and unblocks await', async () => {
     const stdin = new PassThrough();
@@ -137,16 +218,45 @@ describe('emulator create', () => {
       deviceTreeAddress: 'end',
       resetPc: guest(0x8000_0000n),
     });
-    emulator.stop();
-    emulator.stop();
+    await emulator.stop();
+    await emulator.stop();
     await emulator;
     assert.throws(
       () => {
-        emulator.start();
+        void emulator.start();
       },
       { message: 'Already stopped.' }
     );
   });
+
+  it(
+    'worker handles await startup before immediate stop and cannot restart',
+    { timeout: 5_000 },
+    async () => {
+      for (const startFirst of [false, true]) {
+        const memory = createTestMemory(256n);
+        const handles = [
+          createCpu({ memory, resetPc: guest(0x8000_0000n), deviceTreeAddress: null }),
+          createTimer({ memory }),
+          createTerminal({ memory, stdin: new PassThrough(), stdout: new PassThrough() }),
+        ];
+        for (const handle of handles) {
+          const startup = startFirst ? handle.start() : null;
+          if (startFirst) {
+            assert.throws(() => handle.start(), /Already started/);
+          }
+          const shutdown = handle.stop();
+          assert.equal(handle.stop(), shutdown);
+          if (startup !== null) {
+            await startup;
+          }
+          await shutdown;
+          await handle;
+          assert.throws(() => handle.start(), /Already stopped/);
+        }
+      }
+    }
+  );
 
   it('rejects a guest region map that omits a required id', () => {
     const stdin = new PassThrough();
@@ -209,3 +319,176 @@ describe('emulator create', () => {
     );
   });
 });
+
+// Observe real worker construction without replacing its methods or its worker entry.
+const observeStartup = (
+  context: TestContext,
+  createHandle: (memory: Memory) => ReturnType<typeof createCpu>
+) => {
+  const on = context.mock.method(Worker.prototype, 'on');
+  const memory = createTestMemory(256n);
+  const handle = createHandle(memory);
+  const startup = handle.start();
+  const worker = on.mock.calls.findLast((call) => call.arguments[0] === 'message')?.this;
+  assert.ok(worker instanceof Worker);
+  return { worker, handle, startup };
+};
+
+const eventDiskDirectory = mkdtempSync(join(tmpdir(), 'ya-risc-v-event-'));
+const eventDiskPath = join(eventDiskDirectory, 'disk.img');
+writeFileSync(eventDiskPath, new Uint8Array(512));
+after(() => rmSync(eventDiskDirectory, { recursive: true, force: true }));
+
+const workerHosts = [
+  {
+    name: 'CPU',
+    createHandle: (memory: Memory) =>
+      createCpu({ memory, resetPc: guest(0n), deviceTreeAddress: null }),
+  },
+  { name: 'Timer', createHandle: (memory: Memory) => createTimer({ memory }) },
+  {
+    name: 'Terminal',
+    createHandle: (memory: Memory) =>
+      createTerminal({ memory, stdin: new PassThrough(), stdout: new PassThrough() }),
+  },
+  {
+    name: 'Virtio disk',
+    createHandle: (memory: Memory) => createVirtioDisk({ memory, diskImagePath: eventDiskPath }),
+  },
+];
+
+for (const { name, createHandle } of workerHosts) {
+  describe(`${name} host startup event handling`, () => {
+    it(
+      'readiness settles only startup and disarms its timeout/listener',
+      { timeout: 5_000 },
+      async (context) => {
+        context.mock.timers.enable({ apis: ['setTimeout'] });
+        const { worker, handle, startup } = observeStartup(context, createHandle);
+        let joined = false;
+        void handle.then(
+          () => {
+            joined = true;
+          },
+          () => {
+            joined = true;
+          }
+        );
+        try {
+          worker.emit('message', 'ready');
+          await startup;
+          assert.equal(joined, false);
+          assert.equal(worker.listenerCount('message'), 0);
+          context.mock.timers.tick(5_000);
+          await handle.stop();
+          assert.equal(joined, true);
+        } finally {
+          await worker.terminate();
+          await handle.stop().catch(() => {});
+        }
+      }
+    );
+
+    for (const readyFirst of [false, true]) {
+      it(
+        `preserves the actual worker error ${readyFirst ? 'after' : 'before'} readiness until exit`,
+        { timeout: 5_000 },
+        async (context) => {
+          const { worker, handle, startup } = observeStartup(context, createHandle);
+          const error = new Error('actual worker failure');
+          let joined = false;
+          void handle.then(
+            () => {
+              joined = true;
+            },
+            () => {
+              joined = true;
+            }
+          );
+          try {
+            if (readyFirst) {
+              worker.emit('message', 'ready');
+              await startup;
+            }
+            worker.emit('error', error);
+            if (!readyFirst) {
+              await assert.rejects(startup, (reason: unknown) => reason === error);
+            }
+            assert.equal(joined, false, 'error must not settle lifetime before exit');
+            assert.equal(worker.listenerCount('message'), 0);
+            await worker.terminate();
+            await assert.rejects(handle, (reason: unknown) => reason === error);
+            await assert.rejects(handle.stop(), (reason: unknown) => reason === error);
+          } finally {
+            await worker.terminate();
+            await handle.stop().catch(() => {});
+          }
+        }
+      );
+    }
+
+    it(
+      'rejects startup on a premature clean exit without leaving it pending',
+      { timeout: 5_000 },
+      async (context) => {
+        const { worker, handle, startup } = observeStartup(context, createHandle);
+        try {
+          worker.emit('exit', 0);
+          await assert.rejects(startup, /exited before readiness/);
+          await handle;
+          assert.equal(worker.listenerCount('message'), 0);
+        } finally {
+          await worker.terminate();
+          await handle.stop();
+        }
+      }
+    );
+
+    it(
+      'stop waits for startup timeout and preserves its error after terminating',
+      { timeout: 5_000 },
+      async (context) => {
+        context.mock.timers.enable({ apis: ['setTimeout'] });
+        const { worker, handle, startup } = observeStartup(context, createHandle);
+        try {
+          const shutdown = handle.stop();
+          assert.equal(handle.stop(), shutdown);
+          context.mock.timers.tick(5_000);
+          const error = await startup.catch((reason: unknown) => reason);
+          assert.match(String(error), /Timed out/);
+          await assert.rejects(shutdown, (reason: unknown) => reason === error);
+          await assert.rejects(handle, (reason: unknown) => reason === error);
+          assert.equal(worker.listenerCount('message'), 0);
+        } finally {
+          await worker.terminate();
+          await handle.stop().catch(() => {});
+        }
+      }
+    );
+
+    it(
+      'stop does not terminate or drain until pending startup becomes ready',
+      { timeout: 5_000 },
+      async (context) => {
+        const { worker, handle, startup } = observeStartup(context, createHandle);
+        const terminate = context.mock.method(worker, 'terminate');
+        const postMessage = context.mock.method(worker, 'postMessage');
+        try {
+          const shutdown = handle.stop();
+          assert.equal(handle.stop(), shutdown);
+          assert.throws(() => handle.start(), /Already stopped/);
+          assert.equal(terminate.mock.callCount(), 0);
+          assert.equal(postMessage.mock.callCount(), 0);
+          worker.emit('message', 'ready');
+          await startup;
+          await shutdown;
+          assert.ok(terminate.mock.callCount() + postMessage.mock.callCount() > 0);
+          assert.equal(worker.listenerCount('message'), 0);
+        } finally {
+          await worker.terminate();
+          await handle.stop().catch(() => {});
+        }
+      }
+    );
+  });
+}

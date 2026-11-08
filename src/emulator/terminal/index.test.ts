@@ -59,7 +59,7 @@ describe('terminal worker', () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const terminal = create({ memory, stdin, stdout });
-    terminal.start();
+    await terminal.start();
 
     try {
       const received = new Promise<Buffer>((resolve, reject) => {
@@ -98,7 +98,7 @@ describe('terminal worker', () => {
       }
       assert.equal(rx, 0x41);
     } finally {
-      terminal.stop();
+      await terminal.stop();
       await terminal;
     }
   });
@@ -114,7 +114,7 @@ describe('terminal worker', () => {
     for (let index = 0; index < expected.length; index += 1) {
       expected[index] = index & 0xff;
     }
-    terminal.start();
+    await terminal.start();
     try {
       const deadline = Date.now() + 10_000;
       const status = new Uint8Array(1);
@@ -144,7 +144,7 @@ describe('terminal worker', () => {
       }
       assert.deepEqual(Buffer.concat(chunks), expected);
     } finally {
-      terminal.stop();
+      await terminal.stop();
       await terminal;
     }
   });
@@ -157,8 +157,8 @@ describe('terminal worker', () => {
     const terminal = create({ memory, stdin, stdout });
     const failing = createFailingHandle('forced worker failure');
 
-    timer.start();
-    terminal.start();
+    await timer.start();
+    await terminal.start();
     failing.start();
 
     await assert.rejects(
@@ -167,8 +167,8 @@ describe('terminal worker', () => {
           await Promise.all([failing, timer, terminal]);
         } finally {
           failing.stop();
-          timer.stop();
-          terminal.stop();
+          await timer.stop();
+          await terminal.stop();
         }
       },
       { message: 'forced worker failure' }
@@ -187,7 +187,7 @@ describe('terminal worker', () => {
     const received: Buffer[] = [];
     stdout.on('data', (chunk: Buffer) => received.push(chunk));
     const terminal = create({ memory, stdin: new PassThrough(), stdout });
-    terminal.start();
+    await terminal.start();
     try {
       let notified = 0;
       for (let attempt = 0; attempt < 200 && notified === 0; attempt += 1) {
@@ -195,15 +195,16 @@ describe('terminal worker', () => {
         notified = Atomics.notify(lock, 0, 1);
       }
       assert.equal(notified, 1, 'terminal did not park on the gateway');
-      terminal.stop();
+      const shutdown = terminal.stop();
       Atomics.store(lock, 0, 0);
       Atomics.notify(lock, 0);
+      await shutdown;
       await terminal;
       assert.deepEqual(Buffer.concat(received), Buffer.from([0x41]));
     } finally {
       Atomics.store(lock, 0, 0);
       Atomics.notify(lock, 0);
-      terminal.stop();
+      await terminal.stop();
       await terminal;
     }
   });
@@ -217,7 +218,7 @@ describe('terminal worker', () => {
     const received: Buffer[] = [];
     stdout.on('data', (chunk: Buffer) => received.push(chunk));
     const terminal = create({ memory, stdin: new PassThrough(), stdout });
-    terminal.start();
+    await terminal.start();
     try {
       let parked = 0;
       for (let attempt = 0; attempt < 200 && parked === 0; attempt += 1) {
@@ -225,7 +226,7 @@ describe('terminal worker', () => {
         parked = Atomics.notify(lock, 0, 1);
       }
       assert.equal(parked, 1);
-      terminal.stop();
+      await terminal.stop();
       await terminal;
       assert.equal(Atomics.load(lock, 0), 1);
       for (let attempt = 0; attempt < 100 && received.length === 0; attempt += 1) {
@@ -235,7 +236,7 @@ describe('terminal worker', () => {
     } finally {
       Atomics.store(lock, 0, 0);
       Atomics.notify(lock, 0);
-      terminal.stop();
+      await terminal.stop();
       await terminal;
     }
   });
@@ -260,10 +261,10 @@ describe('terminal worker', () => {
       const stdin = new PassThrough();
       const stdout = new PassThrough();
       const terminal = create({ memory, stdin, stdout });
-      terminal.start();
+      await terminal.start();
       // Stop arrives while those bytes are still queued; the worker's stop path
       // drains the ring before its final `end` + `finish` flush.
-      terminal.stop();
+      await terminal.stop();
 
       const received: Buffer[] = [];
       stdout.on('data', (chunk: Buffer | string) => {

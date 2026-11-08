@@ -47,6 +47,7 @@ import {
 } from '#emulator/reservation';
 import { SYSCON_REGION_ID } from '#emulator/syscon';
 import { popUartTransmit, pushUartReceive, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import withSharedLocks from '#emulator/with-shared-locks';
 import { bigIntAsNumber } from '#utils/int';
 import createTestMemory, { machineRegionSpecs } from '#test/guest-memory';
@@ -62,7 +63,7 @@ const readIrqLevel = (memory: Memory): number => {
 };
 
 /** Host offset of the UART TX-wake Int32 (matches `#emulator/uart/region`). */
-const UART_TX_WAKE_HOST_OFFSET = 44;
+const UART_TX_WAKE_HOST_OFFSET = 48;
 
 /** Snapshot the UART TX wake Int32 (test observation only). */
 const readUartTxWake = (memory: Memory): number => {
@@ -341,7 +342,14 @@ describe('memory', () => {
     assert.ok(memory.bytes.buffer instanceof SharedArrayBuffer);
     assert.deepEqual(
       memory.regionsByBaseGuestAddress.map(([, id]) => id),
-      [RAM_REGION_ID, SYSCON_REGION_ID, CLINT_REGION_ID, PLIC_REGION_ID, UART_REGION_ID]
+      [
+        RAM_REGION_ID,
+        SYSCON_REGION_ID,
+        CLINT_REGION_ID,
+        PLIC_REGION_ID,
+        UART_REGION_ID,
+        VIRTIO_REGION_ID,
+      ]
     );
     for (let index = 1; index < memory.regionsByBaseGuestAddress.length; index += 1) {
       const previous = memory.regionsByBaseGuestAddress[index - 1];
@@ -361,7 +369,8 @@ describe('memory', () => {
     assert.ok(ram);
     assert.ok(uart);
     assert.ok(clint);
-    assert.equal(ram.hostByteLength, 1n);
+    assert.equal(ram.hostByteLength, 8n);
+    assert.equal(ram.guestByteLength, 1n);
     assert.equal(uart.hostIndex, 8n);
     assert.equal(clint.hostIndex % 8n, 0n);
     assert.ok(clint.hostIndex > uart.hostIndex);
@@ -663,6 +672,9 @@ describe('uart queues', () => {
       }
       assert.ok(filled < 64);
     }
+
+    // A 16550 FIFO accepts exactly 16 bytes; the 17th store is dropped (THRE clears).
+    assert.equal(filled, 16);
 
     await storeBytes({
       memory,
@@ -1091,6 +1103,59 @@ describe('plic', () => {
   });
 });
 
+describe('virtio window dispatch', () => {
+  const virtioAddress = (offset: bigint): ReadonlyUint8Array =>
+    unsignedBigIntToBytes(new Uint8Array(8), 0x1000_1000n + offset);
+
+  const loadVirtioUint32 = async (memory: Memory, offset: bigint): Promise<number> => {
+    const destination = new Uint8Array(8);
+    await loadBytes({ destination, memory, address: virtioAddress(offset), byteLength: 4 });
+    return (
+      destination[0]! | (destination[1]! << 8) | (destination[2]! << 16) | (destination[3]! << 24)
+    );
+  };
+
+  it('routes 0x10001000 loads/stores/atomics to the virtio handlers', async () => {
+    const memory = createTestMemory(64n);
+    // The four registers xv6's virtio_disk_init probes before userinit, plus
+    // QueueNumMax. They arrive only if guest-address resolution AND the
+    // REGION_LOAD_STORE entry both reach loadBytesFromVirtio.
+    assert.equal(await loadVirtioUint32(memory, 0x000n), 0x7472_6976); // MagicValue "virt"
+    assert.equal(await loadVirtioUint32(memory, 0x004n), 2); // Version (virtio-mmio v2)
+    assert.equal(await loadVirtioUint32(memory, 0x008n), 2); // DeviceID: block device
+    assert.equal(await loadVirtioUint32(memory, 0x00cn), 0x554d_4551); // VendorID "QEMU"
+    assert.equal(await loadVirtioUint32(memory, 0x034n), 8); // QueueNumMax
+    // W-only register: a store through the dispatch must not become readable.
+    await storeBytes({
+      memory,
+      address: virtioAddress(0x030n),
+      source: unsignedBigIntToBytes(new Uint8Array(8), 1n),
+      byteLength: 4,
+    });
+    assert.equal(await loadVirtioUint32(memory, 0x030n), 0); // QueueSel is write-only
+    // Window bounds: first byte mapped, one past the end unmapped.
+    assert.ok(guestAccessIsMapped({ memory, address: virtioAddress(0n), byteLength: 4 }));
+    assert.equal(
+      guestAccessIsMapped({
+        memory,
+        address: virtioAddress(VIRTIO_GUEST_BYTE_LENGTH),
+        byteLength: 1,
+      }),
+      false
+    );
+    // RV64A atomics on virtio MMIO fail — callers trap, like every other device.
+    assert.equal(
+      atomicLoadBytes({
+        destination: new Uint8Array(8),
+        memory,
+        address: virtioAddress(0n),
+        byteLength: 4,
+      }),
+      false
+    );
+  });
+});
+
 describe('atomic load/store/cas', () => {
   it('succeeds on aligned RAM', async () => {
     const memory = createTestMemory(64n);
@@ -1177,6 +1242,38 @@ describe('atomic load/store/cas', () => {
         hartId: 0,
       }),
       false
+    );
+  });
+});
+
+describe('RAM cell alignment', () => {
+  it('padding cannot hide an undersized dense RAM allocation', () => {
+    assert.throws(
+      () =>
+        createMemory([
+          {
+            id: RAM_REGION_ID,
+            hostByteLength: 1n,
+            guestAddress: new Uint8Array(8),
+            guestByteLength: 2n,
+          },
+        ]),
+      /before padding/
+    );
+  });
+
+  it('rejects guest RAM bases that cannot share host cell alignment', () => {
+    assert.throws(
+      () =>
+        createMemory([
+          {
+            id: RAM_REGION_ID,
+            hostByteLength: 16n,
+            guestAddress: unsignedBigIntToBytes(new Uint8Array(8), 1n),
+            guestByteLength: 16n,
+          },
+        ]),
+      /RAM guest base must be 8-byte aligned/
     );
   });
 });

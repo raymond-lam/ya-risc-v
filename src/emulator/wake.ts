@@ -54,11 +54,14 @@ const waitWake = async ({
   bytes,
   index,
   fromLevel,
+  signal,
 }: {
   bytes: Uint8Array;
   index: number;
   fromLevel: number;
+  signal?: AbortSignal;
 }): Promise<void> => {
+  if (signal?.aborted) return;
   const wake = bytesToInt32Array(bytes, index);
   const result = Atomics.waitAsync(wake, 0, fromLevel);
   if (!result.async) {
@@ -72,9 +75,18 @@ const waitWake = async ({
   // handle for the duration of the await so the wake can run; the period is huge
   // so the callback is not meant to fire.
   const keepalive = setInterval(() => {}, WAIT_ASYNC_KEEPALIVE_MS);
+  // Abort wakes the wait even when the level never changes. A caller that races
+  // two waits (see `wfi`) aborts the losing one so its keepalive handle is released
+  // instead of pinning the event loop; a plain notify resolves the pending
+  // waitAsync without touching the observed level.
+  const onAbort = (): void => {
+    Atomics.notify(wake, 0);
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
     await result.value;
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     clearInterval(keepalive);
   }
 };

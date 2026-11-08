@@ -27,10 +27,10 @@ type TimerCreateOptions = {
 type TimerWorkerData = TimerCreateOptions;
 
 type TimerHandle = Promise<void> & {
-  /** Spawn the timebase tick worker. Throws if already started or already stopped. */
-  start: () => void;
-  /** Stop the worker. Throws if not started; idempotent after the first stop. */
-  stop: () => void;
+  /** Spawn the timebase worker and await its first tick. Throws if already started or stopped. */
+  start: () => Promise<void>;
+  /** Stop the worker. Waits for startup, then joins shutdown; safe before start and idempotent. */
+  stop: () => Promise<void>;
 };
 
 export type { TimerCreateOptions, TimerWorkerData, TimerHandle };
