@@ -15,6 +15,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { loadBytes, storeBytes, type Memory } from '#emulator/memory';
 import {
@@ -23,6 +26,9 @@ import {
   loadVirtioShadowU32,
 } from '#emulator/virtio/layout';
 import { initializeVirtio } from '#emulator/virtio';
+import { openDiskImage } from '#emulator/virtio/disk';
+import { closeDiskImage } from '#emulator/virtio/disk';
+import { armVirtioDiskService, clearVirtioDiskCapacity } from '#emulator/virtio/service';
 import type { ReadonlyUint8Array } from '#types';
 import {
   bytesToBigInt,
@@ -33,6 +39,7 @@ import {
 import createTestMemory from '#test/guest-memory';
 
 const VIRTIO_BASE = 0x1000_1000n;
+const TEMP_PREFIX = 'ya-risc-v-virtio-';
 
 const virtioAddress = (offset: bigint): ReadonlyUint8Array =>
   unsignedBigIntToBytes(new Uint8Array(8), VIRTIO_BASE + offset) as ReadonlyUint8Array;
@@ -168,10 +175,50 @@ describe('virtio guest window', () => {
     }
   });
 
-  it('config capacity reads 0 while no disk has published a size', async () => {
+  it('config capacity is floor(fileSize / 512) sectors, 0 until published, 0 when absent', async () => {
     const memory = createTestMemory(64n);
+    assert.equal(await readCapacity(memory), 0n);
+
+    const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+    const path = join(dir, 'disk.img');
+    writeFileSync(path, new Uint8Array(1280));
+    const diskImage = await openDiskImage(path);
+    try {
+      armVirtioDiskService(memory, diskImage.sizeBytes);
+      assert.equal(await readCapacity(memory), 2n);
+      clearVirtioDiskCapacity(memory);
+      assert.equal(await readCapacity(memory), 0n);
+    } finally {
+      await closeDiskImage(diskImage);
+      rmSync(dir, { recursive: true, force: true });
+    }
+
     initializeVirtio(memory, false);
     assert.equal(await readCapacity(memory), 0n);
+  });
+
+  it('config generation reads 0 while absent and ≥1 once capacity publishes (§FIX 3)', async () => {
+    const memory = createTestMemory(64n);
+    assert.equal(await readVirtioRegister(memory, 0x0fcn), 0);
+
+    const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+    const path = join(dir, 'disk.img');
+    writeFileSync(path, new Uint8Array(1280));
+    const diskImage = await openDiskImage(path);
+    try {
+      // Capacity is published by the service, not by opening the file (generation is 0).
+      assert.equal(await readVirtioRegister(memory, 0x0fcn), 0);
+      armVirtioDiskService(memory, diskImage.sizeBytes);
+      const generation = await readVirtioRegister(memory, 0x0fcn);
+      assert.ok(generation >= 1);
+      // Stable across reads while the config is unchanged.
+      assert.equal(await readVirtioRegister(memory, 0x0fcn), generation);
+      assert.equal(await readVirtioRegister(memory, 0x0fcn), generation);
+    } finally {
+      clearVirtioDiskCapacity(memory);
+      await closeDiskImage(diskImage);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('FEATURES_OK is validated against unadvertised feature bits (§FIX 4)', async () => {

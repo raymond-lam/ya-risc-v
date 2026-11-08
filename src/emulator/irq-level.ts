@@ -84,11 +84,12 @@ const setIrqWire = (
  * Sleep until the IRQ-level word differs from `fromLevel`.
  * Callers double-check `mip ∧ mie` around loading `fromLevel` (see `wfi`).
  */
-const waitIrqLevel = (memory: Memory, fromLevel: number): Promise<void> =>
+const waitIrqLevel = (memory: Memory, fromLevel: number, signal?: AbortSignal): Promise<void> =>
   waitWake({
     bytes: memory.bytes,
     index: bigIntAsNumber(irqLevelRegion(memory).hostIndex),
     fromLevel,
+    signal,
   });
 
 export {
