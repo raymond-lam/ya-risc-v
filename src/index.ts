@@ -25,6 +25,7 @@ import { PLIC_GUEST_BYTE_LENGTH, PLIC_REGION_ID } from '#emulator/plic';
 import { RAM_REGION_ID } from '#emulator/ram';
 import { SYSCON_GUEST_BYTE_LENGTH, SYSCON_REGION_ID } from '#emulator/syscon';
 import { UART_GUEST_BYTE_LENGTH, UART_REGION_ID } from '#emulator/uart';
+import { VIRTIO_GUEST_BYTE_LENGTH, VIRTIO_REGION_ID } from '#emulator/virtio';
 import type { DeviceTreeAddress } from '#fdt';
 import { create as createTui } from '#tui';
 import type { ReadonlyUint8Array } from '#types';
@@ -42,6 +43,7 @@ const DEFAULT_UART_BASE_ADDRESS = 0x1000_0000n;
 const DEFAULT_CLINT_BASE_ADDRESS = 0x0200_0000n;
 const DEFAULT_PLIC_BASE_ADDRESS = 0x0c00_0000n;
 const DEFAULT_SYSCON_BASE_ADDRESS = 0x0010_0000n;
+const DEFAULT_VIRTIO_BASE_ADDRESS = 0x1000_1000n;
 const DEFAULT_TIMEBASE_HZ = 10_000_000n;
 const TIMEBASE_HZ_MAX = 0xffff_ffffn;
 
@@ -111,6 +113,7 @@ type CliOptions = {
   clintBase: bigint;
   plicBase: bigint;
   sysconBase: bigint;
+  virtioBase: bigint;
   timebaseFrequency: bigint;
   /** Set by `--no-device-tree`. Commander defaults this to true. */
   deviceTree: boolean;
@@ -138,6 +141,7 @@ const guestRegions = (options: CliOptions): ReadonlyMap<string, GuestWindow> =>
     [CLINT_REGION_ID, guestWindow(options.clintBase, CLINT_GUEST_BYTE_LENGTH)],
     [PLIC_REGION_ID, guestWindow(options.plicBase, PLIC_GUEST_BYTE_LENGTH)],
     [SYSCON_REGION_ID, guestWindow(options.sysconBase, SYSCON_GUEST_BYTE_LENGTH)],
+    [VIRTIO_REGION_ID, guestWindow(options.virtioBase, VIRTIO_GUEST_BYTE_LENGTH)],
   ]);
 
 const guestBaseOption = (
@@ -266,6 +270,15 @@ program
       'syscon base',
       DEFAULT_SYSCON_BASE_ADDRESS,
       '0x00100000'
+    )
+  )
+  .addOption(
+    guestBaseOption(
+      '--virtio-base <address>',
+      'guest virtio MMIO base address (decimal or 0x… hex)',
+      'virtio base',
+      DEFAULT_VIRTIO_BASE_ADDRESS,
+      '0x10001000'
     )
   )
   .addOption(

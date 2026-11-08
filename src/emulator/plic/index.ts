@@ -30,6 +30,7 @@ export {
   PLIC_MAX_SOURCE,
   PLIC_REGION_ID,
   PLIC_SOURCE_UART,
+  PLIC_SOURCE_VIRTIO,
 } from '#emulator/plic/layout';
 export { loadBytesFromPlic, plicMemoryLockIndexes, storeBytesToPlic } from '#emulator/plic/memory';
 export {

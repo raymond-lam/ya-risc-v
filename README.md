@@ -215,6 +215,11 @@ src/
       layout.ts           Guest window + host slab indexing (private)
       memory.ts           Guest loadBytes / storeBytes (private)
       watch.ts            Host request publication and watch (private)
+    virtio/
+      index.ts            Device API: guest window, region sizes, initializeVirtio
+      layout.ts           Geometry, constants, register offsets, indexes, views (private)
+      registers.ts        Shadow state, guest register semantics + side effects (private)
+      memory.ts           Guest loadBytes / storeBytes dispatch (private)
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute
