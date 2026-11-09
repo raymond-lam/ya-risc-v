@@ -101,13 +101,6 @@ const rxDataIndex = (memory: Memory, slot: number): number =>
 const txDataIndex = (memory: Memory, slot: number): number =>
   uartByteIndex(memory, UART_HOST_OFFSET.txData + slot);
 
-const uartRegisterByte = (memory: Memory, registerIndex: number): number =>
-  Atomics.load(memory.bytes, registerHostIndex(memory, registerIndex));
-
-const storeUartRegisterByte = (memory: Memory, registerIndex: number, value: number): void => {
-  Atomics.store(memory.bytes, registerHostIndex(memory, registerIndex), value & 0xff);
-};
-
 export {
   META_RX_HEAD,
   META_RX_TAIL,
@@ -122,8 +115,6 @@ export {
   metaIndex,
   registerHostIndex,
   rxDataIndex,
-  storeUartRegisterByte,
   txDataIndex,
   uartByteIndex,
-  uartRegisterByte,
 };

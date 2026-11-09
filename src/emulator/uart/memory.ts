@@ -22,7 +22,7 @@ import type { ReadonlyUint8Array } from '#types';
 import type { Memory } from '#emulator/memory';
 import { plicGatewayLockIndex } from '#emulator/plic';
 import { loadUartRegister, storeUartRegister } from '#emulator/uart/registers';
-import { UART_GUEST_BYTE_LENGTH } from '#emulator/uart/region';
+import { UART_GUEST_BYTE_LENGTH } from '#emulator/uart/layout';
 
 /** Guest load of `byteLength` UART register bytes starting at `offset`. */
 const loadBytesFromUart = ({

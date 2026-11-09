@@ -25,4 +25,4 @@ export {
   UART_GUEST_BYTE_LENGTH,
   UART_HOST_BYTE_LENGTH,
   UART_REGION_ID,
-} from '#emulator/uart/region';
+} from '#emulator/uart/layout';

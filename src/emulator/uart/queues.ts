@@ -32,7 +32,7 @@ import {
   rxDataIndex,
   txDataIndex,
   uartByteIndex,
-} from '#emulator/uart/region';
+} from '#emulator/uart/layout';
 
 /**
  * Line Status Register (LSR) — read-only flags for RX/TX readiness (and errors
