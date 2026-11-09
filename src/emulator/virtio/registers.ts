@@ -111,7 +111,10 @@ const storeVirtioShadowByte = (
 };
 
 /** Capacity shadows are immutable after startup, including after readiness withdrawal.
- * An in-progress reader may finish with the intact old value; later readers get zero. */
+ * An in-progress reader may finish with the intact old value; later readers get zero.
+ * This READY load is the acquire half of the release/acquire publication in device.ts:
+ * observing READY = 1 makes the plain capacity/generation stores visible, so one snapshot
+ * per guest access stays consistent without atomic payload words. */
 const loadVirtioDiskCapacity = (memory: Memory): bigint => {
   if (Atomics.load(virtioHostInt32(memory, VIRTIO_HOST_DISK_CAPACITY_READY), 0) === 0) {
     return 0n;
