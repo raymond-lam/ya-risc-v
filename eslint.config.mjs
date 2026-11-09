@@ -248,7 +248,8 @@ const eslintConfig = [
     },
   },
   {
-    files: ['src/emulator/virtio/**/*.test.ts'],
+    /** Virtio tests and their shared guest-side fixture may deep-import virtio modules. */
+    files: ['src/emulator/virtio/**/*.test.ts', 'test/virtio-queue.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
