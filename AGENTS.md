@@ -112,6 +112,14 @@ Promise<void>`.** Decode closes over instruction args — the thunk itself takes
    `timer/index.ts`, and `terminal/index.ts` import `Worker`), which preserves tree-shaking
    (`sideEffects: false` — so also avoid top-level side effects in shared modules).
 
+## Device module layout
+
+Use `layout.ts` for geometry, constants, indexes, and views only — not state mutation or
+register semantics. Use `memory.ts` for guest access dispatch, and role-named modules for
+register, queue, timer, gateway, or host-request behavior. Reserve `wires.ts` for actual
+hart IRQ wires, not UART TX or syscon host wakes. Do not force identical device file trees
+or convert dense maps to sparse ones; package roots export only what production code needs.
+
 ## Privileged architecture summary
 
 The hart tracks U/S/M in `registers.privilegeMode` (reset = M). `ecall`, `ebreak`, and

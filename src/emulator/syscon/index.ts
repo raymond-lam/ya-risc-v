@@ -26,8 +26,6 @@ export {
   SYSCON_REBOOT_OFFSET,
   SYSCON_REBOOT_VALUE,
   SYSCON_REGION_ID,
-  cancelSysconWatch,
-  loadBytesFromSyscon,
-  storeBytesToSyscon,
-  watchSyscon,
-} from '#emulator/syscon/region';
+} from '#emulator/syscon/layout';
+export { loadBytesFromSyscon, storeBytesToSyscon } from '#emulator/syscon/memory';
+export { cancelSysconWatch, watchSyscon } from '#emulator/syscon/watch';

@@ -206,10 +206,15 @@ src/
     irq-level.ts          Host-only IRQ level word + setIrqWire / waitIrqLevel
     uart/
       index.ts            Public API: MMIO, RX/TX queues, region sizes
-      region.ts           Guest window + host slab indexing (private)
+      layout.ts           Guest window + host slab indexing (private)
       queues.ts           RX/TX rings + TX-wake wait (private)
       registers.ts        16550 register side effects + PLIC source 10 (private)
       memory.ts           Guest loadBytes / storeBytes (private)
+    syscon/
+      index.ts            Public API: MMIO, region sizes, host request watch
+      layout.ts           Guest window + host slab indexing (private)
+      memory.ts           Guest loadBytes / storeBytes (private)
+      watch.ts            Host request publication and watch (private)
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute

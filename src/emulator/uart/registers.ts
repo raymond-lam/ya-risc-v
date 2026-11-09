@@ -29,12 +29,7 @@ import {
   pushTransmit,
   readLineStatus,
 } from '#emulator/uart/queues';
-import {
-  THRE_IRQ_STICKY_REGISTER,
-  registerHostIndex,
-  storeUartRegisterByte,
-  uartRegisterByte,
-} from '#emulator/uart/region';
+import { THRE_IRQ_STICKY_REGISTER, registerHostIndex } from '#emulator/uart/layout';
 
 /**
  * Interrupt Enable Register (IER) — guest writes which UART conditions may
@@ -69,6 +64,13 @@ const IIR_RDA = 0x04;
  */
 /** Divisor Latch Access Bit (DLAB). */
 const LCR_DLAB = 0x80;
+
+const uartRegisterByte = (memory: Memory, registerIndex: number): number =>
+  Atomics.load(memory.bytes, registerHostIndex(memory, registerIndex));
+
+const storeUartRegisterByte = (memory: Memory, registerIndex: number, value: number): void => {
+  Atomics.store(memory.bytes, registerHostIndex(memory, registerIndex), value & 0xff);
+};
 
 const threIrqSticky = (memory: Memory): boolean =>
   Atomics.load(memory.bytes, registerHostIndex(memory, THRE_IRQ_STICKY_REGISTER)) !== 0;

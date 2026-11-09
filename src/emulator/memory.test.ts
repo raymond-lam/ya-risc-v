@@ -61,7 +61,7 @@ const readIrqLevel = (memory: Memory): number => {
   return Atomics.load(new Int32Array(memory.bytes.buffer, bigIntAsNumber(region.hostIndex), 1), 0);
 };
 
-/** Host offset of the UART TX-wake Int32 (matches `#emulator/uart/region`). */
+/** Host offset of the UART TX-wake Int32 (matches `#emulator/uart/layout`). */
 const UART_TX_WAKE_HOST_OFFSET = 48;
 
 /** Snapshot the UART TX wake Int32 (test observation only). */
