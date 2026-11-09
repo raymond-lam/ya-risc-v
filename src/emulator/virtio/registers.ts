@@ -428,6 +428,7 @@ export {
   loadVirtioDiskCapacity,
   loadVirtioShadowU32,
   storeVirtioDevicePresent,
+  storeVirtioShadowU32,
   loadVirtioRegisterBytes,
   storeVirtioRegisterBytes,
 };
