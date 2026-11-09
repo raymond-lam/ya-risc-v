@@ -216,11 +216,15 @@ src/
       memory.ts           Guest loadBytes / storeBytes (private)
       watch.ts            Host request publication and watch (private)
     virtio/
-      index.ts            Device API: guest window, region sizes, initializeVirtio
+      index.ts            Device API: MMIO, initializeVirtio + disk Worker host
       layout.ts           Geometry, constants, register offsets, indexes, views (private)
       registers.ts        Shadow state, guest register semantics + side effects (private)
       memory.ts           Guest loadBytes / storeBytes dispatch (private)
       queue.ts            Split-queue claims, descriptor plans, completions (private)
+      disk.ts             Positional raw-image file I/O (private)
+      service.ts          Queue service loop + capacity publication (private)
+      run.ts              Disk Worker entry: ready, service requests, stop
+      types.ts            Disk host options, worker payload, handle types (private)
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute
