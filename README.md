@@ -220,6 +220,7 @@ src/
       layout.ts           Geometry, constants, register offsets, indexes, views (private)
       registers.ts        Shadow state, guest register semantics + side effects (private)
       memory.ts           Guest loadBytes / storeBytes dispatch (private)
+      queue.ts            Split-queue claims, descriptor plans, completions (private)
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute
