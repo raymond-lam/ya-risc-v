@@ -18,7 +18,7 @@
  * Guest-side virtio-blk fixtures: MMIO register access, descriptor chains, queue
  * configuration, and the PLIC/reservation helpers. Shared by the queue engine tests
  * (`queue.test.ts`, no device worker) and the device-loop tests
- * (`queue.device.test.ts`, real disk worker).
+ * (`device.test.ts`, real disk worker).
  */
 
 import assert from 'node:assert/strict';

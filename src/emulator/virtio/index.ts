@@ -14,11 +14,62 @@
  * limitations under the License.
  */
 
-/** Virtio-mmio block device public API — guest window and init. */
+/**
+ * Virtio-mmio block device public API — guest window, queue engine, disk device host,
+ * and init.
+ */
 
+import type { Worker as NodeWorker, WorkerOptions } from 'node:worker_threads';
 import type { Memory } from '#emulator/memory';
+import Worker from '#emulator/Worker';
 import { VIRTIO_HOST_BYTE_LENGTH, virtioHostIndex } from '#emulator/virtio/layout';
 import { storeVirtioDevicePresent } from '#emulator/virtio/registers';
+import type {
+  VirtioDiskCreateOptions,
+  VirtioDiskHandle,
+  VirtioDiskWorkerData,
+} from '#emulator/virtio/types';
+
+const STARTUP_TIMEOUT_MS = 5_000;
+
+/* eslint-disable no-restricted-syntax -- Worker host needs a constructor */
+class VirtioDisk extends Worker implements VirtioDiskHandle {
+  #exited = false;
+
+  readonly #options: VirtioDiskCreateOptions;
+
+  constructor(options: VirtioDiskCreateOptions) {
+    super('Virtio disk', new URL(import.meta.resolve('#emulator/virtio/run')), STARTUP_TIMEOUT_MS);
+    this.#options = options;
+  }
+
+  protected createWorkerOptions = (): Pick<WorkerOptions, 'workerData' | 'transferList'> => {
+    const workerData = {
+      memory: this.#options.memory,
+      diskImagePath: this.#options.diskImagePath,
+    } satisfies VirtioDiskWorkerData;
+    return { workerData };
+  };
+
+  protected override onReady = (): void => {
+    storeVirtioDevicePresent(this.#options.memory, true);
+  };
+  protected override onExit = (): void => {
+    this.#exited = true;
+    storeVirtioDevicePresent(this.#options.memory, false);
+  };
+  protected override stopWorker(worker: NodeWorker): void {
+    if (this.#exited) return;
+    const timer = setTimeout(() => super.stopWorker(worker), 1000);
+    timer.unref();
+    worker.once('exit', () => clearTimeout(timer));
+    worker.postMessage('stop');
+  }
+}
+
+/** Create the disk device host: a Promise-like awaitable handle with `start` / `stop`. */
+const createVirtioDisk = (options: VirtioDiskCreateOptions): VirtioDiskHandle =>
+  new VirtioDisk(options);
 
 /**
  * Zero the virtio host slab and set the device-present flag. Runs on the host before any
@@ -45,3 +96,5 @@ export {
   virtioMemoryLockIndexes,
 } from '#emulator/virtio/memory';
 export { initializeVirtio };
+export { createVirtioDisk };
+export type { VirtioDiskHandle } from '#emulator/virtio/types';
