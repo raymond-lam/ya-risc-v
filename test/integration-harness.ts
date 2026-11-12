@@ -168,7 +168,8 @@ const runGuest = async (
     stdin: PassThrough;
     output: GuestOutput;
     emulator: EmulatorHandle;
-  }) => Promise<void>
+  }) => Promise<void>,
+  { diskImagePath = null }: { diskImagePath?: string | null } = {}
 ): Promise<void> => {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
@@ -181,6 +182,7 @@ const runGuest = async (
     resetPc: guestAddress(RAM_BASE),
     timebaseHz: TIMEBASE_HZ,
     deviceTreeAddress: 'end',
+    diskImagePath,
   });
   try {
     await emulator.start();
