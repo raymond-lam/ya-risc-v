@@ -67,6 +67,9 @@ const CAUSE_STORE_AMO_ACCESS_FAULT = 7;
 const CAUSE_ECALL_FROM_U = 8;
 const CAUSE_ECALL_FROM_S = 9;
 const CAUSE_ECALL_FROM_M = 11;
+const CAUSE_INSTRUCTION_PAGE_FAULT = 12;
+const CAUSE_LOAD_PAGE_FAULT = 13;
+const CAUSE_STORE_AMO_PAGE_FAULT = 15;
 
 /** Interrupt codes (mcause/scause with interrupt bit set). Bit index equals cause. */
 const CAUSE_SUPERVISOR_SOFTWARE_INTERRUPT = 1;
@@ -420,6 +423,9 @@ export {
   CAUSE_BREAKPOINT,
   CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
   CAUSE_STORE_AMO_ACCESS_FAULT,
+  CAUSE_INSTRUCTION_PAGE_FAULT,
+  CAUSE_LOAD_PAGE_FAULT,
+  CAUSE_STORE_AMO_PAGE_FAULT,
   enterTrap,
   trapIfInstructionAddressMisaligned,
   isPendingEnabledInterrupt,

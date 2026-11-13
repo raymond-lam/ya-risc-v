@@ -21,6 +21,9 @@ import { isClintSupervisorTimerPending } from '#emulator/clint';
 import {
   CAUSE_BREAKPOINT,
   CAUSE_ILLEGAL_INSTRUCTION,
+  CAUSE_INSTRUCTION_PAGE_FAULT,
+  CAUSE_LOAD_PAGE_FAULT,
+  CAUSE_STORE_AMO_PAGE_FAULT,
   enterTrap,
   instructionWordTrapValue,
   isPendingEnabledInterrupt,
@@ -927,5 +930,174 @@ describe('trap', () => {
     // No S-level state was written.
     assert.equal(bytesToBigInt(snapshotControlAndStatusRegister(undelegated, SCAUSE)), 0n);
     assert.equal(bytesToNumber(snapshotControlAndStatusRegister(undelegated, SEPC)), 0);
+  });
+
+  describe('page-fault causes (12/13/15)', () => {
+    it('page-fault cause constants have correct values', () => {
+      assert.equal(CAUSE_INSTRUCTION_PAGE_FAULT, 12);
+      assert.equal(CAUSE_LOAD_PAGE_FAULT, 13);
+      assert.equal(CAUSE_STORE_AMO_PAGE_FAULT, 15);
+    });
+
+    it('enterTrap delivers instruction page fault (12) to M when medeleg clear', () => {
+      const registers = createRegisters();
+      setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
+      writeControlAndStatusRegister(
+        registers,
+        MTVEC,
+        signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+      );
+
+      const va = unsignedBigIntToBytes(new Uint8Array(8), 0xbad000n);
+      enterTrap(registers, CAUSE_INSTRUCTION_PAGE_FAULT, va);
+
+      assert.deepEqual(
+        snapshotControlAndStatusRegister(registers, MCAUSE),
+        signedNumberToBytes(new Uint8Array(8), CAUSE_INSTRUCTION_PAGE_FAULT, 32)
+      );
+      assert.deepEqual(snapshotControlAndStatusRegister(registers, MTVAL), va);
+      assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
+      assert.deepEqual(
+        readProgramCounter(registers),
+        signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+      );
+    });
+
+    it('enterTrap delegates instruction page fault (12) to S when medeleg bit set', () => {
+      const registers = createRegisters();
+      setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+      setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x1000, 32));
+      writeControlAndStatusRegister(
+        registers,
+        MEDELEG,
+        signedNumberToBytes(new Uint8Array(8), 1 << CAUSE_INSTRUCTION_PAGE_FAULT, 32)
+      );
+      writeControlAndStatusRegister(
+        registers,
+        STVEC,
+        signedNumberToBytes(new Uint8Array(8), 0x3000, 32)
+      );
+
+      const va = unsignedBigIntToBytes(new Uint8Array(8), 0xbad000n);
+      enterTrap(registers, CAUSE_INSTRUCTION_PAGE_FAULT, va);
+
+      assert.deepEqual(
+        snapshotControlAndStatusRegister(registers, SCAUSE),
+        signedNumberToBytes(new Uint8Array(8), CAUSE_INSTRUCTION_PAGE_FAULT, 32)
+      );
+      assert.deepEqual(snapshotControlAndStatusRegister(registers, STVAL), va);
+      assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
+      assert.deepEqual(
+        readProgramCounter(registers),
+        signedNumberToBytes(new Uint8Array(8), 0x3000, 32)
+      );
+    });
+
+    it('enterTrap delegates load page fault (13) to S when medeleg bit set', () => {
+      const registers = createRegisters();
+      setPrivilegeMode(registers, PRIVILEGE_USER);
+      setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x2000, 32));
+      writeControlAndStatusRegister(
+        registers,
+        MEDELEG,
+        signedNumberToBytes(new Uint8Array(8), 1 << CAUSE_LOAD_PAGE_FAULT, 32)
+      );
+      writeControlAndStatusRegister(
+        registers,
+        STVEC,
+        signedNumberToBytes(new Uint8Array(8), 0x3100, 32)
+      );
+
+      const va = unsignedBigIntToBytes(new Uint8Array(8), 0xdeadbeef000n);
+      enterTrap(registers, CAUSE_LOAD_PAGE_FAULT, va);
+
+      assert.deepEqual(
+        snapshotControlAndStatusRegister(registers, SCAUSE),
+        signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_PAGE_FAULT, 32)
+      );
+      assert.deepEqual(snapshotControlAndStatusRegister(registers, STVAL), va);
+      assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
+      assert.deepEqual(
+        readProgramCounter(registers),
+        signedNumberToBytes(new Uint8Array(8), 0x3100, 32)
+      );
+    });
+
+    it('enterTrap delegates store/AMO page fault (15) to S when medeleg bit set', () => {
+      const registers = createRegisters();
+      setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+      setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x3000, 32));
+      writeControlAndStatusRegister(
+        registers,
+        MEDELEG,
+        signedNumberToBytes(new Uint8Array(8), 1 << CAUSE_STORE_AMO_PAGE_FAULT, 32)
+      );
+      writeControlAndStatusRegister(
+        registers,
+        STVEC,
+        signedNumberToBytes(new Uint8Array(8), 0x3200, 32)
+      );
+
+      const va = unsignedBigIntToBytes(new Uint8Array(8), 0xcafe000n);
+      enterTrap(registers, CAUSE_STORE_AMO_PAGE_FAULT, va);
+
+      assert.deepEqual(
+        snapshotControlAndStatusRegister(registers, SCAUSE),
+        signedNumberToBytes(new Uint8Array(8), CAUSE_STORE_AMO_PAGE_FAULT, 32)
+      );
+      assert.deepEqual(snapshotControlAndStatusRegister(registers, STVAL), va);
+      assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_SUPERVISOR);
+      assert.deepEqual(
+        readProgramCounter(registers),
+        signedNumberToBytes(new Uint8Array(8), 0x3200, 32)
+      );
+    });
+
+    it('M-mode entry never delegates page faults even if medeleg bit set', () => {
+      const registers = createRegisters();
+      setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+      writeControlAndStatusRegister(
+        registers,
+        MTVEC,
+        signedNumberToBytes(new Uint8Array(8), 0x4000, 32)
+      );
+      writeControlAndStatusRegister(
+        registers,
+        MEDELEG,
+        signedNumberToBytes(
+          new Uint8Array(8),
+          (1 << CAUSE_LOAD_PAGE_FAULT) | (1 << CAUSE_STORE_AMO_PAGE_FAULT),
+          32
+        )
+      );
+
+      const va = unsignedBigIntToBytes(new Uint8Array(8), 0x123000n);
+      enterTrap(registers, CAUSE_LOAD_PAGE_FAULT, va);
+
+      assert.deepEqual(
+        snapshotControlAndStatusRegister(registers, MCAUSE),
+        signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_PAGE_FAULT, 32)
+      );
+      assert.deepEqual(readPrivilegeMode(registers), PRIVILEGE_MACHINE);
+      // S-level trap CSRs untouched.
+      assert.equal(bytesToNumber(snapshotControlAndStatusRegister(registers, SCAUSE)), 0);
+    });
+
+    it('xtval holds a deep copy of the faulting VA', () => {
+      const registers = createRegisters();
+      writeControlAndStatusRegister(
+        registers,
+        MTVEC,
+        signedNumberToBytes(new Uint8Array(8), 0x5000, 32)
+      );
+
+      const va = unsignedBigIntToBytes(new Uint8Array(8), 0xabcd000n);
+      enterTrap(registers, CAUSE_STORE_AMO_PAGE_FAULT, va);
+
+      const mtval = snapshotControlAndStatusRegister(registers, MTVAL);
+      // Modify original VA buffer; mtval should be unchanged.
+      va[0] = 0xff;
+      assert.equal(mtval[0], 0); // Original VA low byte was 0x00
+    });
   });
 });
