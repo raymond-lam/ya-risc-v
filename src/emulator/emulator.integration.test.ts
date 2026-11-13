@@ -22,7 +22,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -328,6 +328,7 @@ describe('emulator machine behavior (real machine, no mocks)', () => {
 });
 
 const DISK_BYTE_LENGTH = 1024;
+const DISK_WRITE_PAYLOAD = new TextEncoder().encode('virtio-sector-1!');
 const DISK_MAGIC = new Uint8Array([
   0x79,
   0x61,
@@ -364,14 +365,14 @@ const buildDiskBytes = (): Uint8Array => {
   return bytes;
 };
 
-const createTempDisk = (): { diskPath: string; remove: () => void } => {
-  const dir = mkdtempSync(join(tmpdir(), 'ya-risc-v-virtio-'));
+const createTempDisk = async (): Promise<{ diskPath: string; remove: () => Promise<void> }> => {
+  const dir = await mkdtemp(join(tmpdir(), 'ya-risc-v-virtio-'));
   const diskPath = join(dir, 'disk.img');
-  writeFileSync(diskPath, buildDiskBytes());
+  await writeFile(diskPath, buildDiskBytes());
   return {
     diskPath,
-    remove: (): void => {
-      rmSync(dir, { recursive: true, force: true });
+    remove: async (): Promise<void> => {
+      await rm(dir, { recursive: true, force: true });
     },
   };
 };
@@ -680,9 +681,81 @@ const maskedOutImage = new Uint8Array([
   0x65, 0x6e, 0x74, 0x2d, 0x64, 0x69, 0x73, 0x6b, // data at RAM + 312
 ]);
 
+// prettier-ignore
+const writeImage = new Uint8Array([
+    0x97, 0x02, 0x00, 0x00, // auipc x5, 0 — RAM base
+    0x37, 0x1a, 0x00, 0x10, // lui x20, 0x10001 — virtio base
+    0x37, 0x05, 0x00, 0x10, // lui x10, 0x10000 — UART base
+    0x23, 0x28, 0x0a, 0x06, // sw x0, 0x70(x20) — reset
+    0x93, 0x03, 0x10, 0x00, // addi x7, x0, 1 — ACKNOWLEDGE
+    0x23, 0x28, 0x7a, 0x06, // sw x7, 0x70(x20) — Status = ACKNOWLEDGE
+    0x93, 0x03, 0x30, 0x00, // addi x7, x0, 3 — ACKNOWLEDGE | DRIVER
+    0x23, 0x28, 0x7a, 0x06, // sw x7, 0x70(x20) — Status = ACKNOWLEDGE | DRIVER
+    0x93, 0x03, 0xb0, 0x00, // addi x7, x0, 11 — ACKNOWLEDGE | DRIVER | FEATURES_OK
+    0x23, 0x28, 0x7a, 0x06, // sw x7, 0x70(x20) — Status = FEATURES_OK negotiated
+    0x93, 0x03, 0xf0, 0x00, // addi x7, x0, 15 — all four status bits
+    0x23, 0x28, 0x7a, 0x06, // sw x7, 0x70(x20) — Status = DRIVER_OK
+    0x93, 0x03, 0x80, 0x00, // addi x7, x0, 8 — queue depth
+    0x23, 0x2c, 0x7a, 0x02, // sw x7, 0x38(x20) — QueueNum
+    0x13, 0x83, 0x02, 0x0b, // addi x6, x5, 176 — descriptor table address
+    0x23, 0x20, 0x6a, 0x08, // sw x6, 0x80(x20) — QueueDescLow
+    0x13, 0x83, 0x02, 0x0f, // addi x6, x5, 240 — avail ring address
+    0x23, 0x28, 0x6a, 0x08, // sw x6, 0x90(x20) — QueueDriverLow
+    0x13, 0x83, 0x82, 0x10, // addi x6, x5, 264 — used ring address
+    0x23, 0x20, 0x6a, 0x0a, // sw x6, 0xa0(x20) — QueueDeviceLow
+    0x93, 0x03, 0x10, 0x00, // addi x7, x0, 1 — ready
+    0x23, 0x22, 0x7a, 0x04, // sw x7, 0x44(x20) — QueueReady
+    0x0f, 0x00, 0xf0, 0x0f, // fence iorw, iorw — publish avail, request, and payload
+    0x23, 0x28, 0x0a, 0x04, // sw x0, 0x50(x20) — QueueNotify(0): submit OUT for sector 1
+    0x13, 0x83, 0x82, 0x10, // addi x6, x5, 264 — used ring address
+    0x83, 0x13, 0x23, 0x00, // wait: lh x7, 0x2(x6) — used->idx
+    0xe3, 0x8c, 0x03, 0xfe, // beq x7, x0, -8 — spin until the used entry lands
+    0x13, 0x83, 0x02, 0x15, // addi x6, x5, 336 — status byte address
+    0x83, 0x03, 0x03, 0x00, // lb x7, 0(x6) — device status byte (0xff sentinel)
+    0x63, 0x98, 0x03, 0x02, // bne x7, x0, fail — unsuccessful OUT: park without printing
+    0x93, 0x03, 0x60, 0x05, // addi x7, x0, 86 — 86 = 'V'
+    0x23, 0x00, 0x75, 0x00, // sb x7, 0(x10) — print 'V'
+    0x93, 0x03, 0x70, 0x05, // addi x7, x0, 87 — 87 = 'W'
+    0x23, 0x00, 0x75, 0x00, // sb x7, 0(x10) — print 'W'
+    0x83, 0x05, 0x55, 0x00, // drain: lb x11, 0x5(x10) — LSR
+    0x93, 0xf5, 0x05, 0x04, // andi x11, x11, 64 — LSR.TEMT
+    0xe3, 0x8c, 0x05, 0xfe, // beq x11, x0, -8 — spin until the TX queue is drained
+    0x37, 0x06, 0x10, 0x00, // lui x12, 0x100 — syscon base 0x0010_0000
+    0x93, 0x06, 0x10, 0x00, // addi x13, x0, 1 — syscon poweroff value
+    0x23, 0x20, 0xd6, 0x00, // sw x13, 0(x12) — syscon poweroff (the finisher store)
+    0x6f, 0x00, 0x00, 0x00, // jal x0, 0 — yank-safe spin: the power cut is nondeterministic
+    0x63, 0x00, 0x00, 0x00, // fail: beq x0, x0, 0 — spin forever, never print
+    0x00, 0x00, 0x00, 0x00, // alignment to descriptor table
+    0x00, 0x00, 0x00, 0x00, // alignment to descriptor table
+    0xe0, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, // desc0.addr = request header at RAM + 224
+    0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, // desc0: len=16 flags=NEXT next=1
+    0x58, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, // desc1.addr = payload at RAM + 344
+    0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, // desc1: len=16 flags=NEXT next=2 (device reads)
+    0x50, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, // desc2.addr = status at RAM + 336
+    0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, // desc2: len=1 flags=WRITE next=0
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // request header lo: type=1 (OUT), reserved=0
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // request header hi: sector=1 (file offset 512)
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, // avail ring +0: flags=0 idx=1
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // avail ring +8: ring[0]=0
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // avail ring +16
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +0 (device writes at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +8 (device writes at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +16 (device writes at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +24 (device writes at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +32 (device writes at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +40 (device writes at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +48 (device writes at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +56 (device writes at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // used ring +64 (device writes at runtime)
+    0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // status byte sentinel 0xff (device writes 0)
+    0x76, 0x69, 0x72, 0x74, 0x69, 0x6f, 0x2d, 0x73, // payload[0..7] = "virtio-s"
+    0x65, 0x63, 0x74, 0x6f, 0x72, 0x2d, 0x31, 0x21, // payload[8..15] = "ector-1!"
+]);
+
 /** Instruction region lengths: only these bytes are instructions; data rows are not. */
 const POLL_INSTRUCTION_BYTES = 0x130;
 const INTERRUPT_INSTRUCTION_BYTES = 0x1a0;
+const WRITE_INSTRUCTION_BYTES = 0xa8;
 
 describe('virtio integration (real machine, real disk file, no mocks)', () => {
   describe('guest image decode probe', () => {
@@ -705,6 +778,7 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
       probe(pollImage, POLL_INSTRUCTION_BYTES);
       probe(interruptImage, INTERRUPT_INSTRUCTION_BYTES);
       probe(maskedOutImage, 120);
+      probe(writeImage, WRITE_INSTRUCTION_BYTES);
     });
   });
 
@@ -712,7 +786,7 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
     'writes a real file with mie masked and does not resume after WFI',
     { timeout: 20000 },
     async () => {
-      const { diskPath, remove } = createTempDisk();
+      const { diskPath, remove } = await createTempDisk();
       try {
         await runGuest(
           maskedOutImage,
@@ -722,7 +796,7 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
             let completed = false;
             for (let i = 0; i < 1000; i++) {
               if (
-                new Uint8Array(readFileSync(diskPath))
+                new Uint8Array(await readFile(diskPath))
                   .subarray(0, 16)
                   .every((b, j) => b === expected[j])
               ) {
@@ -740,7 +814,28 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
           { diskImagePath: diskPath }
         );
       } finally {
-        remove();
+        await remove();
+      }
+    }
+  );
+
+  it(
+    'writes a distinctive payload to sector 1, checks completion, and powers off',
+    { timeout: 20_000 },
+    async () => {
+      const { diskPath, remove } = await createTempDisk();
+      try {
+        await runGuest(
+          writeImage,
+          ({ output, emulator }) => expectPrintThenPoweroff(output, emulator, 'VW'),
+          { diskImagePath: diskPath }
+        );
+        const expected = buildDiskBytes();
+        assert.equal(DISK_WRITE_PAYLOAD.length, 16);
+        expected.set(DISK_WRITE_PAYLOAD, 512);
+        assert.deepEqual(new Uint8Array(await readFile(diskPath)), expected);
+      } finally {
+        await remove();
       }
     }
   );
@@ -749,7 +844,7 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
     'negotiates virtio-mmio, reads a block through the queue, verifies it, and powers off',
     { timeout: 20_000 },
     async () => {
-      const { diskPath, remove } = createTempDisk();
+      const { diskPath, remove } = await createTempDisk();
       try {
         await runGuest(
           pollImage,
@@ -757,9 +852,9 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
           { diskImagePath: diskPath }
         );
         // The IN request must not have written the disk back.
-        assert.deepEqual(new Uint8Array(readFileSync(diskPath)), buildDiskBytes());
+        assert.deepEqual(new Uint8Array(await readFile(diskPath)), buildDiskBytes());
       } finally {
-        remove();
+        await remove();
       }
     }
   );
@@ -768,16 +863,16 @@ describe('virtio integration (real machine, real disk file, no mocks)', () => {
     'wakes wfi and delivers the completion as a machine external interrupt from PLIC source 1',
     { timeout: 20_000 },
     async () => {
-      const { diskPath, remove } = createTempDisk();
+      const { diskPath, remove } = await createTempDisk();
       try {
         await runGuest(
           interruptImage,
           ({ output, emulator }) => expectPrintThenPoweroff(output, emulator, 'VD'),
           { diskImagePath: diskPath }
         );
-        assert.deepEqual(new Uint8Array(readFileSync(diskPath)), buildDiskBytes());
+        assert.deepEqual(new Uint8Array(await readFile(diskPath)), buildDiskBytes());
       } finally {
-        remove();
+        await remove();
       }
     }
   );
