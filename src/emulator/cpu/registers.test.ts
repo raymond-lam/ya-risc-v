@@ -34,6 +34,9 @@ import {
   commitInstructionRetire,
   createRegisters,
   isControlAndStatusRegisterAccessAllowed,
+  menvcfgAdueIsEnabled,
+  satpRootTablePhysicalAddress,
+  satpTranslationIsActive,
   snapshotControlAndStatusRegister,
   readGeneralPurposeRegister,
   readPrivilegeMode,
@@ -70,8 +73,11 @@ const STIMECMP = 0x14d;
 
 /** menvcfg.STCE (bit 63). */
 const MENVCFG_STCE = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
-/** menvcfg WARL keeps STCE (63); ADUE stays read-only zero (no Svadu). */
-const MENVCFG_WARL_KEEP = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
+/** menvcfg WARL keeps STCE (63) and ADUE (61) only. */
+const MENVCFG_WARL_KEEP = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  (1n << 63n) | (1n << 61n)
+) as ReadonlyUint8Array;
 /** mip/sip.STIP (bit 5). */
 const STIP = 1 << 5;
 /** CLINT `mtime` guest address (test map). */
@@ -197,15 +203,77 @@ describe('registers', () => {
     assert.deepEqual(snapshotControlAndStatusRegister(registers, MISA), MISA_HARDWIRED);
   });
 
-  it('satp round-trips XLEND writes (paging not enabled yet)', () => {
+  it('satp resets to zero', () => {
     const registers = createRegisters();
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, SATP), new Uint8Array(8));
+  });
+
+  it('satp MODE=Bare (0) and MODE=Sv39 (8) round-trip; bad MODE ignored', () => {
+    const registers = createRegisters();
+
+    // MODE=Bare: all-zero SATP is legal.
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, SATP), new Uint8Array(8));
+    // MODE=0, ASID=0x1234, PPN=0x5678 → full 64-bit value has PPN in bits [43:0].
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x0000_1234_5678n)
+    );
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, SATP),
-      signedNumberToBytes(new Uint8Array(8), 0, 32)
+      unsignedBigIntToBytes(new Uint8Array(8), 0x0000_1234_5678n)
     );
-    const value = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_1234n);
-    writeControlAndStatusRegister(registers, SATP, value);
-    assert.deepEqual(snapshotControlAndStatusRegister(registers, SATP), value);
+    assert.ok(!satpTranslationIsActive(registers));
+    // PPN is the full lower 44 bits = 0x12345678, PA = PPN << 12 = 0x12345678000.
+    assert.deepEqual(
+      satpRootTablePhysicalAddress(registers),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x12345678000n)
+    );
+
+    // MODE=Sv39: write with ASID=0 so PPN = full lower 44 bits cleanly.
+    // MODE=8 (byte7=0x80), PPN=0x5678.
+    const sv39 = unsignedBigIntToBytes(new Uint8Array(8), 0x8000_0000_0000_5678n);
+    writeControlAndStatusRegister(registers, SATP, sv39);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, SATP), sv39);
+    assert.ok(satpTranslationIsActive(registers));
+    // PPN = lower 44 bits = 0x5678, PA = PPN << 12 = 0x5678000.
+    assert.deepEqual(
+      satpRootTablePhysicalAddress(registers),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x5678000n)
+    );
+
+    // Bad MODE (9): entire write ignored.
+    const before = snapshotControlAndStatusRegister(registers, SATP);
+    const badValue = unsignedBigIntToBytes(new Uint8Array(8), 0x9000_0000_0000_5678n);
+    const result = writeControlAndStatusRegister(registers, SATP, badValue);
+    assert.deepEqual(result, before);
+    assert.deepEqual(snapshotControlAndStatusRegister(registers, SATP), before);
+
+    // MODE 1–7 all rejected from reset state.
+    writeControlAndStatusRegister(registers, SATP, new Uint8Array(8));
+    for (let mode = 1; mode <= 7; mode++) {
+      const bad = unsignedBigIntToBytes(new Uint8Array(8), BigInt(mode) << 60n);
+      writeControlAndStatusRegister(registers, SATP, bad);
+      assert.deepEqual(
+        snapshotControlAndStatusRegister(registers, SATP),
+        new Uint8Array(8),
+        `MODE=${mode} should be rejected`
+      );
+    }
+  });
+
+  it('satpRootTablePhysicalAddress returns PPN<<12', () => {
+    const registers = createRegisters();
+    // PPN = 0x123, PA = 0x123000.
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x0000_0000_0000_0123n)
+    );
+    const pa = satpRootTablePhysicalAddress(registers);
+    const paExpected = unsignedBigIntToBytes(new Uint8Array(8), 0x123000n);
+    assert.deepEqual(pa, paExpected);
+    assert.equal(pa[0], 0); // low 12 bits zero
   });
 
   it('mscratch and sscratch reset to zero and hold XLEND writes', () => {
@@ -540,18 +608,53 @@ describe('registers', () => {
     );
   });
 
-  it('menvcfg WARL keeps only STCE', () => {
+  it('menvcfg WARL keeps only STCE and ADUE', () => {
     const registers = createRegisters();
     writeControlAndStatusRegister(
       registers,
       MENVCFG,
       unsignedBigIntToBytes(new Uint8Array(8), 0xffff_ffff_ffff_ffffn)
     );
-    assert.deepEqual(snapshotControlAndStatusRegister(registers, MENVCFG), MENVCFG_WARL_KEEP);
+    const result = snapshotControlAndStatusRegister(registers, MENVCFG);
+    assert.deepEqual(result, MENVCFG_WARL_KEEP);
+    assert.equal(result[7], 0xa0); // STCE | ADUE
 
     // menvcfg is an M-mode CSR (address bits [9:8] = 11): S-mode access is illegal.
     setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     assert.equal(isControlAndStatusRegisterAccessAllowed(registers, MENVCFG, false), false);
+  });
+
+  it('menvcfg ADUE is writable and readable', () => {
+    const registers = createRegisters();
+    assert.ok(!menvcfgAdueIsEnabled(registers));
+
+    // Set ADUE (bit 61).
+    writeControlAndStatusRegister(
+      registers,
+      MENVCFG,
+      unsignedBigIntToBytes(new Uint8Array(8), 1n << 61n)
+    );
+    assert.ok(menvcfgAdueIsEnabled(registers));
+
+    // Clear ADUE.
+    writeControlAndStatusRegister(registers, MENVCFG, new Uint8Array(8));
+    assert.ok(!menvcfgAdueIsEnabled(registers));
+  });
+
+  it('menvcfg STCE and ADUE can coexist', () => {
+    const registers = createRegisters();
+    const both = unsignedBigIntToBytes(new Uint8Array(8), (1n << 63n) | (1n << 61n));
+    writeControlAndStatusRegister(registers, MENVCFG, both);
+
+    const menvcfg = snapshotControlAndStatusRegister(registers, MENVCFG);
+    assert.equal(menvcfg[7], 0xa0); // STCE | ADUE
+    assert.ok(menvcfgAdueIsEnabled(registers));
+
+    // Non-writable bits masked out.
+    const mixed = unsignedBigIntToBytes(new Uint8Array(8), (1n << 63n) | (1n << 61n) | 1n);
+    writeControlAndStatusRegister(registers, MENVCFG, mixed);
+    const after = snapshotControlAndStatusRegister(registers, MENVCFG);
+    assert.deepEqual(after, MENVCFG_WARL_KEEP);
   });
 
   it('M-mode stimecmp is legal while menvcfg.STCE is clear', async () => {
