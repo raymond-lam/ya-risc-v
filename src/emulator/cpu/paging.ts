@@ -16,8 +16,14 @@
 
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
-import { copyBytes, bytesToBigInt, unsignedBigIntToBytes, addBytes } from '#utils/bytes';
-import { loadBytes, guestAccessIsMapped } from '#emulator/memory';
+import {
+  copyBytes,
+  bytesToBigInt,
+  unsignedBigIntToBytes,
+  addBytes,
+  compareUnsignedBytes,
+} from '#utils/bytes';
+import { loadBytes, storeBytes, guestAccessIsMapped } from '#emulator/memory';
 import { physicalMemoryAccessDenied } from '#emulator/cpu/pmp';
 import type { ReadonlyUint8Array } from '#types';
 import {
@@ -33,6 +39,10 @@ import {
   satpRootTablePhysicalAddress,
   readPrivilegeMode,
   PRIVILEGE_MACHINE,
+  PRIVILEGE_SUPERVISOR,
+  PRIVILEGE_USER,
+  MSTATUS,
+  menvcfgAdueIsEnabled,
 } from '#emulator/cpu/registers';
 
 // ── Sv39 constants ────────────────────────────────────────────────────────
@@ -130,13 +140,14 @@ type WalkResult =
 /**
  * Determine which page-fault cause to use for the given access type.
  */
-const pageFaultCauseForType = (accessType: 'fetch' | 'load' | 'store'): number => {
+const pageFaultCauseForType = (accessType: 'fetch' | 'load' | 'store' | 'amo'): number => {
   switch (accessType) {
     case 'fetch':
       return CAUSE_INSTRUCTION_PAGE_FAULT;
     case 'load':
       return CAUSE_LOAD_PAGE_FAULT;
     case 'store':
+    case 'amo':
       return CAUSE_STORE_AMO_PAGE_FAULT;
   }
 };
@@ -144,15 +155,225 @@ const pageFaultCauseForType = (accessType: 'fetch' | 'load' | 'store'): number =
 /**
  * Determine which access-fault cause to use for the given original access type.
  */
-const accessFaultCauseForType = (accessType: 'fetch' | 'load' | 'store'): number => {
+const accessFaultCauseForType = (accessType: 'fetch' | 'load' | 'store' | 'amo'): number => {
   switch (accessType) {
     case 'fetch':
       return CAUSE_INSTRUCTION_ACCESS_FAULT;
     case 'load':
       return CAUSE_LOAD_ACCESS_FAULT;
     case 'store':
+    case 'amo':
       return CAUSE_STORE_AMO_ACCESS_FAULT;
   }
+};
+
+// ── B2: Leaf Permission & A/D Bit Logic ────────────────────────────────────
+
+/** MSTATUS bit masks */
+const MSTATUS_BYTE2_SUM = 0x04; // Bit 18
+const MSTATUS_BYTE2_MXR = 0x08; // Bit 19
+
+/**
+ * Determine effective privilege based on current mode and MPRV/MPP.
+ */
+const determineEffectivePrivilege = (registers: Registers): ReadonlyUint8Array => {
+  const currentMode = readPrivilegeMode(registers);
+  const mstatus = registers.controlAndStatus[MSTATUS]!;
+  const mprv = (mstatus[2]! & 0x04) !== 0; // Bit 17
+
+  if (compareUnsignedBytes(currentMode, PRIVILEGE_MACHINE) !== 0 || !mprv) {
+    return currentMode;
+  }
+
+  const mpp = mstatus[1]! & 0x06; // Bits 11:10
+  if (mpp === 0) return PRIVILEGE_MACHINE;
+  if (mpp === 0x04) return PRIVILEGE_SUPERVISOR;
+  return PRIVILEGE_USER;
+};
+
+/**
+ * Check U-bit permission for the given access type and effective privilege.
+ */
+const checkUbitPermission = (
+  pteValue: bigint,
+  effectivePrivilege: ReadonlyUint8Array,
+  accessType: 'fetch' | 'load' | 'store' | 'amo',
+  mstatus: ReadonlyUint8Array
+): void => {
+  if (!pteIsUser(pteValue)) return; // Non-user PTE: no U-bit check needed
+
+  const isUserPriv = compareUnsignedBytes(effectivePrivilege, PRIVILEGE_USER) === 0;
+  if (isUserPriv) return; // U-mode can access U pages
+
+  const isSupervisor = compareUnsignedBytes(effectivePrivilege, PRIVILEGE_SUPERVISOR) === 0;
+  if (!isSupervisor) return; // M-mode can access U pages
+
+  // S-mode: fetch is never SUM-gated
+  if (accessType === 'fetch') {
+    throw createPageFaultError(pageFaultCauseForType(accessType));
+  }
+
+  // Load/store: require SUM
+  const sum = (mstatus[2]! & MSTATUS_BYTE2_SUM) !== 0;
+  if (!sum) {
+    throw createPageFaultError(pageFaultCauseForType(accessType));
+  }
+};
+
+/**
+ * Check fetch permissions (X bit required).
+ */
+const checkFetchPermission = (
+  pteValue: bigint,
+  accessType: 'fetch' | 'load' | 'store' | 'amo'
+): void => {
+  if (!pteIsExecutable(pteValue)) {
+    throw createPageFaultError(pageFaultCauseForType(accessType));
+  }
+};
+
+/**
+ * Check load permissions (R bit, or MXR+X at S-mode).
+ */
+const checkLoadPermission = (
+  pteValue: bigint,
+  effectivePrivilege: ReadonlyUint8Array,
+  accessType: 'fetch' | 'load' | 'store' | 'amo',
+  mstatus: ReadonlyUint8Array
+): void => {
+  if (pteIsReadable(pteValue)) return;
+
+  if (compareUnsignedBytes(effectivePrivilege, PRIVILEGE_SUPERVISOR) === 0) {
+    // MXR allows S-mode to load from X-only pages
+    const mxr = (mstatus[2]! & MSTATUS_BYTE2_MXR) !== 0;
+    if (mxr && pteIsExecutable(pteValue)) return;
+  }
+  throw createPageFaultError(pageFaultCauseForType(accessType));
+};
+
+/**
+ * Check store permissions (W bit required).
+ */
+const checkStorePermission = (
+  pteValue: bigint,
+  accessType: 'fetch' | 'load' | 'store' | 'amo'
+): void => {
+  if (!pteIsWritable(pteValue)) {
+    throw createPageFaultError(pageFaultCauseForType(accessType));
+  }
+};
+
+/**
+ * Check AMO permissions (R+W required).
+ */
+const checkAmoPermission = (
+  pteValue: bigint,
+  accessType: 'fetch' | 'load' | 'store' | 'amo'
+): void => {
+  if (!pteIsReadable(pteValue) || !pteIsWritable(pteValue)) {
+    throw createPageFaultError(pageFaultCauseForType(accessType));
+  }
+};
+
+/**
+ * Check R/W/X permission bits based on access type.
+ */
+const checkAccessPermissions = (
+  pteValue: bigint,
+  effectivePrivilege: ReadonlyUint8Array,
+  accessType: 'fetch' | 'load' | 'store' | 'amo',
+  mstatus: ReadonlyUint8Array
+): void => {
+  switch (accessType) {
+    case 'fetch':
+      checkFetchPermission(pteValue, accessType);
+      break;
+    case 'load':
+      checkLoadPermission(pteValue, effectivePrivilege, accessType, mstatus);
+      break;
+    case 'store':
+      checkStorePermission(pteValue, accessType);
+      break;
+    case 'amo':
+      checkAmoPermission(pteValue, accessType);
+      break;
+  }
+};
+
+/**
+ * Handle A/D bit checking and updates per ADUE setting.
+ */
+const handleAdBits = async (
+  registers: Registers,
+  memory: Memory,
+  pteValue: bigint,
+  ptePa: ReadonlyUint8Array,
+  accessType: 'fetch' | 'load' | 'store' | 'amo'
+): Promise<void> => {
+  const adueEnabled = menvcfgAdueIsEnabled(registers);
+  let needsUpdate = false;
+  let newPteValue = pteValue;
+
+  // A bit: required for all accesses
+  if (!pteIsAccessed(pteValue)) {
+    if (!adueEnabled) {
+      throw createPageFaultError(pageFaultCauseForType(accessType));
+    }
+    newPteValue |= 64n; // Set A bit
+    needsUpdate = true;
+  }
+
+  // D bit: required for store-class accesses
+  if (accessType === 'store' || accessType === 'amo') {
+    if (!pteIsDirty(pteValue)) {
+      if (!adueEnabled) {
+        throw createPageFaultError(pageFaultCauseForType(accessType));
+      }
+      newPteValue |= 128n; // Set D bit
+      needsUpdate = true;
+    }
+  }
+
+  // Write updated PTE if needed
+  if (needsUpdate) {
+    const newPteBytes = unsignedBigIntToBytes(new Uint8Array(8), newPteValue);
+    await storeBytes({ memory, address: ptePa, source: newPteBytes, byteLength: 8 });
+  }
+};
+
+/**
+ * Checks leaf PTE permissions (U-bit, R/W/X) and handles A/D bit updates.
+ * Throws PageFaultError on permission violations or A/D faults.
+ * Updates memory with A/D bits if ADUE is enabled.
+ */
+const checkLeafPermissionsAndHandleAD = async (
+  registers: Registers,
+  memory: Memory,
+  pteValue: bigint,
+  ptePa: ReadonlyUint8Array,
+  level: number,
+  accessType: 'fetch' | 'load' | 'store' | 'amo'
+): Promise<void> => {
+  // 1. Superpage alignment checks
+  if (level === 2 && !isLevel2Aligned(pteValue)) {
+    throw createPageFaultError(pageFaultCauseForType(accessType));
+  }
+  if (level === 1 && !isLevel1Aligned(pteValue)) {
+    throw createPageFaultError(pageFaultCauseForType(accessType));
+  }
+
+  // 2. Determine effective privilege
+  const effectivePrivilege = determineEffectivePrivilege(registers);
+  const mstatus = registers.controlAndStatus[MSTATUS]!;
+
+  // 3. U-bit check
+  checkUbitPermission(pteValue, effectivePrivilege, accessType, mstatus);
+
+  // 4. Permission bits check
+  checkAccessPermissions(pteValue, effectivePrivilege, accessType, mstatus);
+
+  // 5. A/D bit handling
+  await handleAdBits(registers, memory, pteValue, ptePa, accessType);
 };
 
 /**
@@ -195,7 +416,7 @@ const readPte = async (
   memory: Memory,
   ptePa: ReadonlyUint8Array,
   va: ReadonlyUint8Array,
-  originalAccessType: 'fetch' | 'load' | 'store'
+  originalAccessType: 'fetch' | 'load' | 'store' | 'amo'
 ): Promise<bigint> => {
   // 1. PMP check on the 8-byte PTE load at the effective privilege
   if (physicalMemoryAccessDenied({ registers, address: ptePa, byteLength: 8, access: 'load' })) {
@@ -248,7 +469,7 @@ const walkPageTable = async (
   registers: Registers,
   memory: Memory,
   virtualAddress: ReadonlyUint8Array,
-  originalAccessType: 'fetch' | 'load' | 'store'
+  originalAccessType: 'fetch' | 'load' | 'store' | 'amo'
 ): Promise<WalkResult> => {
   const va = bytesToBigInt(virtualAddress);
 
@@ -290,6 +511,15 @@ const walkPageTable = async (
 
     // 5. Leaf or pointer?
     if (isLeafPte(pteValue)) {
+      // 5b. Check permissions and handle A/D updates
+      await checkLeafPermissionsAndHandleAD(
+        registers,
+        memory,
+        pteValue,
+        ptePaBytes,
+        level,
+        originalAccessType
+      );
       return { success: true, leafPtePa: ptePaBytes, leafPteValue: pteValue, level };
     }
 

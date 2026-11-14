@@ -20,7 +20,11 @@ import testMemory from '#test/guest-memory';
 import {
   createRegisters,
   PRIVILEGE_MACHINE,
+  PRIVILEGE_SUPERVISOR,
+  PRIVILEGE_USER,
   SATP,
+  MSTATUS,
+  MENVCFG,
   setPrivilegeMode,
   writeControlAndStatusRegister,
 } from '#emulator/cpu/registers';
@@ -161,6 +165,29 @@ const enableSv39 = (registers: ReturnType<typeof createRegisters>, rootPa: bigin
     (BigInt(SATP_MODE_SV39) << 60n) | (rootPa >> 12n)
   );
   writeControlAndStatusRegister(registers, SATP, satp);
+};
+
+/**
+ * Configure PMP to allow all accesses (NAPOT covering all memory, RWX, unlocked).
+ * This is needed for S-mode/U-mode tests where no PMP restrictions are desired.
+ */
+const setupPmpAllowAll = (registers: ReturnType<typeof createRegisters>): void => {
+  // Config byte: R=1(0x01), W=1(0x02), X=1(0x04), A=NAPOT(0x18), L=0 = 0x1F
+  const rwxNapotCfg = 0x1fn;
+  writeControlAndStatusRegister(
+    registers,
+    0x3a0, // PMPCFG0
+    unsignedBigIntToBytes(new Uint8Array(8), rwxNapotCfg)
+  );
+  // PMPADDR0: NAPOT requires the value after masking to have trailing ones.
+  // (1<<54)-1 = 0x3ffffffffffff, >> 2 = 0xfffffffffffff (52 trailing ones)
+  // Range: [0, 2^55) which covers all practical test memory.
+  const maskedAddr = 0xffffffffffffffffn & ((1n << 54n) - 1n);
+  writeControlAndStatusRegister(
+    registers,
+    0x3b0, // PMPADDR0
+    unsignedBigIntToBytes(new Uint8Array(8), maskedAddr)
+  );
 };
 
 // ── Test suites ───────────────────────────────────────────────────────────
@@ -314,7 +341,7 @@ describe('walk page table — canonical VA', () => {
       registers,
       memory,
       unsignedBigIntToBytes(new Uint8Array(8), 0x1000n),
-      'fetch'
+      'load'
     );
 
     assert(result.success);
@@ -334,9 +361,9 @@ describe('walk page table — canonical VA', () => {
           registers,
           memory,
           unsignedBigIntToBytes(new Uint8Array(8), 0x1_0000_0000n),
-          'fetch'
+          'load'
         ),
-      CAUSE_INSTRUCTION_PAGE_FAULT
+      CAUSE_LOAD_PAGE_FAULT
     );
   });
 });
@@ -351,8 +378,8 @@ describe('walk page table — valid bit checks', () => {
 
     // VA 0x0 (first 1 GiB window), entry[0] = 0x0
     await assertPageFaultError(
-      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'fetch'),
-      CAUSE_INSTRUCTION_PAGE_FAULT
+      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'load'),
+      CAUSE_LOAD_PAGE_FAULT
     );
   });
 
@@ -369,8 +396,8 @@ describe('walk page table — valid bit checks', () => {
 
     // VA with l2Index=0, l1Index=0 → root[0] → L1[0]=0x0
     await assertPageFaultError(
-      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'fetch'),
-      CAUSE_INSTRUCTION_PAGE_FAULT
+      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'load'),
+      CAUSE_LOAD_PAGE_FAULT
     );
   });
 
@@ -387,8 +414,8 @@ describe('walk page table — valid bit checks', () => {
     await storePte(memory, 0x2000n, 0n);
 
     await assertPageFaultError(
-      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'fetch'),
-      CAUSE_INSTRUCTION_PAGE_FAULT
+      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'load'),
+      CAUSE_LOAD_PAGE_FAULT
     );
   });
 });
@@ -406,8 +433,8 @@ describe('walk page table — R=0, W=1 invalid combination', () => {
     await storePte(memory, 0x2000n, badPte);
 
     await assertPageFaultError(
-      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'fetch'),
-      CAUSE_INSTRUCTION_PAGE_FAULT
+      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'load'),
+      CAUSE_LOAD_PAGE_FAULT
     );
   });
 });
@@ -425,8 +452,8 @@ describe('walk page table — pointer at level 0', () => {
     await storePte(memory, 0x2000n, PTE_V | PTE_A);
 
     await assertPageFaultError(
-      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'fetch'),
-      CAUSE_INSTRUCTION_PAGE_FAULT
+      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), 0n), 'load'),
+      CAUSE_LOAD_PAGE_FAULT
     );
   });
 });
@@ -512,7 +539,7 @@ describe('walk page table — successful 4 KiB leaf', () => {
       registers,
       memory,
       unsignedBigIntToBytes(new Uint8Array(8), 0x1000n),
-      'fetch'
+      'load'
     );
 
     assert(result.success);
@@ -539,11 +566,417 @@ describe('walk page table — superpages', () => {
       registers,
       memory,
       unsignedBigIntToBytes(new Uint8Array(8), 0n),
-      'fetch'
+      'load'
     );
 
     assert(result.success);
     assert.equal(result.level, 2);
     assert(pteIsValid(result.leafPteValue));
+  });
+});
+
+// ── B2: Leaf Permission & A/D Bit Tests ────────────────────────────────────
+
+/** Helper: build a minimal Sv39 page table and return leaf PA.
+ * Maps VA 0x2_000_000 (l2Idx=0, l1Idx=16, l0Idx=0) to leaf at PA 0x2000. */
+const buildSv39LeafAtPa0x2000 = async (
+  memory: ReturnType<typeof testMemory>,
+  registers: ReturnType<typeof createRegisters>,
+  leafPte: bigint
+): Promise<void> => {
+  enableSv39(registers, 0n);
+  // Root[0] → L1 at PA 0x1000 (PPN 0x1)
+  await storePte(memory, 0n, makePointerPte(0x1n));
+  // L1[16] → L0 table at PA 0x2000 (0x1000 + 16*8 = 0x1080)
+  await storePte(memory, 0x1080n, makePointerPte(0x2n));
+  // L0[0] leaf at PA 0x2000
+  await storePte(memory, 0x2000n, leafPte);
+};
+
+/** Helper: build L2 leaf at root table (PA 0) for superpage alignment tests. */
+const buildSv39Level2Leaf = async (
+  memory: ReturnType<typeof testMemory>,
+  registers: ReturnType<typeof createRegisters>,
+  leafPte: bigint
+): Promise<void> => {
+  // For L2 leaf, the root table entry ITSELF is the leaf.
+  enableSv39(registers, 0n);
+  await storePte(memory, 0n, leafPte);
+};
+
+/** Helper: build 3-level tree with L1 leaf at specific PA for superpage tests. */
+const buildSv39L1Leaf = async (
+  memory: ReturnType<typeof testMemory>,
+  registers: ReturnType<typeof createRegisters>,
+  l1LeafPte: bigint,
+  l1LeafPa: bigint
+): Promise<void> => {
+  enableSv39(registers, 0n);
+  // Root → L1 at PA 0x1000
+  await storePte(memory, 0n, makePointerPte(0x100n));
+  // L1 table at PA 0x2000
+  await storePte(memory, 0x1000n, makePointerPte(0x200n));
+  // L1 leaf at specified PA
+  await storePte(memory, l1LeafPa, l1LeafPte);
+};
+
+describe('walk page table — U-bit & privilege checks', () => {
+  it('U-mode can access U=1 pages', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    setupPmpAllowAll(registers);
+
+    const leafPte = PTE_V | PTE_R | PTE_A | PTE_U;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    const result = await walkPageTable(
+      registers,
+      memory,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+      'load'
+    );
+    assert(result.success);
+  });
+
+  it('S-mode cannot access U=1 pages without SUM (load)', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setupPmpAllowAll(registers);
+
+    const leafPte = PTE_V | PTE_R | PTE_U;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'load'
+        ),
+      CAUSE_LOAD_PAGE_FAULT
+    );
+  });
+
+  it('S-mode can access U=1 pages with SUM (load)', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setupPmpAllowAll(registers);
+
+    // Set SUM in mstatus (bit 18 → byte 2, bit 2)
+    const mstatus = new Uint8Array([0, 0, 0x04, 0, 0, 0, 0, 0]);
+    writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+    const leafPte = PTE_V | PTE_R | PTE_A | PTE_U;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    const result = await walkPageTable(
+      registers,
+      memory,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+      'load'
+    );
+    assert(result.success);
+  });
+
+  it('S-mode fetch is never SUM-gated (fails on U=1 page)', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setupPmpAllowAll(registers);
+
+    // Set SUM in mstatus
+    const mstatus = new Uint8Array([0, 0, 0x04, 0, 0, 0, 0, 0]);
+    writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+    const leafPte = PTE_V | PTE_X | PTE_U;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'fetch'
+        ),
+      CAUSE_INSTRUCTION_PAGE_FAULT
+    );
+  });
+});
+
+describe('walk page table — MXR checks', () => {
+  it('S-mode load fails on X-only page without MXR', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setupPmpAllowAll(registers);
+
+    const leafPte = PTE_V | PTE_X;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'load'
+        ),
+      CAUSE_LOAD_PAGE_FAULT
+    );
+  });
+
+  it('S-mode load succeeds on X-only page with MXR', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setupPmpAllowAll(registers);
+
+    // Set MXR in mstatus (bit 19 → byte 2, bit 3)
+    const mstatus = new Uint8Array([0, 0, 0x08, 0, 0, 0, 0, 0]);
+    writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+    const leafPte = PTE_V | PTE_X | PTE_A;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    const result = await walkPageTable(
+      registers,
+      memory,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+      'load'
+    );
+    assert(result.success);
+  });
+
+  it('Store fails on X-only page even with MXR', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    setupPmpAllowAll(registers);
+
+    const mstatus = new Uint8Array([0, 0, 0x08, 0, 0, 0, 0, 0]);
+    writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+    const leafPte = PTE_V | PTE_X;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'store'
+        ),
+      CAUSE_STORE_AMO_PAGE_FAULT
+    );
+  });
+});
+
+describe('walk page table — AMO permission checks', () => {
+  it('AMO fails on R=1, W=0 PTE', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const leafPte = PTE_V | PTE_R | PTE_A;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'amo'
+        ),
+      CAUSE_STORE_AMO_PAGE_FAULT
+    );
+  });
+
+  it('AMO fails on R=0, W=1 PTE', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+
+    const leafPte = PTE_V | PTE_W | PTE_A;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'amo'
+        ),
+      CAUSE_STORE_AMO_PAGE_FAULT
+    );
+  });
+
+  it('AMO succeeds on R=1, W=1 PTE', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+
+    const leafPte = PTE_V | PTE_R | PTE_W | PTE_A | PTE_D;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    const result = await walkPageTable(
+      registers,
+      memory,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+      'amo'
+    );
+    assert(result.success);
+  });
+});
+
+describe('walk page table — A/D bit updates', () => {
+  it('A bit is set on load when ADUE is enabled', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    // Enable ADUE (menvcfg byte7 bit 5 = 0x20)
+    const menvcfg = new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0x20]);
+    writeControlAndStatusRegister(registers, MENVCFG, menvcfg);
+
+    const leafPte = PTE_V | PTE_R | PTE_A; // A is already set
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    const result = await walkPageTable(
+      registers,
+      memory,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+      'load'
+    );
+    assert(result.success);
+
+    // Check that PTE at 0x2000 was updated (A bit should remain set, no change needed)
+    const buf = new Uint8Array(8);
+    await loadBytes({
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x2000n),
+      destination: buf,
+      byteLength: 8,
+    });
+    const updatedPte = bytesToBigInt(buf);
+    assert(pteIsAccessed(updatedPte));
+  });
+
+  it('A and D bits are set on store when ADUE is enabled', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+
+    // Enable ADUE
+    const menvcfg = new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0x20]);
+    writeControlAndStatusRegister(registers, MENVCFG, menvcfg);
+
+    // PTE with A=0, D=0
+    const leafPte = PTE_V | PTE_R | PTE_W;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await walkPageTable(
+      registers,
+      memory,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+      'store'
+    );
+
+    // Check PTE was updated
+    const buf = new Uint8Array(8);
+    await loadBytes({
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x2000n),
+      destination: buf,
+      byteLength: 8,
+    });
+    const updatedPte = bytesToBigInt(buf);
+    assert(pteIsAccessed(updatedPte));
+    assert(pteIsDirty(updatedPte));
+  });
+
+  it('Load fails when A=0 and ADUE is disabled', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+
+    // ADUE disabled (default 0)
+    const leafPte = PTE_V | PTE_R; // A=0
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'load'
+        ),
+      CAUSE_LOAD_PAGE_FAULT
+    );
+  });
+
+  it('Store fails when D=0 and ADUE is disabled', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+
+    // ADUE disabled
+    const leafPte = PTE_V | PTE_R | PTE_W; // A=0, D=0
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'store'
+        ),
+      CAUSE_STORE_AMO_PAGE_FAULT
+    );
+  });
+});
+
+describe('walk page table — superpage alignment failures', () => {
+  it('L2 superpage with unaligned PPN causes page fault', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    // L2 leaf with PPN=1 (unaligned)
+    const unalignedLeafPte = PTE_V | PTE_R | (1n << 10n);
+    await buildSv39Level2Leaf(memory, registers, unalignedLeafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'load'
+        ),
+      CAUSE_LOAD_PAGE_FAULT
+    );
+  });
+
+  it('L1 superpage with unaligned PPN causes page fault', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+
+    // L1 superpage: L2 entry[0] is the leaf at PA 0x3000 with unaligned PPN (PPN=1)
+    // PPN=1 → PA = 0x1000, PPN[0]=1 means unaligned for 2 MiB superpage
+    const unalignedLeafPte = PTE_V | PTE_R | PTE_A | (1n << 10n);
+    await storePte(memory, 0n, unalignedLeafPte);
+
+    // VA 0x200000 maps to L2 index 0, L1 index 1
+    const va = 0x200000n; // l2Idx=0, l1Idx=1
+    await assertPageFaultError(
+      () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), va), 'load'),
+      CAUSE_LOAD_PAGE_FAULT
+    );
   });
 });
