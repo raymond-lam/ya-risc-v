@@ -27,6 +27,7 @@ import {
   MENVCFG,
   setPrivilegeMode,
   writeControlAndStatusRegister,
+  setProgramCounter,
 } from '#emulator/cpu/registers';
 import {
   SATP_MODE_SV39,
@@ -47,6 +48,12 @@ import {
   isCanonicalVa,
   createPageFaultError,
   walkPageTable,
+  constructPhysicalAddress,
+  prepareLoadAccess,
+  prepareStoreAccess,
+  prepareAtomicAccess,
+  prepareFetchParcel,
+  fetchTranslatedInstruction,
 } from '#emulator/cpu/paging';
 import { bytesToBigInt, bytesToNumber, copyBytes, unsignedBigIntToBytes } from '#utils/bytes';
 import { loadBytes, storeBytes } from '#emulator/memory';
@@ -57,6 +64,8 @@ import {
   CAUSE_INSTRUCTION_PAGE_FAULT,
   CAUSE_LOAD_PAGE_FAULT,
   CAUSE_STORE_AMO_PAGE_FAULT,
+  CAUSE_LOAD_ADDRESS_MISALIGNED,
+  CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
 } from '#emulator/cpu/trap';
 
 // ── Constants for building PTEs ───────────────────────────────────────────
@@ -978,5 +987,285 @@ describe('walk page table — superpage alignment failures', () => {
       () => walkPageTable(registers, memory, unsignedBigIntToBytes(new Uint8Array(8), va), 'load'),
       CAUSE_LOAD_PAGE_FAULT
     );
+  });
+});
+
+// ── B3: Gate Helpers & Fetch Tests ────────────────────────────────────────
+
+describe('constructPhysicalAddress', () => {
+  it('constructs correct PA for level-0 leaf (4 KiB)', () => {
+    // VA = 0x1234_dead_ef, PPN = 0x5678 → PA = (0x5678 << 12) | (VA & 0xfff)
+    // = 0x5678000 | 0xdef = 0x5678def
+    const va = 0x1234deadefn;
+    const pteValue = PTE_V | PTE_R | PTE_A | PTE_D | (0x5678n << 10n);
+    const pa = constructPhysicalAddress(pteValue, va, 0);
+    const expectedPa = unsignedBigIntToBytes(new Uint8Array(8), 0x5678defn);
+    assert.deepEqual(pa, expectedPa);
+  });
+
+  it('constructs correct PA for level-1 leaf (2 MiB)', () => {
+    // VA = 0x200_0000, PPN = 0x12 → PA = (0x12 << 12) | (VA & 0x1fffff)
+    // = 0x12000 | 0 = 0x12000
+    const va = 0x2000000n;
+    const pteValue = PTE_V | PTE_R | PTE_A | PTE_D | (0x12n << 10n);
+    const pa = constructPhysicalAddress(pteValue, va, 1);
+    const expectedPa = unsignedBigIntToBytes(new Uint8Array(8), 0x12000n);
+    assert.deepEqual(pa, expectedPa);
+  });
+
+  it('constructs correct PA for level-2 leaf (1 GiB)', () => {
+    // VA = 0x0, PPN = 0x1 → PA = (0x1 << 12) | 0 = 0x1000
+    const va = 0n;
+    const pteValue = PTE_V | PTE_R | PTE_A | PTE_D | (0x1n << 10n);
+    const pa = constructPhysicalAddress(pteValue, va, 2);
+    const expectedPa = unsignedBigIntToBytes(new Uint8Array(8), 0x1000n);
+    assert.deepEqual(pa, expectedPa);
+  });
+});
+
+describe('prepareLoadAccess — bare mode parity', () => {
+  it('returns VA as PA in bare mode', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    // Ensure Sv39 is NOT active (bare mode)
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n); // MODE=Bare
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    const result = await prepareLoadAccess({
+      registers,
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0xdeadbeefn),
+      byteLength: 8,
+    });
+
+    assert(!result.denied);
+    const pa = bytesToBigInt(result.physicalAddress);
+    assert.equal(pa, 0xdeadbeefn);
+  });
+});
+
+describe('prepareStoreAccess — bare mode parity', () => {
+  it('returns VA as PA in bare mode', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n);
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    const result = await prepareStoreAccess({
+      registers,
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0xcafebaben),
+      byteLength: 8,
+    });
+
+    assert(!result.denied);
+    const pa = bytesToBigInt(result.physicalAddress);
+    assert.equal(pa, 0xcafebaben);
+  });
+});
+
+describe('prepareAtomicAccess — alignment checks', () => {
+  it('raises address-misaligned fault for LR on unaligned address', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n); // bare mode
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    try {
+      await prepareAtomicAccess({
+        registers,
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x1001n), // unaligned
+        byteLength: 4,
+        atomicAccess: 'lr',
+      });
+      assert.fail('expected misaligned fault');
+    } catch (error) {
+      assert(error instanceof Error);
+      const mcause = bytesToNumber(registers.controlAndStatus[0x342]!);
+      assert.equal(mcause, CAUSE_LOAD_ADDRESS_MISALIGNED);
+    }
+  });
+
+  it('raises address-misaligned fault for SC on unaligned address', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n);
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    try {
+      await prepareAtomicAccess({
+        registers,
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x1001n),
+        byteLength: 4,
+        atomicAccess: 'sc',
+      });
+      assert.fail('expected misaligned fault');
+    } catch (error) {
+      assert(error instanceof Error);
+      const mcause = bytesToNumber(registers.controlAndStatus[0x342]!);
+      assert.equal(mcause, CAUSE_STORE_AMO_ADDRESS_MISALIGNED);
+    }
+  });
+
+  it('raises address-misaligned fault for AMO on unaligned address', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n);
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    try {
+      await prepareAtomicAccess({
+        registers,
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x1001n),
+        byteLength: 8,
+        atomicAccess: 'amo',
+      });
+      assert.fail('expected misaligned fault');
+    } catch (error) {
+      assert(error instanceof Error);
+      const mcause = bytesToNumber(registers.controlAndStatus[0x342]!);
+      assert.equal(mcause, CAUSE_STORE_AMO_ADDRESS_MISALIGNED);
+    }
+  });
+
+  it('succeeds for aligned LR in bare mode', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n);
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    const result = await prepareAtomicAccess({
+      registers,
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x1000n),
+      byteLength: 4,
+      atomicAccess: 'lr',
+    });
+
+    assert(!result.denied);
+  });
+});
+
+describe('prepareFetchParcel — fetch rules', () => {
+  it('returns VA as PA in bare mode', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n);
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    const pc = unsignedBigIntToBytes(new Uint8Array(8), 0x1000n);
+    const result = await prepareFetchParcel({ registers, memory, address: pc, trapValue: pc });
+
+    assert(!result.denied);
+    const pa = bytesToBigInt(result.physicalAddress);
+    assert.equal(pa, 0x1000n);
+  });
+
+  it('M-mode fetch is physical even under Sv39', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+    setupPmpAllowAll(registers);
+
+    // Enable Sv39
+    enableSv39(registers, 0n);
+
+    const pc = unsignedBigIntToBytes(new Uint8Array(8), 0x1000n);
+    const result = await prepareFetchParcel({ registers, memory, address: pc, trapValue: pc });
+
+    assert(!result.denied);
+    const pa = bytesToBigInt(result.physicalAddress);
+    assert.equal(pa, 0x1000n); // Physical, not translated
+  });
+});
+
+describe('fetchTranslatedInstruction — straddle and compressed', () => {
+  it('successfully fetches a compressed instruction (2 bytes)', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n); // bare mode
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    // Set PC to 0x1000
+    const pcBytes = unsignedBigIntToBytes(new Uint8Array(8), 0x1000n);
+    setProgramCounter(registers, pcBytes);
+
+    // Compressed instruction: 0x0001 (c.nop)
+    const instrBytes = new Uint8Array(8);
+    await storeBytes({
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x1000n),
+      source: new Uint8Array([0x01, 0x01]), // c.nop
+      byteLength: 2,
+    });
+
+    const result = await fetchTranslatedInstruction({
+      registers,
+      memory,
+      instructionBytes: instrBytes,
+    });
+
+    assert(result);
+    assert.equal(instrBytes[0], 0x01);
+    assert.equal(instrBytes[1], 0x01);
+  });
+
+  it('successfully fetches a 32-bit instruction spanning two parcels', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), 0n);
+    writeControlAndStatusRegister(registers, SATP, satp);
+
+    const pcBytes = unsignedBigIntToBytes(new Uint8Array(8), 0x1000n);
+    setProgramCounter(registers, pcBytes);
+
+    // 32-bit instruction: 0x00000093 (addi x1, x0, 0)
+    // Split across two 2-byte parcels
+    await storeBytes({
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x1000n),
+      source: new Uint8Array([0x93, 0x00]),
+      byteLength: 2,
+    });
+    await storeBytes({
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x1002n),
+      source: new Uint8Array([0x00, 0x00]),
+      byteLength: 2,
+    });
+
+    const instrBytes = new Uint8Array(8);
+    const result = await fetchTranslatedInstruction({
+      registers,
+      memory,
+      instructionBytes: instrBytes,
+    });
+
+    assert(result);
+    assert.equal(instrBytes[0], 0x93);
+    assert.equal(instrBytes[1], 0x00);
+    assert.equal(instrBytes[2], 0x00);
+    assert.equal(instrBytes[3], 0x00);
   });
 });
