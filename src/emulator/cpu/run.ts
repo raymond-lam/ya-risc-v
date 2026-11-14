@@ -24,8 +24,10 @@ import {
   commitInstructionRetire,
   createRegisters,
   readProgramCounter,
+  satpTranslationIsActive,
   setProgramCounter,
 } from '#emulator/cpu/registers';
+import { fetchTranslatedInstruction } from '#emulator/cpu/paging';
 import sampleDevicePending from '#emulator/cpu/sample-device-pending';
 import {
   CAUSE_INSTRUCTION_ACCESS_FAULT,
@@ -51,7 +53,7 @@ const trapIfFetchUnmapped = (
   return true;
 };
 
-/** Fetch and validate the instruction at the PC. */
+/** Fetch and validate the instruction at the PC (bare mode path). */
 const fetchInstruction = async (
   registers: Registers,
   memory: Memory,
@@ -67,6 +69,33 @@ const fetchInstruction = async (
     return false;
   }
   return !trapIfFetchUnmapped(registers, memory, pc, length);
+};
+
+/**
+ * Execute one fetch cycle: select Sv39 or bare path based on `satp` mode.
+ * Returns true if fetch succeeded (trap is already handled by called helpers).
+ */
+const fetchInstructionCycle = async (
+  registers: Registers,
+  memory: Memory,
+  instructionBytes: Uint8Array
+): Promise<void> => {
+  if (satpTranslationIsActive(registers)) {
+    // Sv39 path: translated fetch (page fault has priority over misaligned).
+    if (!(await fetchTranslatedInstruction({ registers, memory, instructionBytes }))) {
+      return;
+    }
+    trapIfInstructionAddressMisaligned(registers);
+    return;
+  }
+  // Bare path: misaligned check before fetch, then PMP/mapped — byte-identical
+  // to the pre-paging behavior.
+  if (trapIfInstructionAddressMisaligned(registers)) {
+    return;
+  }
+  if (!(await fetchInstruction(registers, memory, instructionBytes))) {
+    return;
+  }
 };
 
 const main = async (): Promise<void> => {
@@ -85,25 +114,21 @@ const main = async (): Promise<void> => {
   // are yank-safe (after the finisher store they spin or `wfi` and do nothing
   // observable).
   for (;;) {
-    // NOTE: IRQ wire sampling runs every instruction for interrupt latency correctness.
-    // Coalescing samples across iterations would be a micro-opt with observable timing
-    // changes; leave per-instruction sampling until a proven bottleneck exists.
+    // IRQ wire sampling runs every instruction for interrupt latency correctness.
     sampleDevicePending(registers, memory);
     if (takeInterruptIfAny(registers)) {
       continue;
     }
-    if (trapIfInstructionAddressMisaligned(registers)) {
-      continue;
-    }
-    if (!(await fetchInstruction(registers, memory, instructionBytes))) {
-      continue;
-    }
+    await fetchInstructionCycle(registers, memory, instructionBytes);
     beginInstructionRetire(registers);
     const [execute, instructionByteLength] = decode(instructionBytes);
     await execute(registers, memory, instructionByteLength);
     commitInstructionRetire(registers);
   }
 };
+
+// Exported for unit testing; not part of the public CPU API.
+export { fetchInstruction, fetchInstructionCycle };
 
 if (parentPort !== null) {
   void main();
