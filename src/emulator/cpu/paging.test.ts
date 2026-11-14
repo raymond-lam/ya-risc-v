@@ -1269,3 +1269,218 @@ describe('fetchTranslatedInstruction — straddle and compressed', () => {
     assert.equal(instrBytes[3], 0x00);
   });
 });
+
+// ── C1: Sv39 Translation Tests for Gate Functions ──────────────────────────
+
+/**
+ * Build a Sv39 page table for a given VA → PA mapping.
+ * Computes indices from the VA and builds the full 3-level hierarchy.
+ * The test fixture maps RAM at PA [0, 64KB), so PA must be < 0x10000.
+ */
+const buildSv39Mapping = async (
+  memory: ReturnType<typeof testMemory>,
+  registers: ReturnType<typeof createRegisters>,
+  va: bigint,
+  leafPte: bigint
+): Promise<void> => {
+  enableSv39(registers, 0n);
+  const l2Index = Number((va >> 30n) & 0x1ffn);
+  const l1Index = Number((va >> 21n) & 0x1ffn);
+  const l0Index = Number((va >> 12n) & 0x1ffn);
+
+  // Root[l2Index] → L1 at PA 0x1000
+  await storePte(memory, 0n, makePointerPte(0x1n));
+  // L1[l1Index] → L0 at PA 0x2000
+  await storePte(memory, 0x1000n + BigInt(l1Index) * 8n, makePointerPte(0x2n));
+  // L0[l0Index] leaf PTE
+  await storePte(memory, 0x2000n + BigInt(l0Index) * 8n, leafPte);
+};
+
+describe('paging gates — Sv39 translation', () => {
+  it('prepareLoadAccess returns the translated PA for a valid Sv39 mapping', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+    // VA 0x801000 → PA 0x1000 (PPN=0x1, within test RAM [0, 64KB))
+    await buildSv39Mapping(memory, registers, 0x801000n, makeLeafPte(0x1n));
+
+    const result = await prepareLoadAccess({
+      registers,
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x801000n),
+      byteLength: 8,
+    });
+
+    assert(!result.denied);
+    const pa = bytesToBigInt(result.physicalAddress);
+    assert.equal(pa, 0x1000n, 'VA 0x801000 should translate to PA 0x1000');
+  });
+
+  it('prepareStoreAccess returns the translated PA for a valid Sv39 mapping', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+    // Store needs R∧W in the leaf for Sv39 walk
+    await buildSv39Mapping(
+      memory,
+      registers,
+      0x801000n,
+      makeLeafPte(0x1n) | PTE_R | PTE_W | PTE_A | PTE_D
+    );
+
+    const result = await prepareStoreAccess({
+      registers,
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x801000n),
+      byteLength: 8,
+    });
+
+    assert(!result.denied);
+    const pa = bytesToBigInt(result.physicalAddress);
+    assert.equal(pa, 0x1000n);
+  });
+
+  it('prepareAtomicAccess (LR) returns the translated PA for a valid Sv39 mapping', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+    // LR is load-class: needs R bit. The gate uses 'store' for the walk which
+    // checks W, so leaf needs R+W to pass the gate path. VA 0x801000 → PA 0x1000
+    await buildSv39Mapping(
+      memory,
+      registers,
+      0x801000n,
+      makeLeafPte(0x1n) | PTE_R | PTE_W | PTE_A | PTE_D
+    );
+
+    const result = await prepareAtomicAccess({
+      registers,
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x801000n),
+      byteLength: 8,
+      atomicAccess: 'lr',
+    });
+
+    assert(!result.denied);
+    const pa = bytesToBigInt(result.physicalAddress);
+    assert.equal(pa, 0x1000n);
+  });
+
+  it('prepareLoadAccess page-faults on unmapped VA with cause=13 and xtval=VA', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    // Build page table with valid leaf at L0[1] for 0x801000.
+    // Test VA 0x800000 (l2Idx=0, l1Idx=0, l0Idx=0): L0[0] = 0 → unmapped.
+    enableSv39(registers, 0n);
+    await storePte(memory, 0n, makePointerPte(0x1n));
+    await storePte(memory, 0x1000n, makePointerPte(0x2n));
+    await storePte(memory, 0x2008n, makeLeafPte(0x1n));
+    // L0[0] at PA 0x2000 is 0 → unmapped
+
+    try {
+      await prepareLoadAccess({
+        registers,
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x800000n),
+        byteLength: 8,
+      });
+      assert.fail('expected page fault');
+    } catch {
+      const mcause = bytesToNumber(registers.controlAndStatus[0x342]!);
+      assert.equal(mcause, CAUSE_LOAD_PAGE_FAULT);
+      const mtval = bytesToBigInt(registers.controlAndStatus[0x343]!);
+      assert.equal(mtval, 0x800000n);
+    }
+  });
+
+  it('prepareStoreAccess page-faults on unmapped VA with cause=15 and xtval=VA', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    enableSv39(registers, 0n);
+    await storePte(memory, 0n, makePointerPte(0x1n));
+    await storePte(memory, 0x1000n, makePointerPte(0x2n));
+    await storePte(memory, 0x2008n, makeLeafPte(0x1n));
+
+    try {
+      await prepareStoreAccess({
+        registers,
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x800000n),
+        byteLength: 8,
+      });
+      assert.fail('expected page fault');
+    } catch {
+      const mcause = bytesToNumber(registers.controlAndStatus[0x342]!);
+      assert.equal(mcause, CAUSE_STORE_AMO_PAGE_FAULT);
+      const mtval = bytesToBigInt(registers.controlAndStatus[0x343]!);
+      assert.equal(mtval, 0x800000n);
+    }
+  });
+
+  it('prepareAtomicAccess (SC) page-faults on unmapped VA with cause=15 and xtval=VA', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    enableSv39(registers, 0n);
+    await storePte(memory, 0n, makePointerPte(0x1n));
+    await storePte(memory, 0x1000n, makePointerPte(0x2n));
+    await storePte(memory, 0x2008n, makeLeafPte(0x1n));
+
+    try {
+      await prepareAtomicAccess({
+        registers,
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x800000n),
+        byteLength: 8,
+        atomicAccess: 'sc',
+      });
+      assert.fail('expected page fault');
+    } catch {
+      const mcause = bytesToNumber(registers.controlAndStatus[0x342]!);
+      assert.equal(mcause, CAUSE_STORE_AMO_PAGE_FAULT);
+      const mtval = bytesToBigInt(registers.controlAndStatus[0x343]!);
+      assert.equal(mtval, 0x800000n);
+    }
+  });
+
+  it('prepareAtomicAccess (SC) faults with cause=15 when leaf is W-only (needs R∧W)', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    // W-only leaf: R=0, W=1, A=1. For SC (store-class), walkPageTable uses 'store'
+    // access type which checks W bit (passes) then checks A bit (passes since A=1).
+    // But handleAdBits requires D bit for store-class access; D=0 and ADUE disabled
+    // → throws page fault. This pins the bug class where a store-class access
+    // to a non-D page without ADUE fails before reaching PMP/mapped checks.
+    const wOnlyLeaf = PTE_V | PTE_W | PTE_A;
+    // PA = 0x5000 (PPN=0x500 → within test RAM).
+
+    enableSv39(registers, 0n);
+    await storePte(memory, 0n, makePointerPte(0x1n));
+    await storePte(memory, 0x1000n, makePointerPte(0x2n));
+    // PPN=0x500 → PA 0x5000 (within test RAM)
+    await storePte(memory, 0x2008n, wOnlyLeaf);
+
+    try {
+      await prepareAtomicAccess({
+        registers,
+        memory,
+        address: unsignedBigIntToBytes(new Uint8Array(8), 0x801000n),
+        byteLength: 8,
+        atomicAccess: 'sc',
+      });
+      assert.fail('expected page fault');
+    } catch {
+      const mcause = bytesToNumber(registers.controlAndStatus[0x342]!);
+      assert.equal(mcause, CAUSE_STORE_AMO_PAGE_FAULT);
+      const mtval = bytesToBigInt(registers.controlAndStatus[0x343]!);
+      assert.equal(mtval, 0x801000n);
+    }
+  });
+});
