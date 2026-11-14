@@ -46,6 +46,7 @@ import {
   MTVEC,
   MCAUSE,
   MTVAL,
+  SATP,
 } from '#emulator/cpu/registers';
 import {
   CAUSE_LOAD_ACCESS_FAULT,
@@ -56,6 +57,7 @@ import {
   CAUSE_STORE_AMO_PAGE_FAULT,
 } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
+import { storeBytes } from '#emulator/memory';
 
 describe('amo', () => {
   it('lr.d / sc.d succeed and advance pc', async () => {
@@ -677,6 +679,79 @@ describe('amo', () => {
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MTVAL),
       unsignedBigIntToBytes(new Uint8Array(8), 0x100n)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x6000);
+  });
+
+  it('misaligned lr.w under active Sv39 traps with page fault, not misaligned', async () => {
+    const guest = testMemory(0x10000n);
+    const registers = createRegisters();
+    const PTE_V = 1n;
+    const PTE_A = 64n;
+    // Build minimal Sv39: root @ PA 0 → L1 @ PA 0x1000 → L0 @ PA 0x2000.
+    // Map VA 0x2_000_000n → PA 0x2_000_000n (aligned 4 KiB page).
+    // The page table entries are stored in RAM so the walk can read them.
+    const storePte = async (ptePa: bigint, pteValue: bigint): Promise<void> => {
+      await storeBytes({
+        memory: guest,
+        address: unsignedBigIntToBytes(new Uint8Array(8), ptePa),
+        source: unsignedBigIntToBytes(new Uint8Array(8), pteValue),
+        byteLength: 8,
+      });
+    };
+    // Level 2 index for 0x2_000_000n: (0x2_000_000n >> 30n) & 0x1ffn = 0
+    // Level 1 index: (0x2_000_000n >> 21n) & 0x1ffn = 0
+    // Level 0 index: (0x2_000_000n >> 12n) & 0x1ffn = 512 (but we use PA 0x2000, so index = 512)
+    const l2Index = Number((0x2_000_000n >> 30n) & 0x1ffn);
+    const l1Index = Number((0x2_000_000n >> 21n) & 0x1ffn);
+    const l0Index = Number((0x2_000_000n >> 12n) & 0x1ffn);
+    // Root → L1 at PA 0x1000
+    await storePte(0n, PTE_V | (0x1000n >> 10n) | PTE_A);
+    // L1 → L0 at PA 0x2000
+    await storePte(0x1000n + BigInt(l1Index) * 8n, PTE_V | (0x2000n >> 10n) | PTE_A);
+    // L0 → leaf maps VA 0x2_000_000n → PA 0x2_000_000n
+    await storePte(0x2000n + BigInt(l0Index) * 8n, PTE_V | (0x2_000_000n >> 10n) | PTE_A);
+    // Enable Sv39 with root at PA 0
+    const satp = unsignedBigIntToBytes(new Uint8Array(8), (8n << 60n) | (0n >> 12n));
+    writeControlAndStatusRegister(registers, SATP, satp);
+    // Use misaligned VA 0x2_000_004n (4-byte offset from page-aligned VA).
+    // This VA is in the mapped page but the offset makes it misaligned for lr.w.
+    // After the rework: translation succeeds (page fault not triggered),
+    // then alignment check on VA fails → but because we test the case where
+    // the VA is ALSO unmapped, we get page fault priority.
+    // Use an entirely unmapped VA that is misaligned: 0x3_000_004n.
+    // The walk finds a zero PTE at root level → V=0 → page fault (cause 13).
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      unsignedBigIntToBytes(new Uint8Array(8), 0x3_000_004n)
+    );
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0xdead, 32));
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x6000, 32)
+    );
+
+    await lrW(
+      registers,
+      guest,
+      {
+        destinationRegister: 3,
+        sourceRegister1: 1,
+        sourceRegister2: 0,
+      },
+      FOUR_BYTES
+    );
+
+    // Page fault (cause 13) takes priority over address-misaligned (cause 4)
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), CAUSE_LOAD_PAGE_FAULT, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x3_000_004n)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x6000);
   });

@@ -785,12 +785,37 @@ const walkAndCheckAtomicPA = async (
 };
 
 /**
+ * Check natural alignment for an atomic access address.
+ * Traps with the appropriate misaligned cause if the VA is misaligned.
+ */
+const checkAtomicAlignment = (
+  registers: Registers,
+  address: ReadonlyUint8Array,
+  byteLength: number,
+  atomicAccess: AtomicAccess
+): boolean => {
+  const va = bytesToBigInt(address);
+  if (va % BigInt(byteLength) !== 0n) {
+    const cause =
+      atomicAccess === 'lr' ? CAUSE_LOAD_ADDRESS_MISALIGNED : CAUSE_STORE_AMO_ADDRESS_MISALIGNED;
+    enterTrap(registers, cause, copyBytes(new Uint8Array(8), address));
+    return false;
+  }
+  return true;
+};
+
+/**
  * Prepare an atomic access (LR/SC/AMO): translate, check permissions, update A/D,
  * check alignment, PMP/mapped on final PA, and return the physical address.
  *
- * Alignment check happens BEFORE translation (spec priority).
+ * Bare mode: natural-VA alignment → return VA as PA.
+ * Translated access (Sv39, effective privilege < M): walkPageTable → superpage
+ * alignment on leaf → construct PA → PMP → mapped → natural-VA alignment.
+ * In translated mode page fault has priority over address-misaligned per the
+ * spec exception priority table.
+ *
  * LR: treats as load-class (needs R, sets A only).
- * SC/AMO: treats as store-class (needs R+W, sets A+D).
+ * SC/AMO: treat as store-class (needs R+W, sets A+D).
  *
  * On failure: calls `enterTrap` and returns `{ denied: true }`.
  * On success: returns `{ denied: false, physicalAddress }`.
@@ -803,18 +828,12 @@ export const prepareAtomicAccess = async (params: {
   atomicAccess: AtomicAccess;
 }): Promise<PreparedAccess> => {
   const { registers, memory, address, byteLength, atomicAccess } = params;
-  const va = bytesToBigInt(address);
 
-  // Alignment check (before translation) — LR/SC/AMO require natural alignment
-  if (va % BigInt(byteLength) !== 0n) {
-    const cause =
-      atomicAccess === 'lr' ? CAUSE_LOAD_ADDRESS_MISALIGNED : CAUSE_STORE_AMO_ADDRESS_MISALIGNED;
-    enterTrap(registers, cause, copyBytes(new Uint8Array(8), address));
-    return { denied: true };
-  }
-
-  // Bare mode: return VA as PA
+  // Bare mode: alignment first, then return VA as PA.
   if (!satpTranslationIsActive(registers)) {
+    if (!checkAtomicAlignment(registers, address, byteLength, atomicAccess)) {
+      return { denied: true };
+    }
     return { denied: false, physicalAddress: copyBytes(new Uint8Array(8), address) };
   }
 
@@ -839,7 +858,8 @@ export const prepareAtomicAccess = async (params: {
   const accessFaultCause =
     atomicAccess === 'lr' ? CAUSE_LOAD_ACCESS_FAULT : CAUSE_STORE_AMO_ACCESS_FAULT;
 
-  // Walk, check alignment, construct PA, check PMP/mapped
+  // Walk, PMP/mapped, then alignment — for translated accesses page fault
+  // must take priority over address-misaligned (spec priority table).
   const pa = await walkAndCheckAtomicPA(
     registers,
     memory,
@@ -851,6 +871,12 @@ export const prepareAtomicAccess = async (params: {
   if (pa === null) {
     return { denied: true };
   }
+
+  // Alignment check on VA after translation for Sv39.
+  if (!checkAtomicAlignment(registers, address, byteLength, atomicAccess)) {
+    return { denied: true };
+  }
+
   return { denied: false, physicalAddress: pa };
 };
 
