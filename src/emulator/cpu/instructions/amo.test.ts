@@ -52,6 +52,8 @@ import {
   CAUSE_LOAD_ADDRESS_MISALIGNED,
   CAUSE_STORE_AMO_ACCESS_FAULT,
   CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
+  CAUSE_LOAD_PAGE_FAULT,
+  CAUSE_STORE_AMO_PAGE_FAULT,
 } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 

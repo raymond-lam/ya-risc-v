@@ -35,7 +35,7 @@ import {
   snapshotControlAndStatusRegister,
   writeGeneralPurposeRegister,
 } from '#emulator/cpu/registers';
-import { physicalMemoryAccessDenied } from '#emulator/cpu/pmp';
+import { prepareAtomicAccess, type PreparedAccess } from '#emulator/cpu/paging';
 import {
   CAUSE_LOAD_ACCESS_FAULT,
   CAUSE_LOAD_ADDRESS_MISALIGNED,
@@ -44,6 +44,7 @@ import {
   enterTrap,
 } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
+import type { ReadonlyUint8Array } from '#types';
 import {
   atomicCompareExchangeBytes,
   atomicLoadBytes,
@@ -51,7 +52,6 @@ import {
   atomicStoreConditionalBytes,
   type Memory,
 } from '#emulator/memory';
-import type { ReadonlyUint8Array } from '#types';
 
 type AmoArgs = {
   destinationRegister: number;
@@ -59,8 +59,8 @@ type AmoArgs = {
   sourceRegister2: number;
 };
 
-const ZERO_BYTES = new Uint8Array(8) as ReadonlyUint8Array;
-const ONE_BYTES = signedNumberToBytes(new Uint8Array(8), 1, 32) as ReadonlyUint8Array;
+const ZERO_BYTES = new Uint8Array(8);
+const ONE_BYTES = signedNumberToBytes(new Uint8Array(8), 1, 32);
 
 /** `mhartid` CSR address — indexes the shared reservation-monitor slot. */
 const MHARTID = 0xf14;
@@ -68,74 +68,7 @@ const MHARTID = 0xf14;
 const hartIdOf = (registers: Registers): number =>
   bytesToNumber(snapshotControlAndStatusRegister(registers, MHARTID));
 
-const isNaturallyAligned = (address: ReadonlyUint8Array, byteLength: 4 | 8): boolean =>
-  (bytesToBigInt(address) & BigInt(byteLength - 1)) === 0n;
-
-/** Misaligned atomics keep their load or store/AMO cause. Checked before PMP. */
-const trapIfAtomicMisaligned = ({
-  registers,
-  address,
-  byteLength,
-  access,
-}: {
-  registers: Registers;
-  address: ReadonlyUint8Array;
-  byteLength: 4 | 8;
-  access: 'load' | 'store';
-}): boolean => {
-  if (isNaturallyAligned(address, byteLength)) {
-    return false;
-  }
-  enterTrap(
-    registers,
-    access === 'load' ? CAUSE_LOAD_ADDRESS_MISALIGNED : CAUSE_STORE_AMO_ADDRESS_MISALIGNED,
-    copyBytes(new Uint8Array(8), address)
-  );
-  return true;
-};
-
-/** PMP deny before the atomic RMW. LR faults as a load; SC and AMO fault as a store. */
-const trapIfPmpDeniesAtomic = ({
-  registers,
-  address,
-  byteLength,
-  access,
-}: {
-  registers: Registers;
-  address: ReadonlyUint8Array;
-  byteLength: number;
-  access: 'load' | 'store' | 'amo';
-}): boolean => {
-  if (!physicalMemoryAccessDenied({ registers, address, byteLength, access })) {
-    return false;
-  }
-  const cause = access === 'load' ? CAUSE_LOAD_ACCESS_FAULT : CAUSE_STORE_AMO_ACCESS_FAULT;
-  enterTrap(registers, cause, copyBytes(new Uint8Array(8), address));
-  return true;
-};
-
-/**
- * Fault when the atomic helpers refused the access — unmapped, straddling a region end, or
- * mapped-but-non-RAM/MMIO (misalignment is trapped earlier). LR faults as a load; SC and AMO
- * fault as a store.
- */
-const trapAtomicAccessFault = ({
-  registers,
-  address,
-  access,
-}: {
-  registers: Registers;
-  address: ReadonlyUint8Array;
-  access: 'load' | 'store';
-}): void => {
-  enterTrap(
-    registers,
-    access === 'load' ? CAUSE_LOAD_ACCESS_FAULT : CAUSE_STORE_AMO_ACCESS_FAULT,
-    copyBytes(new Uint8Array(8), address)
-  );
-};
-
-/** lr.w: rd = sext(mem[rs1]); reserve 32 bits. Misaligned / non-RAM / unmapped → trap (no reservation). */
+/** lr.w: rd = sext(mem[rs1]); reserve 32 bits. Gate handles alignment/PMP/mapped/translation. */
 const lrW = async (
   registers: Registers,
   memory: Memory,
@@ -143,22 +76,26 @@ const lrW = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
-  if (trapIfAtomicMisaligned({ registers, address, byteLength: 4, access: 'load' })) {
-    return;
-  }
-  if (trapIfPmpDeniesAtomic({ registers, address, byteLength: 4, access: 'load' })) {
+  const prepared = await prepareAtomicAccess({
+    registers,
+    memory,
+    address,
+    byteLength: 4,
+    atomicAccess: 'lr',
+  });
+  if (prepared.denied) {
     return;
   }
   const oldValue = new Uint8Array(8);
   const loaded = await atomicLoadReservedBytes({
     destination: oldValue,
     memory,
-    address,
+    address: prepared.physicalAddress,
     byteLength: 4,
     hartId: hartIdOf(registers),
   });
   if (!loaded) {
-    trapAtomicAccessFault({ registers, address, access: 'load' });
+    enterTrap(registers, CAUSE_LOAD_ACCESS_FAULT, copyBytes(new Uint8Array(8), address));
     return;
   }
   signExtendBytes(oldValue, 4);
@@ -166,7 +103,7 @@ const lrW = async (
   advanceProgramCounter(registers, instructionByteLength);
 };
 
-/** lr.d: rd = mem[rs1]; reserve 64 bits. Misaligned / non-RAM / unmapped → trap (no reservation). */
+/** lr.d: rd = mem[rs1]; reserve 64 bits. Gate handles alignment/PMP/mapped/translation. */
 const lrD = async (
   registers: Registers,
   memory: Memory,
@@ -174,22 +111,26 @@ const lrD = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
-  if (trapIfAtomicMisaligned({ registers, address, byteLength: 8, access: 'load' })) {
-    return;
-  }
-  if (trapIfPmpDeniesAtomic({ registers, address, byteLength: 8, access: 'load' })) {
+  const prepared = await prepareAtomicAccess({
+    registers,
+    memory,
+    address,
+    byteLength: 8,
+    atomicAccess: 'lr',
+  });
+  if (prepared.denied) {
     return;
   }
   const oldValue = new Uint8Array(8);
   const loaded = await atomicLoadReservedBytes({
     destination: oldValue,
     memory,
-    address,
+    address: prepared.physicalAddress,
     byteLength: 8,
     hartId: hartIdOf(registers),
   });
   if (!loaded) {
-    trapAtomicAccessFault({ registers, address, access: 'load' });
+    enterTrap(registers, CAUSE_LOAD_ACCESS_FAULT, copyBytes(new Uint8Array(8), address));
     return;
   }
   writeGeneralPurposeRegister(registers, args.destinationRegister, oldValue);
@@ -198,7 +139,7 @@ const lrD = async (
 
 /**
  * sc.w: if reservation matches, mem[rs1] = rs2[31:0], rd = 0; else rd ≠ 0.
- * Misaligned / non-RAM / unmapped → trap before taking the reservation.
+ * Gate handles alignment/PMP/mapped/translation; D-bit enforced by walker.
  */
 const scW = async (
   registers: Registers,
@@ -207,20 +148,31 @@ const scW = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
-  if (trapIfAtomicMisaligned({ registers, address, byteLength: 4, access: 'store' })) {
-    return;
-  }
-  if (trapIfPmpDeniesAtomic({ registers, address, byteLength: 4, access: 'store' })) {
+  const prepared = await prepareAtomicAccess({
+    registers,
+    memory,
+    address,
+    byteLength: 4,
+    atomicAccess: 'sc',
+  });
+  if (prepared.denied) {
     return;
   }
   const probe = new Uint8Array(8);
-  if (!atomicLoadBytes({ destination: probe, memory, address, byteLength: 4 })) {
-    trapAtomicAccessFault({ registers, address, access: 'store' });
+  if (
+    !atomicLoadBytes({
+      destination: probe,
+      memory,
+      address: prepared.physicalAddress,
+      byteLength: 4,
+    })
+  ) {
+    enterTrap(registers, CAUSE_STORE_AMO_ACCESS_FAULT, copyBytes(new Uint8Array(8), address));
     return;
   }
   const success = await atomicStoreConditionalBytes({
     memory,
-    address,
+    address: prepared.physicalAddress,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 4,
     hartId: hartIdOf(registers),
@@ -235,7 +187,7 @@ const scW = async (
 
 /**
  * sc.d: if reservation matches, mem[rs1] = rs2, rd = 0; else rd ≠ 0.
- * Misaligned / non-RAM / unmapped → trap before taking the reservation.
+ * Gate handles alignment/PMP/mapped/translation; D-bit enforced by walker.
  */
 const scD = async (
   registers: Registers,
@@ -244,20 +196,31 @@ const scD = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
-  if (trapIfAtomicMisaligned({ registers, address, byteLength: 8, access: 'store' })) {
-    return;
-  }
-  if (trapIfPmpDeniesAtomic({ registers, address, byteLength: 8, access: 'store' })) {
+  const prepared = await prepareAtomicAccess({
+    registers,
+    memory,
+    address,
+    byteLength: 8,
+    atomicAccess: 'sc',
+  });
+  if (prepared.denied) {
     return;
   }
   const probe = new Uint8Array(8);
-  if (!atomicLoadBytes({ destination: probe, memory, address, byteLength: 8 })) {
-    trapAtomicAccessFault({ registers, address, access: 'store' });
+  if (
+    !atomicLoadBytes({
+      destination: probe,
+      memory,
+      address: prepared.physicalAddress,
+      byteLength: 8,
+    })
+  ) {
+    enterTrap(registers, CAUSE_STORE_AMO_ACCESS_FAULT, copyBytes(new Uint8Array(8), address));
     return;
   }
   const success = await atomicStoreConditionalBytes({
     memory,
-    address,
+    address: prepared.physicalAddress,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 8,
     hartId: hartIdOf(registers),
@@ -285,17 +248,28 @@ const amoReadModifyWrite = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = readGeneralPurposeRegister(registers, args.sourceRegister1);
-  if (trapIfAtomicMisaligned({ registers, address, byteLength, access: 'store' })) {
-    return;
-  }
-  if (trapIfPmpDeniesAtomic({ registers, address, byteLength, access: 'amo' })) {
+  const prepared = await prepareAtomicAccess({
+    registers,
+    memory,
+    address,
+    byteLength,
+    atomicAccess: 'amo',
+  });
+  if (prepared.denied) {
     return;
   }
   const source = readGeneralPurposeRegister(registers, args.sourceRegister2);
   const oldValue = new Uint8Array(8);
   const observed = new Uint8Array(8);
-  if (!atomicLoadBytes({ destination: oldValue, memory, address, byteLength })) {
-    trapAtomicAccessFault({ registers, address, access: 'store' });
+  if (
+    !atomicLoadBytes({
+      destination: oldValue,
+      memory,
+      address: prepared.physicalAddress,
+      byteLength,
+    })
+  ) {
+    enterTrap(registers, CAUSE_STORE_AMO_ACCESS_FAULT, copyBytes(new Uint8Array(8), address));
     return;
   }
   for (;;) {
@@ -304,7 +278,7 @@ const amoReadModifyWrite = async (
       await atomicCompareExchangeBytes({
         destination: observed,
         memory,
-        address,
+        address: prepared.physicalAddress,
         byteLength,
         expected: oldValue,
         desired: next,
