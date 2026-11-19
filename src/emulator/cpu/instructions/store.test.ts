@@ -23,6 +23,8 @@ import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
+  setPrivilegeMode,
+  PRIVILEGE_SUPERVISOR,
   setProgramCounter,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
@@ -37,6 +39,15 @@ import {
 import { CAUSE_STORE_AMO_ACCESS_FAULT } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 import { storeBytes } from '#emulator/memory';
+
+const allowAllPmp = (registers: ReturnType<typeof createRegisters>): void => {
+  writeControlAndStatusRegister(
+    registers,
+    0x3b0,
+    unsignedBigIntToBytes(new Uint8Array(8), 0x3fffffffffffffn)
+  );
+  writeControlAndStatusRegister(registers, 0x3a0, unsignedBigIntToBytes(new Uint8Array(8), 0x1fn));
+};
 
 describe('store', () => {
   it('sb stores the low byte', async () => {
@@ -230,6 +241,8 @@ describe('translated store access (Sv39)', () => {
     // Target page at PA 0x10000.
 
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
     // Root at PA 0 → satp PPN = 0 → just MODE=8.
     writeControlAndStatusRegister(
       registers,
@@ -289,6 +302,8 @@ describe('translated store access (Sv39)', () => {
     });
 
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
     writeControlAndStatusRegister(
       registers,
       MTVEC,
@@ -356,6 +371,8 @@ describe('translated store access (Sv39)', () => {
     });
 
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
     writeControlAndStatusRegister(
       registers,
       MTVEC,

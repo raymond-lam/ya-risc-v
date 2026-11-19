@@ -287,17 +287,17 @@ describe('fetchInstructionCycle (Sv39 translation)', () => {
     // Write instruction bytes at the two physical addresses:
     // Parcel 1 at PA 0x8ffe: bytes 0-1 of the instruction
     // Parcel 2 at PA 0x9000: bytes 2-3 of the instruction
-    // Build a 32-bit instruction: low 2 bits of byte 0 must NOT be 0x03 (RVC pattern).
+    // Build a 32-bit instruction: low 2 bits of byte 0 must be 0x03.
     await storeBytes({
       memory,
       address: unsignedBigIntToBytes(new Uint8Array(8), 0x8ffen),
-      source: new Uint8Array([0x02, 0x10]),
+      source: new Uint8Array([0x93, 0x00]),
       byteLength: 2,
     });
     await storeBytes({
       memory,
       address: unsignedBigIntToBytes(new Uint8Array(8), 0x9000n),
-      source: new Uint8Array([0x20, 0x30]),
+      source: new Uint8Array([0x30, 0x12]),
       byteLength: 2,
     });
 
@@ -305,10 +305,10 @@ describe('fetchInstructionCycle (Sv39 translation)', () => {
     await fetchInstructionCycle(registers, memory, instructionBytes);
 
     // Instruction bytes should reflect the assembled word from both PAs
-    assert.equal(instructionBytes[0], 0x02);
-    assert.equal(instructionBytes[1], 0x10);
-    assert.equal(instructionBytes[2], 0x20);
-    assert.equal(instructionBytes[3], 0x30);
+    assert.equal(instructionBytes[0], 0x93);
+    assert.equal(instructionBytes[1], 0x00);
+    assert.equal(instructionBytes[2], 0x30);
+    assert.equal(instructionBytes[3], 0x12);
   });
 
   /** Bug class: M-mode fetch under Sv39 should bypass translation (physical). */

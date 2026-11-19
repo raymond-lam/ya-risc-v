@@ -183,16 +183,53 @@ const MSTATUS_BYTE2_MXR = 0x08; // Bit 19
 const determineEffectivePrivilege = (registers: Registers): ReadonlyUint8Array => {
   const currentMode = readPrivilegeMode(registers);
   const mstatus = registers.controlAndStatus[MSTATUS]!;
-  const mprv = (mstatus[2]! & 0x04) !== 0; // Bit 17
+  const mprv = (mstatus[2]! & 0x02) !== 0; // Bit 17 → byte 2 bit 1
 
   if (compareUnsignedBytes(currentMode, PRIVILEGE_MACHINE) !== 0 || !mprv) {
     return currentMode;
   }
 
-  const mpp = mstatus[1]! & 0x06; // Bits 11:10
-  if (mpp === 0) return PRIVILEGE_MACHINE;
-  if (mpp === 0x04) return PRIVILEGE_SUPERVISOR;
+  const mpp = mstatus[1]! & 0x18; // Bits 12:11 → byte 1 bits 4:3
+  if (mpp === 0x18) return PRIVILEGE_MACHINE;
+  if (mpp === 0x08) return PRIVILEGE_SUPERVISOR;
   return PRIVILEGE_USER;
+};
+
+/**
+ * Determine whether a data access should use address translation or physical access.
+ * Returns true if translation is needed, false if access should be physical (VA=PA).
+ *
+ * Bare mode (satp.MODE=Bare): no translation → return false
+ * M-mode with MPRV=0: data accesses are physical → return false
+ * M-mode with MPRV=1 and MPP=M: effective privilege is M → return false
+ * Otherwise: translation is required → return true
+ */
+const shouldTranslatePhysicalAccess = (registers: Registers): boolean => {
+  // Bare mode: no translation
+  if (!satpTranslationIsActive(registers)) {
+    return false;
+  }
+
+  // Check M-mode with MPRV decision
+  const currentPrivilege = readPrivilegeMode(registers);
+  if (compareUnsignedBytes(currentPrivilege, PRIVILEGE_MACHINE) !== 0) {
+    // Not M-mode: translation required
+    return true;
+  }
+
+  // M-mode: check MPRV
+  const mstatus = registers.controlAndStatus[MSTATUS]!;
+  const mprv = (mstatus[2]! & 0x02) !== 0; // Bit 17 → byte 2 bit 1
+
+  if (mprv) {
+    // MPRV=1: check MPP
+    const mpp = mstatus[1]! & 0x18; // Bits 12:11 → byte 1 bits 4:3
+    // MPP != M (0x18): translation required
+    return mpp !== 0x18;
+  }
+
+  // MPRV=0: physical access, no translation
+  return false;
 };
 
 /**
@@ -590,26 +627,13 @@ export const prepareLoadAccess = async (params: {
   const { registers, memory, address, byteLength } = params;
   const va = bytesToBigInt(address);
 
-  // Bare mode: return VA as PA
-  if (!satpTranslationIsActive(registers)) {
+  // Physical access path: return VA as PA (no translation)
+  if (!shouldTranslatePhysicalAccess(registers)) {
     return { denied: false, physicalAddress: copyBytes(new Uint8Array(8), address) };
   }
 
   // Determine effective privilege (load honors MPRV)
   const effectivePrivilege = determineEffectivePrivilege(registers);
-  const mstatus = registers.controlAndStatus[MSTATUS]!;
-
-  // MPRV+MPP=M: physical access (no translation)
-  if (compareUnsignedBytes(effectivePrivilege, PRIVILEGE_MACHINE) === 0) {
-    if ((mstatus[2]! & 0x04) !== 0) {
-      // MPRV set
-      const mpp = mstatus[1]! & 0x06;
-      if (mpp === 0) {
-        // MPP=M
-        return { denied: false, physicalAddress: copyBytes(new Uint8Array(8), address) };
-      }
-    }
-  }
 
   // Walk the page table
   try {
@@ -673,26 +697,13 @@ export const prepareStoreAccess = async (params: {
   const { registers, memory, address, byteLength } = params;
   const va = bytesToBigInt(address);
 
-  // Bare mode: return VA as PA
-  if (!satpTranslationIsActive(registers)) {
+  // Physical access path: return VA as PA (no translation)
+  if (!shouldTranslatePhysicalAccess(registers)) {
     return { denied: false, physicalAddress: copyBytes(new Uint8Array(8), address) };
   }
 
   // Determine effective privilege (store honors MPRV)
   const effectivePrivilege = determineEffectivePrivilege(registers);
-  const mstatus = registers.controlAndStatus[MSTATUS]!;
-
-  // MPRV+MPP=M: physical access (no translation)
-  if (compareUnsignedBytes(effectivePrivilege, PRIVILEGE_MACHINE) === 0) {
-    if ((mstatus[2]! & 0x04) !== 0) {
-      // MPRV set
-      const mpp = mstatus[1]! & 0x06;
-      if (mpp === 0) {
-        // MPP=M
-        return { denied: false, physicalAddress: copyBytes(new Uint8Array(8), address) };
-      }
-    }
-  }
 
   // Walk the page table
   try {
@@ -829,8 +840,8 @@ export const prepareAtomicAccess = async (params: {
 }): Promise<PreparedAccess> => {
   const { registers, memory, address, byteLength, atomicAccess } = params;
 
-  // Bare mode: alignment first, then return VA as PA.
-  if (!satpTranslationIsActive(registers)) {
+  // Physical access path: check alignment first, then return VA as PA (no translation)
+  if (!shouldTranslatePhysicalAccess(registers)) {
     if (!checkAtomicAlignment(registers, address, byteLength, atomicAccess)) {
       return { denied: true };
     }
@@ -839,17 +850,6 @@ export const prepareAtomicAccess = async (params: {
 
   // Determine effective privilege
   const effectivePrivilege = determineEffectivePrivilege(registers);
-  const mstatus = registers.controlAndStatus[MSTATUS]!;
-
-  // MPRV+MPP=M: physical access (no translation)
-  if (compareUnsignedBytes(effectivePrivilege, PRIVILEGE_MACHINE) === 0) {
-    if ((mstatus[2]! & 0x04) !== 0) {
-      const mpp = mstatus[1]! & 0x06;
-      if (mpp === 0) {
-        return { denied: false, physicalAddress: copyBytes(new Uint8Array(8), address) };
-      }
-    }
-  }
 
   // Determine access type for permission checks
   // LR treats as load-class; SC/AMO treat as store-class
@@ -1070,8 +1070,8 @@ export const fetchTranslatedInstruction = async (params: {
   });
 
   // Check if 32-bit instruction
-  const is32Bit = (instructionBytes[0]! & 0x03) !== 0x03; // ENCODING_LENGTH_MASK = 0x03, 32-bit = 0x03
-  if (is32Bit === false) {
+  const is32Bit = (instructionBytes[0]! & 0x03) === 0x03; // ENCODING_LENGTH_MASK = 0x03, 32-bit = 0x03
+  if (!is32Bit) {
     // Compressed instruction (2 bytes)
     return true;
   }

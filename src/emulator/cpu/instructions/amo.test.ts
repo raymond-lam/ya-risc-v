@@ -38,6 +38,8 @@ import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
+  setPrivilegeMode,
+  PRIVILEGE_SUPERVISOR,
   setProgramCounter,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
@@ -58,6 +60,15 @@ import {
 } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 import { storeBytes } from '#emulator/memory';
+
+const allowAllPmp = (registers: ReturnType<typeof createRegisters>): void => {
+  writeControlAndStatusRegister(
+    registers,
+    0x3b0,
+    unsignedBigIntToBytes(new Uint8Array(8), 0x3fffffffffffffn)
+  );
+  writeControlAndStatusRegister(registers, 0x3a0, unsignedBigIntToBytes(new Uint8Array(8), 0x1fn));
+};
 
 describe('amo', () => {
   it('lr.d / sc.d succeed and advance pc', async () => {
@@ -686,6 +697,8 @@ describe('amo', () => {
   it('misaligned lr.w under active Sv39 traps with page fault, not misaligned', async () => {
     const guest = testMemory(0x10000n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
     const PTE_V = 1n;
     const PTE_A = 64n;
     // Build minimal Sv39: root @ PA 0 → L1 @ PA 0x1000 → L0 @ PA 0x2000.

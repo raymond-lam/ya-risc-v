@@ -1268,6 +1268,254 @@ describe('fetchTranslatedInstruction — straddle and compressed', () => {
     assert.equal(instrBytes[2], 0x00);
     assert.equal(instrBytes[3], 0x00);
   });
+
+  it('fetches a 32-bit instruction across translated parcels (Sv39)', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setupPmpAllowAll(registers);
+
+    const va = 0x801000n;
+    const codePa = 0x3000n;
+    const codePpn = codePa >> 12n;
+
+    // Encode addi x1, x0, 0x123 without handwriting raw bytes.
+    const instruction = Number((0x123n << 20n) | (1n << 7n) | 0x13n);
+    const source = new Uint8Array([
+      instruction & 0xff,
+      (instruction >>> 8) & 0xff,
+      (instruction >>> 16) & 0xff,
+      (instruction >>> 24) & 0xff,
+    ]);
+    await storeBytes({
+      memory,
+      address: unsignedBigIntToBytes(new Uint8Array(8), codePa),
+      source,
+      byteLength: source.byteLength,
+    });
+
+    // Build a minimal Sv39 mapping: root at PA 0, L1 at PA 0x1000,
+    // L0 at PA 0x2000, mapping VA 0x801000 -> code PA 0x3000 (executable).
+    const l2Index = Number((va >> 30n) & 0x1ffn);
+    const l1Index = Number((va >> 21n) & 0x1ffn);
+    const l0Index = Number((va >> 12n) & 0x1ffn);
+    await storePte(memory, 0n + BigInt(l2Index) * 8n, makePointerPte(0x1000n >> 12n));
+    await storePte(memory, 0x1000n + BigInt(l1Index) * 8n, makePointerPte(0x2000n >> 12n));
+    await storePte(memory, 0x2000n + BigInt(l0Index) * 8n, makeLeafPte(codePpn, true, false, true));
+    enableSv39(registers, 0n);
+
+    const pcBytes = unsignedBigIntToBytes(new Uint8Array(8), va);
+    setProgramCounter(registers, pcBytes);
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+
+    const instrBytes = new Uint8Array(8);
+    const result = await fetchTranslatedInstruction({
+      registers,
+      memory,
+      instructionBytes: instrBytes,
+    });
+
+    assert(result);
+    assert.deepEqual(instrBytes.subarray(0, 4), source);
+  });
+
+  describe('MPRV data path behavior', () => {
+    it('M-mode load with satp=Sv39 and MPRV=0: bypasses translation (physical access)', async () => {
+      const memory = testMemory(0x10000n);
+      const registers = createRegisters();
+      const va = 0x8000_8000n; // Virtual address that will NOT have page table mapping
+
+      // Enable Sv39 with root at PA 0x1000 (page table will be EMPTY)
+      enableSv39(registers, 0x1000n);
+
+      // Set M-mode with MPRV=0 (default)
+      setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+      const mstatus = new Uint8Array(8);
+      mstatus[0] = 0x00; // SPIE=0, SIE=0
+      mstatus[1] = 0x00; // SPP=U
+      mstatus[2] = 0x00; // MPRV=0, MXR=0, SUM=0
+      writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+      // Load from virtual address 0x8000_8000 - this should be treated as physical 0x8000_8000
+      // With MPRV=0 in M-mode, translation should be bypassed
+      // So VA 0x8000_8000 should be treated as PA 0x8000_8000, not walk the page table
+      const vaBytes = unsignedBigIntToBytes(new Uint8Array(8), va);
+      const loadResult = await prepareLoadAccess({
+        registers,
+        memory,
+        address: vaBytes,
+        byteLength: 8,
+      });
+
+      // The bug is: if the code incorrectly walks the page table, it will fault
+      // because there's no mapping for VA 0x8000_8000
+      // The correct behavior: M-mode with MPRV=0 should bypass translation and use VA as PA
+      assert(!loadResult.denied, 'M-mode load with MPRV=0 should succeed (physical access)');
+      assert.deepEqual(loadResult.physicalAddress, vaBytes, 'PA should equal VA');
+    });
+
+    it('M-mode store with satp=Sv39 and MPRV=0: bypasses translation (physical access)', async () => {
+      const memory = testMemory(0x10000n);
+      const registers = createRegisters();
+      const va = 0x8000_9000n; // Virtual address that will NOT have page table mapping
+
+      // Enable Sv39 with root at PA 0x1000 (page table will be EMPTY)
+      enableSv39(registers, 0x1000n);
+
+      // Set M-mode with MPRV=0 (default)
+      setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+      const mstatus = new Uint8Array(8);
+      mstatus[0] = 0x00;
+      mstatus[1] = 0x00;
+      mstatus[2] = 0x00; // MPRV=0
+      writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+      // Store to address should succeed despite satp being active
+      // M-mode with MPRV=0 should bypass translation
+      const addressBytes = unsignedBigIntToBytes(new Uint8Array(8), va);
+      const storeResult = await prepareStoreAccess({
+        registers,
+        memory,
+        address: addressBytes,
+        byteLength: 8,
+      });
+
+      assert(!storeResult.denied, 'M-mode store with MPRV=0 should succeed (physical access)');
+      assert.deepEqual(storeResult.physicalAddress, addressBytes, 'PA should equal VA');
+    });
+
+    it('M-mode AMO with satp=Sv39 and MPRV=0: bypasses translation (physical access)', async () => {
+      const memory = testMemory(0x10000n);
+      const registers = createRegisters();
+      const va = 0x8000_a000n; // Virtual address that will NOT have page table mapping
+
+      // Enable Sv39 with root at PA 0x1000 (page table will be EMPTY)
+      enableSv39(registers, 0x1000n);
+
+      // Set M-mode with MPRV=0 (default)
+      setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+      const mstatus = new Uint8Array(8);
+      mstatus[0] = 0x00;
+      mstatus[1] = 0x00;
+      mstatus[2] = 0x00; // MPRV=0
+      writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+      // AMO access should succeed despite satp being active
+      // M-mode with MPRV=0 should bypass translation
+      const addressBytes = unsignedBigIntToBytes(new Uint8Array(8), va);
+      const amoResult = await prepareAtomicAccess({
+        registers,
+        memory,
+        address: addressBytes,
+        byteLength: 8,
+        atomicAccess: 'amo',
+      });
+
+      assert(!amoResult.denied, 'M-mode AMO with MPRV=0 should succeed (physical access)');
+      assert.deepEqual(amoResult.physicalAddress, addressBytes, 'PA should equal VA');
+    });
+
+    it('M-mode load with satp=Sv39, MPRV=1, MPP=M: bypasses translation (physical access)', async () => {
+      const memory = testMemory(0x10000n);
+      const registers = createRegisters();
+      const va = 0x8000_c000n; // Virtual address that will NOT have page table mapping
+
+      enableSv39(registers, 0x1000n);
+      setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+
+      // MPRV=1, MPP=M (mstatus[12:11]=11 → byte1 bits 4:3 = 11 → 0x18)
+      const mstatus = new Uint8Array(8);
+      mstatus[0] = 0x00;
+      mstatus[1] = 0x18; // MPP=M
+      mstatus[2] = 0x02; // MPRV=1 (bit 17 → byte2 bit 1)
+      writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+      const addressBytes = unsignedBigIntToBytes(new Uint8Array(8), va);
+      const loadResult = await prepareLoadAccess({
+        registers,
+        memory,
+        address: addressBytes,
+        byteLength: 8,
+      });
+
+      assert(!loadResult.denied, 'M-mode load with MPRV=1, MPP=M should succeed');
+      assert.deepEqual(loadResult.physicalAddress, addressBytes);
+    });
+
+    it('M-mode store with satp=Sv39, MPRV=1, MPP=S: uses MPP=S privilege for translation', async () => {
+      const memory = testMemory(0x10000n);
+      const registers = createRegisters();
+      const va = 0x8000_1000n; // Virtual address we'll map
+      const pa = 0xd000n; // Physical address
+      const ppn = pa >> 12n;
+
+      // Build mapping: root at 0x1000, VA 0x8000_1000 -> PA 0xd000
+      const l2Index = Number((va >> 30n) & 0x1ffn);
+      const l1Index = Number((va >> 21n) & 0x1ffn);
+      const l0Index = Number((va >> 12n) & 0x1ffn);
+      await storePte(memory, 0x1000n + BigInt(l2Index) * 8n, makePointerPte(0x2000n >> 12n));
+      await storePte(memory, 0x2000n + BigInt(l1Index) * 8n, makePointerPte(0x3000n >> 12n));
+      await storePte(
+        memory,
+        0x3000n + BigInt(l0Index) * 8n,
+        makeLeafPte(ppn, true, true, false) | PTE_D
+      ); // R+W+D, not X
+
+      enableSv39(registers, 0x1000n);
+      setupPmpAllowAll(registers);
+      setPrivilegeMode(registers, PRIVILEGE_MACHINE);
+
+      // MPRV=1, MPP=S (mstatus[12:11]=01 → byte1 bits 4:3 = 01 → 0x08)
+      const mstatus = new Uint8Array(8);
+      mstatus[0] = 0x00;
+      mstatus[1] = 0x08; // MPP=S
+      mstatus[2] = 0x02; // MPRV=1
+      writeControlAndStatusRegister(registers, MSTATUS, mstatus);
+
+      const vaBytes = unsignedBigIntToBytes(new Uint8Array(8), va);
+      const storeResult = await prepareStoreAccess({
+        registers,
+        memory,
+        address: vaBytes,
+        byteLength: 8,
+      });
+
+      assert(!storeResult.denied, 'M-mode store with MPRV=1, MPP=S should translate');
+      const expectedPa = unsignedBigIntToBytes(new Uint8Array(8), pa);
+      assert.deepEqual(storeResult.physicalAddress, expectedPa);
+    });
+
+    it('S-mode load with satp=Sv39: uses translation (no MPRV bypass)', async () => {
+      const memory = testMemory(0x10000n);
+      const registers = createRegisters();
+      const va = 0x8000_2000n;
+      const pa = 0xe000n;
+      const ppn = pa >> 12n;
+
+      // Build mapping
+      const l2Index = Number((va >> 30n) & 0x1ffn);
+      const l1Index = Number((va >> 21n) & 0x1ffn);
+      const l0Index = Number((va >> 12n) & 0x1ffn);
+      await storePte(memory, 0x4000n + BigInt(l2Index) * 8n, makePointerPte(0x5000n >> 12n));
+      await storePte(memory, 0x5000n + BigInt(l1Index) * 8n, makePointerPte(0x6000n >> 12n));
+      await storePte(memory, 0x6000n + BigInt(l0Index) * 8n, makeLeafPte(ppn, true, false, false)); // R only
+
+      enableSv39(registers, 0x4000n);
+      setupPmpAllowAll(registers);
+      setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+
+      const vaBytes = unsignedBigIntToBytes(new Uint8Array(8), va);
+      const loadResult = await prepareLoadAccess({
+        registers,
+        memory,
+        address: vaBytes,
+        byteLength: 8,
+      });
+
+      assert(!loadResult.denied, 'S-mode load should translate');
+      const expectedPa = unsignedBigIntToBytes(new Uint8Array(8), pa);
+      assert.deepEqual(loadResult.physicalAddress, expectedPa);
+    });
+  });
 });
 
 // ── C1: Sv39 Translation Tests for Gate Functions ──────────────────────────

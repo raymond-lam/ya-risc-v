@@ -22,6 +22,8 @@ import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
+  setPrivilegeMode,
+  PRIVILEGE_SUPERVISOR,
   setProgramCounter,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
@@ -36,6 +38,15 @@ import {
 import { CAUSE_LOAD_ACCESS_FAULT } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
 import { storeBytes } from '#emulator/memory';
+
+const allowAllPmp = (registers: ReturnType<typeof createRegisters>): void => {
+  writeControlAndStatusRegister(
+    registers,
+    0x3b0,
+    unsignedBigIntToBytes(new Uint8Array(8), 0x3fffffffffffffn)
+  );
+  writeControlAndStatusRegister(registers, 0x3a0, unsignedBigIntToBytes(new Uint8Array(8), 0x1fn));
+};
 
 describe('load', () => {
   it('lb sign-extends and lbu zero-extends', async () => {
@@ -352,6 +363,8 @@ describe('translated load access (Sv39)', () => {
     guest.bytes[0x10000] = 0xab;
 
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
     // Root at PA 0 → satp PPN=0, MODE=8 (Sv39).
     writeControlAndStatusRegister(
       registers,
@@ -407,6 +420,8 @@ describe('translated load access (Sv39)', () => {
     });
 
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
     writeControlAndStatusRegister(
       registers,
       MTVEC,
@@ -460,6 +475,8 @@ describe('translated load access (Sv39)', () => {
   it('lw through Sv39 translation with V=0 at root level traps with cause 13', async () => {
     const guest = testMemory(256n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
     writeControlAndStatusRegister(
       registers,
       MTVEC,
