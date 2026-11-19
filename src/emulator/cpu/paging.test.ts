@@ -1548,6 +1548,7 @@ describe('paging gates — Sv39 translation', () => {
   it('prepareLoadAccess returns the translated PA for a valid Sv39 mapping', async () => {
     const memory = testMemory(0x10000n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setupPmpAllowAll(registers);
     // VA 0x801000 → PA 0x1000 (PPN=0x1, within test RAM [0, 64KB))
     await buildSv39Mapping(memory, registers, 0x801000n, makeLeafPte(0x1n));
@@ -1567,6 +1568,7 @@ describe('paging gates — Sv39 translation', () => {
   it('prepareStoreAccess returns the translated PA for a valid Sv39 mapping', async () => {
     const memory = testMemory(0x10000n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setupPmpAllowAll(registers);
     // Store needs R∧W in the leaf for Sv39 walk
     await buildSv39Mapping(
@@ -1591,6 +1593,7 @@ describe('paging gates — Sv39 translation', () => {
   it('prepareAtomicAccess (LR) returns the translated PA for a valid Sv39 mapping', async () => {
     const memory = testMemory(0x10000n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setupPmpAllowAll(registers);
     // LR is load-class: needs R bit. The gate uses 'store' for the walk which
     // checks W, so leaf needs R+W to pass the gate path. VA 0x801000 → PA 0x1000
@@ -1617,6 +1620,7 @@ describe('paging gates — Sv39 translation', () => {
   it('prepareLoadAccess page-faults on unmapped VA with cause=13 and xtval=VA', async () => {
     const memory = testMemory(0x10000n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setupPmpAllowAll(registers);
 
     // Build page table with valid leaf at L0[1] for 0x801000.
@@ -1646,6 +1650,7 @@ describe('paging gates — Sv39 translation', () => {
   it('prepareStoreAccess page-faults on unmapped VA with cause=15 and xtval=VA', async () => {
     const memory = testMemory(0x10000n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setupPmpAllowAll(registers);
 
     enableSv39(registers, 0n);
@@ -1672,6 +1677,7 @@ describe('paging gates — Sv39 translation', () => {
   it('prepareAtomicAccess (SC) page-faults on unmapped VA with cause=15 and xtval=VA', async () => {
     const memory = testMemory(0x10000n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setupPmpAllowAll(registers);
 
     enableSv39(registers, 0n);
@@ -1699,6 +1705,7 @@ describe('paging gates — Sv39 translation', () => {
   it('prepareAtomicAccess (SC) faults with cause=15 when leaf is W-only (needs R∧W)', async () => {
     const memory = testMemory(0x10000n);
     const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
     setupPmpAllowAll(registers);
 
     // W-only leaf: R=0, W=1, A=1. For SC (store-class), walkPageTable uses 'store'
