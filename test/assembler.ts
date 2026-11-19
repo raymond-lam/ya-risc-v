@@ -23,6 +23,7 @@ export const OP_LOAD = 0b0000011n;
 export const OP_BRANCH = 0b1100011n;
 export const OP_OP = 0b0110011n;
 export const OP_SYS = 0b1110011n;
+export const OP_JALR = 0b1100111n;
 
 export const F3_ADD = 0b000n;
 export const F3_ANDI = 0b111n;
@@ -129,6 +130,8 @@ export const csrrw = (rd: number, csr: number, rs1: number): number => wCsr(rd, 
 export const csrrs = (rd: number, csr: number, rs1: number): number => wCsr(rd, csr, rs1, F3_CSRRS);
 export const sret = (): number => wCsr(0, 0x102, 0, 0n);
 export const mret = (): number => wCsr(0, 0x302, 0, 0n);
+export const jalr = (rd: number, rs1: number, imm: bigint): number =>
+  wI(rd, rs1, imm, F3_ADD, OP_JALR);
 
 export type Instruction = {
   emit: (labels: Map<string, number>, myOff: number) => number;
