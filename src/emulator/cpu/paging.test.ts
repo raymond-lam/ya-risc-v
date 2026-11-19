@@ -691,6 +691,49 @@ describe('walk page table — U-bit & privilege checks', () => {
     assert(result.success);
   });
 
+  it('U-mode cannot access supervisor-only (U=0) pages (load, store, fetch)', async () => {
+    const memory = testMemory(0x10000n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_USER);
+    setupPmpAllowAll(registers);
+
+    // Supervisor-only page with all permissions but no U bit.
+    // A and D are set so ADUE cannot mask the U-bit fault.
+    const leafPte = PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D;
+    await buildSv39LeafAtPa0x2000(memory, registers, leafPte);
+
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'load'
+        ),
+      CAUSE_LOAD_PAGE_FAULT
+    );
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'store'
+        ),
+      CAUSE_STORE_AMO_PAGE_FAULT
+    );
+    await assertPageFaultError(
+      () =>
+        walkPageTable(
+          registers,
+          memory,
+          unsignedBigIntToBytes(new Uint8Array(8), 0x2_000_000n),
+          'fetch'
+        ),
+      CAUSE_INSTRUCTION_PAGE_FAULT
+    );
+  });
+
   it('S-mode fetch is never SUM-gated (fails on U=1 page)', async () => {
     const memory = testMemory(0x10000n);
     const registers = createRegisters();

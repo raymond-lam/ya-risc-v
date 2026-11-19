@@ -241,7 +241,13 @@ const checkUbitPermission = (
   accessType: 'fetch' | 'load' | 'store' | 'amo',
   mstatus: ReadonlyUint8Array
 ): void => {
-  if (!pteIsUser(pteValue)) return; // Non-user PTE: no U-bit check needed
+  if (!pteIsUser(pteValue)) {
+    // Supervisor-only page: U-mode must fault; S/M are allowed.
+    if (compareUnsignedBytes(effectivePrivilege, PRIVILEGE_USER) === 0) {
+      throw createPageFaultError(pageFaultCauseForType(accessType));
+    }
+    return;
+  }
 
   const isUserPriv = compareUnsignedBytes(effectivePrivilege, PRIVILEGE_USER) === 0;
   if (isUserPriv) return; // U-mode can access U pages
