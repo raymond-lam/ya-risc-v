@@ -28,6 +28,7 @@ import type { Memory } from '#emulator/memory';
 import {
   addBytes,
   andBytes,
+  bytesToBigInt,
   compareUnsignedBytes,
   copyBytes,
   orBytes,
@@ -162,12 +163,14 @@ const STIMECMP_DISABLED_BYTES = new Uint8Array(8).fill(0xff) as ReadonlyUint8Arr
 
 /** menvcfg.STCE — Sstc timer compare enable (bit 63 → byte7 bit 7). */
 const MENVCFG_BYTE7_STCE = 0x80;
+/** menvcfg.ADUE — Svadu address translation enable (bit 61 → byte7 bit 5). */
+const MENVCFG_BYTE7_ADUE = 0x20;
 
 /**
- * WARL: STCE (63) is the only writable bit. ADUE (61) stays read-only zero until Svadu lands,
- * and FIOM/CBIE/CBCFE/CBZE/PBMTE read as zero (no state modelled).
+ * WARL: STCE (bit 63) and ADUE (bit 61) are the only writable bits.
+ * FIOM/CBIE/CBCFE/CBZE/PBMTE read as zero (no state modelled).
  */
-const MENVCFG_WRITABLE_MASK_BYTES = Uint8Array.of(0, 0, 0, 0, 0, 0, 0, 0x80) as ReadonlyUint8Array;
+const MENVCFG_WRITABLE_MASK_BYTES = Uint8Array.of(0, 0, 0, 0, 0, 0, 0, 0xa0) as ReadonlyUint8Array;
 
 /** mip writable bits with STIP hardware-owned (menvcfg.STCE=1): SSIP + SEIP only. */
 const MIP_WRITABLE_MASK_BYTES_WITHOUT_STIP = Uint8Array.of(
@@ -376,6 +379,28 @@ const isCounterAccessEnabled = (registers: Registers, index: number): boolean =>
  */
 const isSupervisorTimerCompareEnabled = (registers: Registers): boolean =>
   (registers.controlAndStatus[MENVCFG]![7]! & MENVCFG_BYTE7_STCE) !== 0;
+
+/** True iff satp.MODE == Sv39 (8). */
+const satpTranslationIsActive = (registers: Registers): boolean => {
+  const satp = snapshotControlAndStatusRegister(registers, SATP);
+  const mode = satp[7]! >>> 4; // byte7 bits 7:4
+  return mode === 8;
+};
+
+/** Returns true if the given satp MODE value is WARL-legal (Bare=0 or Sv39=8). */
+const satpModeIsLegal = (mode: number): boolean => mode === 0 || mode === 8;
+
+/** Extract PPN from satp [43:0], shift left 12, return fresh 8-byte LE buffer. */
+const satpRootTablePhysicalAddress = (registers: Registers): Uint8Array => {
+  const satp = snapshotControlAndStatusRegister(registers, SATP);
+  const ppn = bytesToBigInt(satp) & ((1n << 44n) - 1n); // mask [43:0]
+  const pa = ppn << 12n;
+  return unsignedBigIntToBytes(new Uint8Array(8), pa);
+};
+
+/** True iff menvcfg.ADUE is set. */
+const menvcfgAdueIsEnabled = (registers: Registers): boolean =>
+  (registers.controlAndStatus[MENVCFG]![7]! & MENVCFG_BYTE7_ADUE) !== 0;
 
 /** `mstatus.TVM` blocks S-mode `satp` access. */
 const isSatpBlockedByTvm = (registers: Registers, index: number): boolean =>
@@ -751,6 +776,13 @@ const writeControlAndStatusRegister = (
         registers.controlAndStatus[MIDELEG]!,
         andBytes(new Uint8Array(8), value, MIDELEG_MASK_BYTES)
       );
+    case SATP: {
+      // WARL: MODE [63:60] must be Bare (0) or Sv39 (8); entire write ignored otherwise.
+      const mode = value[7]! >>> 4; // byte7 bits 7:4
+      return satpModeIsLegal(mode)
+        ? copyBytes(registers.controlAndStatus[SATP]!, value)
+        : registers.controlAndStatus[SATP]!;
+    }
     case MEDELEG: {
       const next = copyBytes(registers.controlAndStatus[MEDELEG]!, value);
       // Bit 11 (M-mode ecall) is hardwired zero — not delegatable.
@@ -906,6 +938,8 @@ export {
   MCAUSE,
   MTVAL,
   MIP,
+  SATP,
+  MENVCFG,
   MSTATUS_BYTE1_MPP_MASK,
   MSTATUS_BYTE1_MPP_USER,
   TWO_BYTES,
@@ -934,4 +968,7 @@ export {
   setMachineSoftwareInterruptPending,
   setMachineExternalInterruptPending,
   setSupervisorExternalInterruptPending,
+  satpTranslationIsActive,
+  satpRootTablePhysicalAddress,
+  menvcfgAdueIsEnabled,
 };

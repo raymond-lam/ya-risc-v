@@ -22,6 +22,8 @@ import {
   createRegisters,
   readGeneralPurposeRegister,
   readProgramCounter,
+  setPrivilegeMode,
+  PRIVILEGE_SUPERVISOR,
   setProgramCounter,
   snapshotControlAndStatusRegister,
   writeControlAndStatusRegister,
@@ -31,9 +33,20 @@ import {
   MCAUSE,
   MTVAL,
   MTVEC,
+  SATP,
 } from '#emulator/cpu/registers';
 import { CAUSE_LOAD_ACCESS_FAULT } from '#emulator/cpu/trap';
 import { bytesToNumber, signedNumberToBytes, unsignedBigIntToBytes } from '#utils/bytes';
+import { storeBytes } from '#emulator/memory';
+
+const allowAllPmp = (registers: ReturnType<typeof createRegisters>): void => {
+  writeControlAndStatusRegister(
+    registers,
+    0x3b0,
+    unsignedBigIntToBytes(new Uint8Array(8), 0x3fffffffffffffn)
+  );
+  writeControlAndStatusRegister(registers, 0x3a0, unsignedBigIntToBytes(new Uint8Array(8), 0x1fn));
+};
 
 describe('load', () => {
   it('lb sign-extends and lbu zero-extends', async () => {
@@ -311,5 +324,199 @@ describe('load', () => {
       unsignedBigIntToBytes(new Uint8Array(8), 0x0000_0000_0000_8000n)
     );
     assert.equal(bytesToNumber(readProgramCounter(registers)), 16);
+  });
+});
+
+describe('translated load access (Sv39)', () => {
+  it('lb through Sv39 translation writes rd and advances PC', async () => {
+    // Build Sv39 page table: root@PA0, L1@PA0x1000, L0@PA0x2000.
+    // VA 0x8000 → PA 0x10000.
+    // L2 idx=0, L1 idx=0, L0 idx=(0x8000>>12)&0x1ff=8.
+    // Leaf at L0 base 0x2000 + 8*8 = 0x2040.
+    const guest = testMemory(0x30000n);
+    // Root at PA 0: V=1,A=1, points to L1 at PA 0x1000 (PPN=1).
+    // PTE = PTE_V | PTE_A | (PPN<<10) = 1 | 64 | 1024 = 1089 = 0x441.
+    await storeBytes({
+      memory: guest,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0n),
+      source: unsignedBigIntToBytes(new Uint8Array(8), (1n << 10n) | 1n | 64n),
+      byteLength: 8,
+    });
+    // L1 at PA 0x1000: V=1,A=1, points to L0 at PA 0x2000 (PPN=2).
+    // PTE = 1 | 64 | 2048 = 2113 = 0x841.
+    await storeBytes({
+      memory: guest,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x1000n),
+      source: unsignedBigIntToBytes(new Uint8Array(8), (2n << 10n) | 1n | 64n),
+      byteLength: 8,
+    });
+    // L0 at PA 0x2000+8*8=0x2040: leaf for PA 0x10000. V=1,R=1,A=1,PPN=0x10.
+    // flags = V(1)|R(1)|A(1) = 0x47 (R=1 is required for isLeafPte to return true).
+    // PTE = (PPN<<10) | 0x47 = 0x4047.
+    await storeBytes({
+      memory: guest,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x2040n),
+      source: unsignedBigIntToBytes(new Uint8Array(8), (0x10n << 10n) | 0x47n),
+      byteLength: 8,
+    });
+    // Target page at PA 0x10000 contains 0xab.
+    guest.bytes[0x10000] = 0xab;
+
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
+    // Root at PA 0 → satp PPN=0, MODE=8 (Sv39).
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      unsignedBigIntToBytes(new Uint8Array(8), 8n << 60n)
+    );
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x8000, 32));
+
+    await lb(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
+
+    // 0xab sign-extended from 8 bits = -85.
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), -85, 32)
+    );
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 4);
+  });
+
+  it('ld through Sv39 translation on V=0 leaf traps with cause 13 and leaves rd unchanged', async () => {
+    // Page tables in RAM but leaf is V=0 → page fault.
+    // VA 0x8000: L2 idx=0, L1 idx=0, L0 idx=8.
+    // Leaf at 0x2000+8*8=0x2040.
+    const guest = testMemory(0x30000n);
+    // Root at PA 0: V=1,A=1,PPN=1→PTE=(1<<10)|1|64=1089.
+    await storeBytes({
+      memory: guest,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0n),
+      source: unsignedBigIntToBytes(new Uint8Array(8), (1n << 10n) | 1n | 64n),
+      byteLength: 8,
+    });
+    // L1 at PA 0x1000: V=1,A=1,PPN=2→PTE=(2<<10)|1|64=2113.
+    await storeBytes({
+      memory: guest,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x1000n),
+      source: unsignedBigIntToBytes(new Uint8Array(8), (2n << 10n) | 1n | 64n),
+      byteLength: 8,
+    });
+    // L0 at PA 0x2040: V=0 (invalid)→page fault→PTE=(0x10<<10)=0x4000.
+    await storeBytes({
+      memory: guest,
+      address: unsignedBigIntToBytes(new Uint8Array(8), 0x2040n),
+      source: unsignedBigIntToBytes(new Uint8Array(8), 0x10n << 10n),
+      byteLength: 8,
+    });
+
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      unsignedBigIntToBytes(new Uint8Array(8), 8n << 60n)
+    );
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x8000, 32));
+    writeGeneralPurposeRegister(
+      registers,
+      1,
+      signedNumberToBytes(new Uint8Array(8), 0xdeadbeef, 32)
+    );
+
+    await ld(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), 13, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x8000n)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MEPC),
+      signedNumberToBytes(new Uint8Array(8), 0x80, 32)
+    );
+    // PC = trap vector
+    assert.equal(bytesToNumber(readProgramCounter(registers)), 0x2000);
+    // rd unchanged
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), 0xdeadbeef, 32)
+    );
+  });
+
+  it('lw through Sv39 translation with V=0 at root level traps with cause 13', async () => {
+    const guest = testMemory(256n);
+    const registers = createRegisters();
+    setPrivilegeMode(registers, PRIVILEGE_SUPERVISOR);
+    allowAllPmp(registers);
+    writeControlAndStatusRegister(
+      registers,
+      MTVEC,
+      signedNumberToBytes(new Uint8Array(8), 0x2000, 32)
+    );
+    setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x80, 32));
+
+    // Root PTE with V=0: page table doesn't exist.
+    guest.bytes[0x1000] = 0x00;
+    writeControlAndStatusRegister(
+      registers,
+      SATP,
+      unsignedBigIntToBytes(new Uint8Array(8), (8n << 60n) | 1n)
+    );
+    writeGeneralPurposeRegister(registers, 1, signedNumberToBytes(new Uint8Array(8), 0xface, 32));
+    writeGeneralPurposeRegister(registers, 2, signedNumberToBytes(new Uint8Array(8), 0x8000, 32));
+
+    await lw(
+      registers,
+      guest,
+      {
+        destinationRegister: 1,
+        sourceRegister1: 2,
+        immediate: signedNumberToBytes(new Uint8Array(8), 0, 32),
+      },
+      FOUR_BYTES
+    );
+
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MCAUSE),
+      signedNumberToBytes(new Uint8Array(8), 13, 32)
+    );
+    assert.deepEqual(
+      snapshotControlAndStatusRegister(registers, MTVAL),
+      unsignedBigIntToBytes(new Uint8Array(8), 0x8000n)
+    );
+    // rd unchanged
+    assert.deepEqual(
+      readGeneralPurposeRegister(registers, 1),
+      signedNumberToBytes(new Uint8Array(8), 0xface, 32)
+    );
   });
 });

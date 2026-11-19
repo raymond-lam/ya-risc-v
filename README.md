@@ -7,11 +7,13 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 > RV64C (compressed), and Zicsr execute and are covered by tests. U/S/M privilege modes,
 > `mret`/`sret`, trap CSRs, synchronous traps, interrupt delivery (including `wfi`), a CLINT
 > (`msip` → `mip.MSIP`, `mtime`/`mtimecmp` → `mip.MTIP`), Sstc (`menvcfg.STCE` + `stimecmp` →
-> `mip.STIP`), and a PLIC (→ `mip.MEIP`/`SEIP`, UART
-> source 10) are in place. A 16550 UART (IER/IIR → PLIC source 10) plus an Ink TUI console path
-> exist. There are no further ISA extensions and no OS boot path. It cannot run Linux yet. Anything
-> listed under [Not yet implemented](#not-yet-implemented) is unfinished work rather than a
-> deliberate limit on scope — the goal is a much more complete machine than what is here today.
+> `mip.STIP`), a PLIC (→ `mip.MEIP`/`SEIP`, UART
+> source 10), Sv39 page-table translation (SATP WARL, V/R/W/X/U/A/D, SUM/MXR, ADUE, superpages,
+> page-fault causes 12/13/15), and PMP are in place. A 16550 UART (IER/IIR → PLIC source 10)
+> plus an Ink TUI console path exist. There are no further ISA extensions and no OS boot path.
+> It cannot run Linux yet. Anything listed under [Not yet implemented](#not-yet-implemented) is
+> unfinished work rather than a deliberate limit on scope — the goal is a much more complete
+> machine than what is here today.
 
 ## Status
 
@@ -46,9 +48,16 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
   `mcountinhibit` to CY/IR. `time` mirrors CLINT `mtime`; `cycle`/`instret` alias
   `mcycle`/`minstret` and count retires at CPI=1 (traps cancel retire except `ecall`/`ebreak`).
   S/U reads need the matching enable bits (U needs both). `stimecmp` (Sstc) is always reachable in
-  M; below M it needs `menvcfg.STCE` and `mcounteren.TM`. `satp` is stored (OpenSBI clears it);
-  Sv39 walks are not implemented yet. With `mstatus.TVM` set, S-mode `satp` access and
-  `sfence.vma` are illegal.
+  M; below M it needs `menvcfg.STCE` and `mcounteren.TM`. Sv39 page walks are implemented:
+  `satp.MODE` accepts Bare (0) or Sv39 (8); WARL writes ignore other MODEs. Translation
+  applies to fetch (U/S), load/store (effective privilege with MPRV), and AMOs. Sv39 PTEs
+  carry V/R/W/X/U/A/D bits; superpages (1 GiB / 2 MiB) are supported with misaligned-PPN
+  faults. Page faults raise causes 12/13/15 with `xtval` = faulting VA; delegation via
+  `medeleg` works. `menvcfg.ADUE` enables automatic PTE A/D updates; SUM permits S-mode
+  access to U=1 pages; MXR treats X-only pages as readable. MPRV redirects load/store
+  translation to MPP's privilege (fetch always ignores MPRV). No TLB: every translated
+  access walks RAM. `sfence.vma` remains a no-op. With `mstatus.TVM` set, S-mode `satp`
+  access and `sfence.vma` are illegal.
   PMP is 16 entries (4-byte grain, no `mseccfg`). `pmpaddr` keeps address bits 55:2. The lowest
   entry that overlaps an access must cover all of it. Fetch, load, store, and AMO fault when that
   rule denies them; S/U fault when no rule matches.
@@ -116,7 +125,12 @@ Yet another RISC-V emulator, written from scratch in TypeScript for Node.
 ### Not yet implemented
 
 - **Extensions.** No F/D (floating point).
-- **Virtual memory.** `satp` is stored; Sv39 page walks are not implemented yet.
+- **Virtual memory.** Sv39 is implemented (satp WARL Bare/Sv39, V/R/W/X/U/A/D PTEs,
+  SUM/MXR, ADUE, superpages, page-fault causes 12/13/15 with `xtval`=VA, MPRV, no TLB);
+  Sv48/Sv57, TLB, Smepmp/Svpbmt/Svinval are future work. Out-of-scope: hypervisor extensions,
+  warm reset, booting a real xv6 kernel binary (issue #63).
+- **Performance.** Translated accesses walk every time (~3 extra 8-byte RAM reads per access);
+  deliberately no TLB in this milestone for correctness-first simplicity.
 - **Alignment and bounds checks.** Misaligned scalar accesses are emulated rather than faulted, but
   accesses outside a mapped guest window — including ones straddling a region end — trap: loads
   cause 5, stores/AMOs cause 7, instruction fetches cause 1, with `mtval` holding the faulting
@@ -232,6 +246,9 @@ src/
     cpu/
       index.ts            Host-side create()/start()/stop(); awaitable handle
       run.ts              Worker entry: sample CLINT/PLIC wires, take IRQ, fetch/decode/execute
+      paging.ts           Sv39 page-table walk, permissions, A/D updates, access gates
+      paging.test.ts      Unit tests for Sv39 walk, gates, permissions, A/D, superpages
+      run.test.ts         Integration tests for translated fetch (straddle, bare-path parity)
       decode/             Instruction decode package (index → decode-32 / decode-c)
       wait-for-interrupt.ts IRQ-only WFI double-sample wait (private)
       trap.ts             Trap/interrupt entry and mret/sret

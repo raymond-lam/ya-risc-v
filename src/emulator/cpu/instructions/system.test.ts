@@ -95,10 +95,11 @@ const MIE_STIE = 1 << 5;
 
 /** menvcfg.STCE (bit 63) — enables Sstc `stimecmp` / hardware STIP. */
 const MENVCFG_STCE = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
-/** menvcfg WARL keeps STCE (63); ADUE (61) and the cache-block bits stay read-only zero. */
-const MENVCFG_WARL_KEEP = unsignedBigIntToBytes(new Uint8Array(8), 1n << 63n) as ReadonlyUint8Array;
-/** menvcfg.ADUE (bit 61) — read-only zero until Svadu is implemented. */
-const MENVCFG_ADUE = unsignedBigIntToBytes(new Uint8Array(8), 1n << 61n) as ReadonlyUint8Array;
+/** menvcfg WARL keeps STCE (63) and ADUE (61). */
+const MENVCFG_WARL_KEEP = unsignedBigIntToBytes(
+  new Uint8Array(8),
+  (1n << 63n) | (1n << 61n)
+) as ReadonlyUint8Array;
 /** stimecmp slot after reset (all ones). */
 const STIMECMP_RESET = unsignedBigIntToBytes(
   new Uint8Array(8),
@@ -1562,10 +1563,10 @@ describe('system', () => {
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
   });
 
-  it('csrrw from M-mode reaches menvcfg and keeps only STCE', () => {
+  it('csrrw from M-mode reaches menvcfg and keeps STCE + ADUE', () => {
     const registers = createRegisters();
     setProgramCounter(registers, signedNumberToBytes(new Uint8Array(8), 0x40, 32));
-    // All ones: only the WARL-implemented field survives (STCE 63).
+    // All ones: only the WARL-implemented fields survive (STCE 63 + ADUE 61).
     writeGeneralPurposeRegister(
       registers,
       1,
@@ -1592,7 +1593,7 @@ describe('system', () => {
     assert.deepEqual(snapshotControlAndStatusRegister(registers, MENVCFG), MENVCFG_WARL_KEEP);
     assert.equal(bytesToNumber(readProgramCounter(registers)), 0x44);
 
-    // FIOM (bit 3) is read-only zero: writing it reads STCE back and stores 0.
+    // FIOM (bit 3) is read-only zero: writing it reads STCE+ADUE back and stores 0.
     writeGeneralPurposeRegister(registers, 1, unsignedBigIntToBytes(new Uint8Array(8), 1n << 3n));
     csrrw(
       registers,
@@ -1606,25 +1607,6 @@ describe('system', () => {
       FOUR_BYTES
     );
     assert.deepEqual(readGeneralPurposeRegister(registers, 2), MENVCFG_WARL_KEEP);
-    assert.deepEqual(
-      snapshotControlAndStatusRegister(registers, MENVCFG),
-      unsignedBigIntToBytes(new Uint8Array(8), 0n)
-    );
-
-    // ADUE (bit 61) is read-only zero while Svadu is unimplemented: it never sticks.
-    writeGeneralPurposeRegister(registers, 1, MENVCFG_ADUE);
-    csrrw(
-      registers,
-      testMemory(256n),
-      {
-        destinationRegister: 2,
-        sourceRegister1: 1,
-        controlAndStatusRegister: MENVCFG,
-        instructionWord: 0x30a09173,
-      },
-      FOUR_BYTES
-    );
-    assert.deepEqual(readGeneralPurposeRegister(registers, 2), new Uint8Array(8));
     assert.deepEqual(
       snapshotControlAndStatusRegister(registers, MENVCFG),
       unsignedBigIntToBytes(new Uint8Array(8), 0n)

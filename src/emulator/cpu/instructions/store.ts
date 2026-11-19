@@ -15,9 +15,12 @@
  */
 
 import { addBytes } from '#utils/bytes';
+import { prepareStoreAccess, type PreparedAccess } from '#emulator/cpu/paging';
+import { satpTranslationIsActive } from '#emulator/cpu/registers';
 import { physicalMemoryAccessDenied } from '#emulator/cpu/pmp';
+import { CAUSE_STORE_AMO_ACCESS_FAULT } from '#emulator/cpu/trap';
+import { enterTrap } from '#emulator/cpu/trap';
 import { readGeneralPurposeRegister, advanceProgramCounter } from '#emulator/cpu/registers';
-import { CAUSE_STORE_AMO_ACCESS_FAULT, enterTrap } from '#emulator/cpu/trap';
 import type { Registers } from '#emulator/cpu/types';
 import type { Memory } from '#emulator/memory';
 import type { ReadonlyUint8Array } from '#types';
@@ -37,23 +40,26 @@ const storeEffectiveAddress = (registers: Registers, args: StoreArgs): ReadonlyU
   );
 
 /**
- * Store/AMO access fault (cause 7) when the address is unmapped or PMP denies
- * the store. Does not write memory or advance the PC.
+ * Check PMP and mapped in bare mode.
+ * In Sv39 mode, prepareStoreAccess already does these checks.
  */
-const denyStore = (
+const checkBareModeAccess = (
   registers: Registers,
   memory: Memory,
-  address: ReadonlyUint8Array,
-  byteLength: number
+  physicalAddress: ReadonlyUint8Array,
+  byteLength: number,
+  address: ReadonlyUint8Array
 ): boolean => {
-  if (!guestAccessIsMapped({ memory, address, byteLength })) {
+  if (
+    physicalMemoryAccessDenied({ registers, address: physicalAddress, byteLength, access: 'store' })
+  ) {
     enterTrap(registers, CAUSE_STORE_AMO_ACCESS_FAULT, address);
-    return true;
-  }
-  if (!physicalMemoryAccessDenied({ registers, address, byteLength, access: 'store' })) {
     return false;
   }
-  enterTrap(registers, CAUSE_STORE_AMO_ACCESS_FAULT, address);
+  if (!guestAccessIsMapped({ memory, address: physicalAddress, byteLength })) {
+    enterTrap(registers, CAUSE_STORE_AMO_ACCESS_FAULT, address);
+    return false;
+  }
   return true;
 };
 
@@ -65,12 +71,23 @@ const sb = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = storeEffectiveAddress(registers, args);
-  if (denyStore(registers, memory, address, 1)) {
+  const prepared: PreparedAccess = await prepareStoreAccess({
+    registers,
+    memory,
+    address,
+    byteLength: 1,
+  });
+  if (prepared.denied) {
     return;
+  }
+  if (!satpTranslationIsActive(registers)) {
+    if (!checkBareModeAccess(registers, memory, prepared.physicalAddress, 1, address)) {
+      return;
+    }
   }
   await storeBytes({
     memory,
-    address,
+    address: prepared.physicalAddress,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 1,
   });
@@ -85,12 +102,23 @@ const sh = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = storeEffectiveAddress(registers, args);
-  if (denyStore(registers, memory, address, 2)) {
+  const prepared: PreparedAccess = await prepareStoreAccess({
+    registers,
+    memory,
+    address,
+    byteLength: 2,
+  });
+  if (prepared.denied) {
     return;
+  }
+  if (!satpTranslationIsActive(registers)) {
+    if (!checkBareModeAccess(registers, memory, prepared.physicalAddress, 2, address)) {
+      return;
+    }
   }
   await storeBytes({
     memory,
-    address,
+    address: prepared.physicalAddress,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 2,
   });
@@ -105,12 +133,23 @@ const sw = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = storeEffectiveAddress(registers, args);
-  if (denyStore(registers, memory, address, 4)) {
+  const prepared: PreparedAccess = await prepareStoreAccess({
+    registers,
+    memory,
+    address,
+    byteLength: 4,
+  });
+  if (prepared.denied) {
     return;
+  }
+  if (!satpTranslationIsActive(registers)) {
+    if (!checkBareModeAccess(registers, memory, prepared.physicalAddress, 4, address)) {
+      return;
+    }
   }
   await storeBytes({
     memory,
-    address,
+    address: prepared.physicalAddress,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 4,
   });
@@ -125,12 +164,23 @@ const sd = async (
   instructionByteLength: ReadonlyUint8Array
 ): Promise<void> => {
   const address = storeEffectiveAddress(registers, args);
-  if (denyStore(registers, memory, address, 8)) {
+  const prepared: PreparedAccess = await prepareStoreAccess({
+    registers,
+    memory,
+    address,
+    byteLength: 8,
+  });
+  if (prepared.denied) {
     return;
+  }
+  if (!satpTranslationIsActive(registers)) {
+    if (!checkBareModeAccess(registers, memory, prepared.physicalAddress, 8, address)) {
+      return;
+    }
   }
   await storeBytes({
     memory,
-    address,
+    address: prepared.physicalAddress,
     source: readGeneralPurposeRegister(registers, args.sourceRegister2),
     byteLength: 8,
   });
